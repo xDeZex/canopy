@@ -87,9 +87,7 @@ export function createApp({
           return;
         }
 
-        const worktrees = await getWorktrees();
-        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
-        if (!isKnownWorktree) {
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
           respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
           return;
         }
@@ -107,9 +105,7 @@ export function createApp({
           return;
         }
 
-        const worktrees = await getWorktrees();
-        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
-        if (!isKnownWorktree) {
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
           respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
           return;
         }
@@ -141,9 +137,7 @@ export function createApp({
           return;
         }
 
-        const worktrees = await getWorktrees();
-        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
-        if (!isKnownWorktree) {
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
           respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
           return;
         }
@@ -164,6 +158,14 @@ export function createApp({
       respondJson(res, 500, { error: 'Internal server error' });
     }
   });
+}
+
+// Shared by the /api/files, /api/file-content, and /api/commits routes,
+// each of which only accepts a `worktree` param that's one of the real
+// (or injected) worktrees, to guard against operating on an arbitrary path.
+async function isKnownWorktree(getWorktrees, worktreePath) {
+  const worktrees = await getWorktrees();
+  return worktrees.some((worktree) => worktree.path === worktreePath);
 }
 
 async function serveStatic(res, pathname, { includeBody = true } = {}) {
