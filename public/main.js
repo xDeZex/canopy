@@ -94,10 +94,21 @@ function connectWorktreesWatch() {
   worktreesWatchSource.onmessage = (event) => {
     handleWorktreesChanged(JSON.parse(event.data));
   };
+  worktreesWatchSource.addEventListener('worktree-poll-error', (event) => {
+    // The poll behind this channel failed (e.g. `git` unavailable, a
+    // corrupted repo) but the connection itself is still open and will keep
+    // retrying; surfaced to the console rather than left silent, matching
+    // the visibility the initial `/api/worktrees` fetch's error path has.
+    console.error('canopy: worktree list live-update failed:', JSON.parse(event.data).message);
+  });
 }
 
 function handleWorktreesChanged(newWorktrees) {
   worktrees = newWorktrees;
+
+  const knownPaths = worktrees.map((worktree) => worktree.path);
+  treeExpansion.pruneToKnownWorktrees(knownPaths);
+  commitLock.pruneToKnownWorktrees(knownPaths);
 
   const nextActivePath = pickActiveWorktree(worktrees, activePath);
   if (nextActivePath !== activePath) {

@@ -49,6 +49,42 @@ export function createApp({
   const watchWorktrees =
     watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, options));
 
+  // Fans one underlying poll out to every open `/api/watch-worktrees`
+  // connection instead of starting a new `watchWorktrees` (and, by default,
+  // a new `git worktree list` poll loop) per connection: without this, each
+  // open browser tab — or each EventSource auto-reconnect — would multiply
+  // the poll's process-spawn cost indefinitely. The poll starts on the first
+  // subscriber and stops when the last one disconnects.
+  let worktreesFanOut = null;
+
+  function subscribeToWorktreeChanges({ onChange, onError }) {
+    if (!worktreesFanOut) {
+      const subscribers = new Set();
+      const poll = watchWorktrees(
+        (worktreeList) => {
+          for (const subscriber of subscribers) subscriber.onChange(worktreeList);
+        },
+        {
+          onError: (err) => {
+            for (const subscriber of subscribers) subscriber.onError?.(err);
+          },
+        }
+      );
+      worktreesFanOut = { poll, subscribers };
+    }
+
+    const subscriber = { onChange, onError };
+    worktreesFanOut.subscribers.add(subscriber);
+
+    return () => {
+      worktreesFanOut.subscribers.delete(subscriber);
+      if (worktreesFanOut.subscribers.size === 0) {
+        worktreesFanOut.poll.close();
+        worktreesFanOut = null;
+      }
+    };
+  }
+
   const getTree =
     getFileTree ??
     (async (worktreePath) => {
@@ -174,12 +210,17 @@ export function createApp({
 
         res.flushHeaders();
 
-        const poll = watchWorktrees((worktreeList) => {
-          res.write(`data: ${JSON.stringify(worktreeList)}\n\n`);
+        const unsubscribe = subscribeToWorktreeChanges({
+          onChange: (worktreeList) => {
+            res.write(`data: ${JSON.stringify(worktreeList)}\n\n`);
+          },
+          onError: (err) => {
+            res.write(`event: worktree-poll-error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+          },
         });
 
         req.on('close', () => {
-          poll.close();
+          unsubscribe();
         });
         return;
       }

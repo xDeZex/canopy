@@ -121,6 +121,52 @@ test('running `git worktree remove` is reflected by the poll', async (t) => {
   assert.ok(!list.some((w) => w.path === worktreeDir));
 });
 
+test('a slow getWorktrees call never overlaps with the next tick', async (t) => {
+  // Regression test for a race where `setInterval` could start a new tick
+  // before the previous tick's `getWorktrees()` had resolved. A `getWorktrees`
+  // that's slower than `intervalMs` would previously let two calls be
+  // in-flight at once, racing on `previous`; this asserts calls are strictly
+  // sequential instead (no new call starts until the last one settled).
+  let inFlight = 0;
+  let overlapped = false;
+  let callCount = 0;
+
+  const slowGetWorktrees = async () => {
+    callCount++;
+    inFlight++;
+    if (inFlight > 1) overlapped = true;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    inFlight--;
+    return [{ path: '/a', call: callCount }];
+  };
+
+  const poll = pollWorktrees(slowGetWorktrees, () => {}, { intervalMs: 5 });
+  t.after(() => poll.close());
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(overlapped, false, 'a new tick started before the previous one settled');
+  assert.ok(callCount >= 2, 'expected more than one tick to have run');
+});
+
+test('a persistent getWorktrees failure is reported via onError on every tick', async (t) => {
+  const errors = [];
+  const failingGetWorktrees = async () => {
+    throw new Error('git worktree list failed');
+  };
+
+  const poll = pollWorktrees(failingGetWorktrees, () => {}, {
+    intervalMs: 10,
+    onError: (err) => errors.push(err),
+  });
+  t.after(() => poll.close());
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.ok(errors.length >= 2, 'expected onError to fire on more than one failed tick');
+  assert.equal(errors[0].message, 'git worktree list failed');
+});
+
 test('close() stops further polling', async (t) => {
   const onChange = recordingCallback();
   const poll = pollWorktrees(realWorktreeList, onChange, { intervalMs: 20 });

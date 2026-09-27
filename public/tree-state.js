@@ -27,5 +27,15 @@ export function createTreeExpansionStore() {
       if (set.has(dirPath)) set.delete(dirPath);
       else set.add(dirPath);
     },
+    // Drops expansion state for any worktree not in `knownPaths`. #12 made
+    // worktree removal a live, in-session event, so without this a
+    // long-running session that repeatedly creates/removes worktrees would
+    // otherwise accumulate one forgotten Set per removed worktree forever.
+    pruneToKnownWorktrees(knownPaths) {
+      const known = new Set(knownPaths);
+      for (const worktreePath of expandedPathsByWorktree.keys()) {
+        if (!known.has(worktreePath)) expandedPathsByWorktree.delete(worktreePath);
+      }
+    },
   };
 }

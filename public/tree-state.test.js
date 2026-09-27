@@ -33,3 +33,23 @@ test('expansion is independent per folder path within the same worktree', () => 
   assert.equal(store.isExpanded('/repo/a', 'public'), false);
   assert.equal(store.isExpanded('/repo/a', 'server'), true);
 });
+
+test('pruneToKnownWorktrees drops expansion state for a worktree no longer present', () => {
+  const store = createTreeExpansionStore();
+  store.toggle('/repo/a', 'server');
+  store.toggle('/repo/b', 'server');
+
+  store.pruneToKnownWorktrees(['/repo/a']);
+
+  assert.equal(store.isExpanded('/repo/a', 'server'), true, 'a still-known worktree keeps its state');
+  assert.equal(store.isExpanded('/repo/b', 'server'), false, 'a removed worktree\'s state is dropped');
+});
+
+test('pruneToKnownWorktrees leaves state for still-known worktrees untouched', () => {
+  const store = createTreeExpansionStore();
+  store.toggle('/repo/a', 'server');
+
+  store.pruneToKnownWorktrees(['/repo/a', '/repo/b']);
+
+  assert.equal(store.isExpanded('/repo/a', 'server'), true);
+});

@@ -43,9 +43,20 @@ function shallowEqual(a, b) {
 // first snapshot, so a caller that only wants "the current list plus live
 // updates" (server/app.js's `/api/watch-worktrees` route) can rely on this
 // alone rather than also needing a separate initial fetch.
-export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POLL_MS } = {}) {
+//
+// Each tick is scheduled only after the previous one's `getWorktrees()` call
+// has settled (a self-rescheduling `setTimeout`, not `setInterval`), so a
+// slow `git worktree list` invocation can never overlap with the next tick
+// and race on `previous` — ticks are strictly sequential.
+//
+// A persistent `getWorktrees()` failure is logged and also handed to the
+// optional `onError` callback, so a caller pushing this over a live channel
+// (the SSE route) can tell a connected client the channel is unhealthy
+// instead of going silent.
+export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POLL_MS, onError } = {}) {
   let previous = null;
   let stopped = false;
+  let timer = null;
 
   const tick = async () => {
     if (stopped) return;
@@ -58,16 +69,19 @@ export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POL
       }
     } catch (err) {
       console.error('canopy: worktree poll error', err);
+      onError?.(err);
+    }
+    if (!stopped) {
+      timer = setTimeout(tick, intervalMs);
     }
   };
 
   tick();
-  const timer = setInterval(tick, intervalMs);
 
   return {
     close() {
       stopped = true;
-      clearInterval(timer);
+      clearTimeout(timer);
     },
   };
 }
