@@ -100,12 +100,28 @@ body {
 }
 
 .rail__dir {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--fg-dim);
   padding: 4px 10px;
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.rail__dir:hover {
+  background: var(--bg-2);
+}
+
+.rail__caret {
+  display: inline-block;
+  width: 10px;
+  flex-shrink: 0;
+  font-size: 9px;
+  text-align: center;
 }
 
 .rail__file {

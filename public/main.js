@@ -36,6 +36,7 @@ import { defaultViewMode } from './view-mode.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
 import { pickActiveWorktree } from './worktree-select.js';
+import { createTreeExpansionStore } from './tree-state.js';
 
 const tabsEl = document.getElementById('tabs');
 const railEl = document.getElementById('rail');
@@ -57,6 +58,8 @@ let watchSource = null; // EventSource subscribed to the active worktree's chang
 const commitLock = createCommitLockStore(); // per-worktree locked sha, or Auto
 let commits = []; // active worktree's commit history, newest first
 let commitsError = null;
+
+const treeExpansion = createTreeExpansionStore(); // per-worktree expanded folder paths (#13)
 
 async function init() {
   try {
@@ -488,14 +491,30 @@ function renderRail() {
 
 function renderNode(node, depth) {
   if (node.type === 'dir') {
+    const isExpanded = treeExpansion.isExpanded(activePath, node.path);
+
+    const caret = document.createElement('span');
+    caret.className = 'rail__caret';
+    caret.textContent = isExpanded ? '▾' : '▸';
+
+    const name = document.createElement('span');
+    name.textContent = node.name;
+
     const label = document.createElement('div');
     label.className = 'rail__dir';
     label.style.paddingLeft = `${depth * 12 + 10}px`;
-    label.textContent = node.name;
+    label.append(caret, name);
+    label.addEventListener('click', () => {
+      treeExpansion.toggle(activePath, node.path);
+      renderRail();
+    });
 
     const group = document.createElement('div');
     group.className = 'rail__group';
-    group.append(label, ...node.children.map((child) => renderNode(child, depth + 1)));
+    group.append(label);
+    if (isExpanded) {
+      group.append(...node.children.map((child) => renderNode(child, depth + 1)));
+    }
     return group;
   }
 
