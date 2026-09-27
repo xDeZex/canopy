@@ -20,11 +20,22 @@
 // wiring is thin DOM/EventSource glue with no automated test — left to
 // manual verification (edit a tracked file on disk while the app is open;
 // switch worktrees and confirm the old one stops updating).
+//
+// Worktree-list auto-update (#12): a second, separate EventSource subscribes
+// to `/api/watch-worktrees` (server/app.js + server/worktree-watch.js), the
+// worktree list's own live channel, opened once for the app's lifetime
+// (unlike the per-worktree file-watch above, this isn't scoped to the active
+// worktree). Each event carries the full current worktree list; the fallback
+// choice of which worktree becomes active if the current one was removed is
+// `pickActiveWorktree` (worktree-select.js), a pure, independently-tested
+// function. The rest of this wiring (opening the EventSource, re-rendering)
+// is thin glue left to manual verification.
 
 import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
 import { defaultViewMode } from './view-mode.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
+import { pickActiveWorktree } from './worktree-select.js';
 
 const tabsEl = document.getElementById('tabs');
 const railEl = document.getElementById('rail');
@@ -60,7 +71,33 @@ async function init() {
   activePath = worktrees[0]?.path ?? null;
   render();
   connectWatch(activePath);
+  connectWorktreesWatch();
   await Promise.all([loadFileTree(), loadCommits()]);
+}
+
+// Opened once, for the app's lifetime: the worktree list is repo-wide, not
+// scoped to the active worktree, so unlike connectWatch() this never needs
+// to be re-opened when the active worktree changes.
+function connectWorktreesWatch() {
+  const worktreesWatchSource = new EventSource('/api/watch-worktrees');
+  worktreesWatchSource.onmessage = (event) => {
+    handleWorktreesChanged(JSON.parse(event.data));
+  };
+}
+
+function handleWorktreesChanged(newWorktrees) {
+  worktrees = newWorktrees;
+
+  const nextActivePath = pickActiveWorktree(worktrees, activePath);
+  if (nextActivePath !== activePath) {
+    activePath = nextActivePath;
+    clearSelectedFile();
+    connectWatch(activePath);
+    loadFileTree();
+    loadCommits();
+  }
+
+  render();
 }
 
 // Scopes live-update watching to a single worktree at a time, matching the

@@ -9,6 +9,7 @@ import { parseStatus, buildFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
 import { parseCommitLog, LOG_FORMAT } from './commits.js';
 import { watchWorktree as watchWorktreeReal } from './watcher.js';
+import { pollWorktrees } from './worktree-watch.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +32,7 @@ export function createApp({
   getFileContent,
   listCommits,
   watchWorktree = watchWorktreeReal,
+  watchWorktreeList,
 } = {}) {
   const getWorktrees =
     listWorktrees ??
@@ -40,6 +42,12 @@ export function createApp({
       });
       return parseWorktreeList(stdout);
     });
+
+  // Defaults to polling `getWorktrees` itself (see worktree-watch.js for why
+  // polling rather than a filesystem watch), so an injected `listWorktrees`
+  // fake is also what drives this channel in tests.
+  const watchWorktrees =
+    watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, options));
 
   const getTree =
     getFileTree ??
@@ -144,6 +152,34 @@ export function createApp({
         // this MVP needs (see server/watcher.js's header comment).
         req.on('close', () => {
           watcher.close();
+        });
+        return;
+      }
+
+      if (isReadable && pathname === '/api/watch-worktrees') {
+        // A separate, worktree-independent SSE channel from `/api/watch`
+        // above: the worktree list itself isn't scoped to any one worktree,
+        // so it's opened once for the app's lifetime rather than re-opened
+        // per active worktree (#12).
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+
+        if (!includeBody) {
+          res.end();
+          return;
+        }
+
+        res.flushHeaders();
+
+        const poll = watchWorktrees((worktreeList) => {
+          res.write(`data: ${JSON.stringify(worktreeList)}\n\n`);
+        });
+
+        req.on('close', () => {
+          poll.close();
         });
         return;
       }

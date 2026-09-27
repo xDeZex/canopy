@@ -536,6 +536,79 @@ test('GET /api/file-content rejects a file path that escapes the worktree', asyn
   assert.equal(res.statusCode, 403);
 });
 
+test('HEAD /api/watch-worktrees returns SSE headers without starting a poll', async (t) => {
+  let pollStarted = false;
+
+  const server = createApp({
+    watchWorktreeList: () => {
+      pollStarted = true;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await request(port, 'HEAD', '/api/watch-worktrees');
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.equal(res.body, '');
+  assert.equal(pollStarted, false, 'a HEAD request should not start a live poll');
+});
+
+test('GET /api/watch-worktrees streams worktree-list changes as SSE', async (t) => {
+  let capturedOnChange;
+
+  const server = createApp({
+    watchWorktreeList: (onChange) => {
+      capturedOnChange = onChange;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, '/api/watch-worktrees');
+  t.after(() => req.destroy());
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.ok(capturedOnChange, 'expected the route to start a poll with an onChange callback');
+
+  const fixture = [{ path: '/repos/canopy' }, { path: '/repos/canopy-worktrees/new' }];
+  const chunkPromise = nextChunk(res);
+  capturedOnChange(fixture);
+  const chunk = await chunkPromise;
+
+  assert.equal(chunk, `data: ${JSON.stringify(fixture)}\n\n`);
+});
+
+test('closing the client connection stops the worktree-list poll', async (t) => {
+  let closeCalled;
+  const closedPromise = new Promise((resolve) => {
+    closeCalled = resolve;
+  });
+
+  const server = createApp({
+    watchWorktreeList: () => ({ close: () => closeCalled() }),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, '/api/watch-worktrees');
+  res.resume();
+
+  req.destroy();
+
+  await closedPromise;
+});
+
 test('GET /api/commits returns this worktree\'s real commit history as JSON', async (t) => {
   const { server, port } = await startServer();
   t.after(() => server.close());
