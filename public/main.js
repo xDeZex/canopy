@@ -1,12 +1,17 @@
 // Canopy client shell: fetches the repo's real worktrees and renders them
-// as a tab bar. Clicking a tab sets it as the active worktree. No build
-// step; loaded directly as an ES module by index.html.
+// as a tab bar, with a file rail (variant D's shape) showing the active
+// worktree's real file tree and live git status. Clicking a tab switches
+// the active worktree and re-fetches its file tree. No build step; loaded
+// directly as an ES module by index.html.
 
 const tabsEl = document.getElementById('tabs');
+const railEl = document.getElementById('rail');
 const mainEl = document.getElementById('main');
 
 let worktrees = [];
 let activePath = null;
+let fileTree = [];
+let fileTreeError = null;
 
 async function init() {
   try {
@@ -20,11 +25,34 @@ async function init() {
 
   activePath = worktrees[0]?.path ?? null;
   render();
+  await loadFileTree();
+}
+
+async function loadFileTree() {
+  if (!activePath) {
+    fileTree = [];
+    fileTreeError = null;
+    renderRail();
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/files?worktree=${encodeURIComponent(activePath)}`);
+    if (!res.ok) throw new Error(`request failed with status ${res.status}`);
+    fileTree = await res.json();
+    fileTreeError = null;
+  } catch (err) {
+    fileTree = [];
+    fileTreeError = err;
+  }
+  renderRail();
 }
 
 function selectWorktree(worktreePath) {
+  if (worktreePath === activePath) return;
   activePath = worktreePath;
   render();
+  loadFileTree();
 }
 
 function render() {
@@ -68,6 +96,47 @@ function renderMain() {
   mainEl.replaceChildren(message);
 }
 
+function renderRail() {
+  if (fileTreeError) {
+    const message = document.createElement('p');
+    message.className = 'empty rail__message';
+    message.textContent = `Failed to load files: ${fileTreeError.message}`;
+    railEl.replaceChildren(message);
+    return;
+  }
+
+  if (fileTree.length === 0) {
+    const message = document.createElement('p');
+    message.className = 'empty rail__message';
+    message.textContent = 'No files.';
+    railEl.replaceChildren(message);
+    return;
+  }
+
+  railEl.replaceChildren(...fileTree.map((node) => renderNode(node, 0)));
+}
+
+function renderNode(node, depth) {
+  if (node.type === 'dir') {
+    const label = document.createElement('div');
+    label.className = 'rail__dir';
+    label.style.paddingLeft = `${depth * 12 + 10}px`;
+    label.textContent = node.name;
+
+    const group = document.createElement('div');
+    group.className = 'rail__group';
+    group.append(label, ...node.children.map((child) => renderNode(child, depth + 1)));
+    return group;
+  }
+
+  const file = document.createElement('div');
+  file.className = `rail__file status-${node.status}`;
+  file.style.paddingLeft = `${depth * 12 + 10}px`;
+  file.title = node.path;
+  file.textContent = node.name;
+  return file;
+}
+
 function branchLabel(worktree) {
   if (worktree.branch) return worktree.branch;
   if (worktree.bare) return '(bare)';
@@ -80,6 +149,7 @@ function renderError(err) {
   message.className = 'empty';
   message.textContent = `Failed to load worktrees: ${err.message}`;
   tabsEl.replaceChildren();
+  railEl.replaceChildren();
   mainEl.replaceChildren(message);
 }
 
