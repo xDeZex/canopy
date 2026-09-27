@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Canopy</title>
   <link rel="stylesheet" href="/styles.css" />
+  <!-- Monaco's AMD loader, a classic script so window.require exists before
+       main.js (a module script, deferred by default) runs. CDN load, no
+       build step, matching the README's approach and the version validated
+       in prototype/ui-layout. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.js"></script>
 </head>
 <body>
   <div id="app">

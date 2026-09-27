@@ -113,11 +113,16 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: default;
+  cursor: pointer;
 }
 
 .rail__file:hover {
   background: var(--bg-2);
+}
+
+.rail__file.is-active {
+  background: var(--bg-3);
+  font-weight: 600;
 }
 
 .rail__file.status-modified {
@@ -139,8 +144,67 @@ body {
   flex: 1;
   padding: 16px;
   overflow: auto;
+  min-height: 0;
 }
 
 .empty {
   color: var(--fg-dim);
+}
+
+/* ---------- File viewer (Diff/File toggle, variant D shape) ---------- */
+
+.main.main--viewer {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.viewer__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.viewer__path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+
+.viewer__editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.view-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.view-toggle__btn {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.view-toggle__btn + .view-toggle__btn {
+  border-left: 1px solid var(--border);
+}
+
+.view-toggle__btn.is-active {
+  background: var(--accent);
+  color: #fff;
 }
