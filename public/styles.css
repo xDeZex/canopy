@@ -1,0 +1,86 @@
+/* Dark-mode only palette, carried over from the validated prototype
+   (prototype/ui-layout, variant D). No light theme, no toggle. */
+:root {
+  --bg-0: #1e1e1e;
+  --bg-1: #252526;
+  --bg-2: #2d2d2d;
+  --bg-3: #333333;
+  --fg: #d4d4d4;
+  --fg-dim: #8a8a8a;
+  --accent: #4fa3ff;
+  --border: #3a3a3a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg-0);
+  color: var(--fg);
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ---------- Tab bar (variant D shape) ---------- */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tabs__tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fg);
+  padding: 8px 18px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.tabs__tab:hover {
+  background: var(--bg-3);
+}
+
+.tabs__tab.is-active {
+  border-bottom-color: var(--accent);
+  background: var(--bg-0);
+}
+
+.tabs__branch {
+  font-weight: 600;
+}
+
+.tabs__path {
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+/* ---------- Main content ---------- */
+
+.main {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+}
+
+.empty {
+  color: var(--fg-dim);
+}
