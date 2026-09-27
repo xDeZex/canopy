@@ -8,6 +8,7 @@ import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
 import { parseCommitLog, LOG_FORMAT } from './commits.js';
+import { watchWorktree as watchWorktreeReal } from './watcher.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,14 +21,16 @@ const CONTENT_TYPES = {
 };
 
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
-// `listWorktrees`, `getFileTree`, `getFileContent`, and `listCommits` can be
-// injected to bypass the real `git` calls.
+// `listWorktrees`, `getFileTree`, `getFileContent`, `listCommits`, and
+// `watchWorktree` can be injected to bypass the real `git`/filesystem-
+// watching calls.
 export function createApp({
   repoRoot = process.cwd(),
   listWorktrees,
   getFileTree,
   getFileContent,
   listCommits,
+  watchWorktree = watchWorktreeReal,
 } = {}) {
   const getWorktrees =
     listWorktrees ??
@@ -97,6 +100,54 @@ export function createApp({
         return;
       }
 
+      if (isReadable && pathname === '/api/watch') {
+        const worktreePath = searchParams.get('worktree');
+        if (!worktreePath) {
+          respondJson(res, 400, { error: 'Missing "worktree" query param' }, { includeBody });
+          return;
+        }
+
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
+          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
+          return;
+        }
+
+        // Server-sent events: a one-way push channel is all a change
+        // notification needs (README: "pushes change events to the
+        // frontend"), and it rides plain HTTP/GET, so it needs no extra
+        // dependency or upgrade handshake the way WebSocket would.
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+
+        if (!includeBody) {
+          // HEAD: confirm the endpoint exists without opening a live watcher.
+          res.end();
+          return;
+        }
+
+        // writeHead() alone only queues the status line/headers; without a
+        // body write, Node won't put them on the wire until end() — which
+        // never comes for a long-lived stream. Flush explicitly so the
+        // client's connection is confirmed open right away.
+        res.flushHeaders();
+
+        const watcher = watchWorktree(worktreePath, (paths) => {
+          res.write(`data: ${JSON.stringify({ paths })}\n\n`);
+        });
+
+        // One watcher per connection, scoped to that connection's worktree:
+        // the client re-opens this connection (closing the old one) when it
+        // switches worktrees, so tearing down here is all the re-scoping
+        // this MVP needs (see server/watcher.js's header comment).
+        req.on('close', () => {
+          watcher.close();
+        });
+        return;
+      }
+
       if (isReadable && pathname === '/api/file-content') {
         const worktreePath = searchParams.get('worktree');
         const filePath = searchParams.get('file');
@@ -160,9 +211,10 @@ export function createApp({
   });
 }
 
-// Shared by the /api/files, /api/file-content, and /api/commits routes,
-// each of which only accepts a `worktree` param that's one of the real
-// (or injected) worktrees, to guard against operating on an arbitrary path.
+// Shared by the /api/files, /api/file-content, /api/commits, and /api/watch
+// routes, each of which only accepts a `worktree` param that's one of the
+// real (or injected) worktrees, to guard against operating on an arbitrary
+// path.
 async function isKnownWorktree(getWorktrees, worktreePath) {
   const worktrees = await getWorktrees();
   return worktrees.some((worktree) => worktree.path === worktreePath);

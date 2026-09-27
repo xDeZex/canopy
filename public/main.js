@@ -10,6 +10,16 @@
 // loaded directly as an ES module by index.html. Monaco wiring itself
 // (monaco-view.js) is thin third-party glue, left to manual/visual
 // verification — see that file's header comment.
+//
+// Auto-update: an EventSource subscribes to the active worktree's
+// `/api/watch` SSE stream (server/app.js + server/watcher.js). On a change
+// event the file rail is always re-fetched; if the changed path is the
+// currently open file, its content is re-fetched too and the diff/file view
+// is remounted. Switching worktrees closes the old EventSource and opens a
+// new one, matching the server scoping one watcher per connection. This
+// wiring is thin DOM/EventSource glue with no automated test — left to
+// manual verification (edit a tracked file on disk while the app is open;
+// switch worktrees and confirm the old one stops updating).
 
 import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
 import { defaultViewMode } from './view-mode.js';
@@ -31,6 +41,7 @@ let viewMode = 'diff'; // 'diff' | 'file'
 let fileContent = null; // { path, head, working } once loaded
 let fileContentError = null;
 let currentView = null; // Monaco controller for the mounted editor, or null
+let watchSource = null; // EventSource subscribed to the active worktree's changes, or null
 
 const commitLock = createCommitLockStore(); // per-worktree locked sha, or Auto
 let commits = []; // active worktree's commit history, newest first
@@ -48,7 +59,31 @@ async function init() {
 
   activePath = worktrees[0]?.path ?? null;
   render();
+  connectWatch(activePath);
   await Promise.all([loadFileTree(), loadCommits()]);
+}
+
+// Scopes live-update watching to a single worktree at a time, matching the
+// server's one-watcher-per-connection model: closes any previous stream
+// before opening the new one, so switching worktrees re-scopes what's
+// watched instead of accumulating open connections.
+function connectWatch(worktreePath) {
+  watchSource?.close();
+  watchSource = null;
+  if (!worktreePath) return;
+
+  watchSource = new EventSource(`/api/watch?worktree=${encodeURIComponent(worktreePath)}`);
+  watchSource.onmessage = (event) => {
+    const { paths } = JSON.parse(event.data);
+    handleRemoteChange(paths);
+  };
+}
+
+function handleRemoteChange(paths) {
+  loadFileTree();
+  if (activeFile && paths.includes(activeFile)) {
+    loadFileContent();
+  }
 }
 
 async function loadFileTree() {
@@ -60,13 +95,21 @@ async function loadFileTree() {
     return;
   }
 
+  // A change-triggered reload (handleRemoteChange) can be in flight when the
+  // user switches worktrees; without this guard its response could land
+  // after the new worktree's own fetch and clobber the rail with stale data.
+  const requestedPath = activePath;
+
   try {
     const res = await fetch(`/api/files?worktree=${encodeURIComponent(activePath)}`);
     if (!res.ok) throw new Error(`request failed with status ${res.status}`);
-    fileTree = await res.json();
+    const tree = await res.json();
+    if (requestedPath !== activePath) return;
+    fileTree = tree;
     fileTreeError = null;
     fileStatusByPath = indexStatuses(fileTree);
   } catch (err) {
+    if (requestedPath !== activePath) return;
     fileTree = [];
     fileTreeError = err;
     fileStatusByPath = new Map();
@@ -105,6 +148,7 @@ function selectWorktree(worktreePath) {
   if (worktreePath === activePath) return;
   activePath = worktreePath;
   clearSelectedFile();
+  connectWatch(activePath);
   render();
   loadFileTree();
   loadCommits();
@@ -140,6 +184,13 @@ function setViewMode(mode) {
 }
 
 async function loadFileContent() {
+  // A change-triggered reload (handleRemoteChange) can be in flight when the
+  // user switches files or worktrees; without this guard its response could
+  // land after the newly-selected file's own fetch and overwrite the viewer
+  // with the wrong file's content.
+  const requestedPath = activePath;
+  const requestedFile = activeFile;
+
   try {
     const lockedSha = commitLock.getLockedCommit(activePath);
     const refParam = lockedSha ? `&ref=${encodeURIComponent(lockedSha)}` : '';
@@ -147,9 +198,12 @@ async function loadFileContent() {
       `/api/file-content?worktree=${encodeURIComponent(activePath)}&file=${encodeURIComponent(activeFile)}${refParam}`
     );
     if (!res.ok) throw new Error(`request failed with status ${res.status}`);
-    fileContent = await res.json();
+    const content = await res.json();
+    if (requestedPath !== activePath || requestedFile !== activeFile) return;
+    fileContent = content;
     fileContentError = null;
   } catch (err) {
+    if (requestedPath !== activePath || requestedFile !== activeFile) return;
     fileContent = null;
     fileContentError = err;
   }
