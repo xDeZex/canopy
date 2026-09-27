@@ -3,10 +3,11 @@
 // worktree's real file tree and live git status. Clicking a tab switches
 // the active worktree and re-fetches its file tree. Clicking a file fetches
 // its HEAD/working content and renders it via Monaco, either as a full-file
-// inline diff (Diff mode) or plain content (File mode), toggled per variant
-// D's Diff/File toggle. A commit dropdown in the file toolbar (also variant
-// D's shape) can lock the diff's comparison base to an older commit instead
-// of HEAD, scoped per worktree (#5) — see commit-lock.js. No build step;
+// diff (Diff mode, itself switchable between inline/side-by-side/collapsed
+// via the diff-mode toggle, #6) or plain content (File mode), toggled per
+// variant D's Diff/File toggle. A commit dropdown in the file toolbar (also
+// variant D's shape) can lock the diff's comparison base to an older commit
+// instead of HEAD, scoped per worktree (#5) — see commit-lock.js. No build step;
 // loaded directly as an ES module by index.html. Monaco wiring itself
 // (monaco-view.js) is thin third-party glue, left to manual/visual
 // verification — see that file's header comment.
@@ -21,7 +22,7 @@
 // manual verification (edit a tracked file on disk while the app is open;
 // switch worktrees and confirm the old one stops updating).
 
-import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
+import { mountDiffEditor, mountEditor, languageForPath, DIFF_RENDER_MODES } from './monaco-view.js';
 import { defaultViewMode } from './view-mode.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
@@ -38,6 +39,7 @@ let fileStatusByPath = new Map();
 
 let activeFile = null; // relative path of the selected file, or null
 let viewMode = 'diff'; // 'diff' | 'file'
+let diffRenderMode = 'inline'; // one of DIFF_RENDER_MODES, Diff mode only (#6)
 let fileContent = null; // { path, head, working } once loaded
 let fileContentError = null;
 let currentView = null; // Monaco controller for the mounted editor, or null
@@ -183,6 +185,12 @@ function setViewMode(mode) {
   renderMain();
 }
 
+function setDiffRenderMode(mode) {
+  if (mode === diffRenderMode) return;
+  diffRenderMode = mode;
+  renderMain();
+}
+
 async function loadFileContent() {
   // A change-triggered reload (handleRemoteChange) can be in flight when the
   // user switches files or worktrees; without this guard its response could
@@ -304,7 +312,34 @@ function renderViewerToolbar() {
   toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
 
   toolbar.append(pathLabel, renderCommitPicker(), toggle);
+  if (viewMode === 'diff') toolbar.append(renderDiffModeToggle());
   return toolbar;
+}
+
+const DIFF_RENDER_MODE_LABELS = {
+  inline: 'Inline',
+  'side-by-side': 'Side-by-side',
+  collapsed: 'Collapsed',
+};
+
+// Inline / side-by-side / collapsed toggle (#6), only meaningful in Diff
+// mode since File mode has no diff to render.
+function renderDiffModeToggle() {
+  const toggle = document.createElement('div');
+  toggle.className = 'view-toggle';
+  toggle.append(
+    ...DIFF_RENDER_MODES.map((mode) => renderDiffModeButton(mode, DIFF_RENDER_MODE_LABELS[mode]))
+  );
+  return toggle;
+}
+
+function renderDiffModeButton(mode, label) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `view-toggle__btn${diffRenderMode === mode ? ' is-active' : ''}`;
+  button.textContent = label;
+  button.addEventListener('click', () => setDiffRenderMode(mode));
+  return button;
 }
 
 // Refreshes just the toolbar in place (e.g. once a slower-loading commit
@@ -426,6 +461,7 @@ async function mountViewer(container) {
           original: fileContent.head ?? '',
           modified: fileContent.working ?? '',
           language,
+          mode: diffRenderMode,
         });
 }
 
