@@ -31,15 +31,17 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees } = {}) {
   return createServer(async (req, res) => {
     try {
       const { pathname } = new URL(req.url, 'http://localhost');
+      const isReadable = req.method === 'GET' || req.method === 'HEAD';
+      const includeBody = req.method !== 'HEAD';
 
-      if (req.method === 'GET' && pathname === '/api/worktrees') {
+      if (isReadable && pathname === '/api/worktrees') {
         const worktrees = await getWorktrees();
-        respondJson(res, 200, worktrees);
+        respondJson(res, 200, worktrees, { includeBody });
         return;
       }
 
-      if (req.method === 'GET') {
-        await serveStatic(res, pathname);
+      if (isReadable) {
+        await serveStatic(res, pathname, { includeBody });
         return;
       }
 
@@ -51,28 +53,32 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees } = {}) {
   });
 }
 
-async function serveStatic(res, pathname) {
+async function serveStatic(res, pathname, { includeBody = true } = {}) {
   const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
   const filePath = path.resolve(PUBLIC_DIR, relativePath);
 
   // Keep resolved paths inside PUBLIC_DIR (defense in depth; the URL parser
   // above already collapses `..` segments before we get here).
   if (!filePath.startsWith(PUBLIC_DIR)) {
-    respondJson(res, 403, { error: 'Forbidden' });
+    respondJson(res, 403, { error: 'Forbidden' }, { includeBody });
     return;
   }
 
   try {
     const data = await readFile(filePath);
     const contentType = CONTENT_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(data);
+    res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length });
+    res.end(includeBody ? data : undefined);
   } catch {
-    respondJson(res, 404, { error: 'Not found' });
+    respondJson(res, 404, { error: 'Not found' }, { includeBody });
   }
 }
 
-function respondJson(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
+function respondJson(res, status, body, { includeBody = true } = {}) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(payload),
+  });
+  res.end(includeBody ? payload : undefined);
 }
