@@ -1,0 +1,11 @@
+{
+  "name": "canopy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A live view over git worktrees and diffs for reviewing an AI agent's work.",
+  "scripts": {
+    "dev": "node server/index.js",
+    "test": "node --test"
+  }
+}

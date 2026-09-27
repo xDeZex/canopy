@@ -1,0 +1,64 @@
+// Parses the output of `git worktree list --porcelain` into plain objects.
+//
+// Porcelain format: one block per worktree, separated by a blank line, each
+// line a `<key> <value>` pair (`branch`, `locked`, and `prunable` may carry
+// a value; `detached` and `bare` are bare keys). See `git worktree --help`.
+
+export function parseWorktreeList(output) {
+  const trimmed = output.trim();
+  if (!trimmed) return [];
+
+  return trimmed.split(/\n\n+/).map(parseBlock);
+}
+
+function parseBlock(block) {
+  const worktree = {
+    path: null,
+    head: null,
+    branch: null,
+    detached: false,
+    bare: false,
+    locked: false,
+    lockedReason: null,
+    prunable: false,
+    prunableReason: null,
+  };
+
+  for (const line of block.split('\n')) {
+    if (!line) continue;
+    const spaceIndex = line.indexOf(' ');
+    const key = spaceIndex === -1 ? line : line.slice(0, spaceIndex);
+    const value = spaceIndex === -1 ? '' : line.slice(spaceIndex + 1);
+
+    switch (key) {
+      case 'worktree':
+        worktree.path = value;
+        break;
+      case 'HEAD':
+        worktree.head = value;
+        break;
+      case 'branch':
+        worktree.branch = value.replace(/^refs\/heads\//, '');
+        break;
+      case 'detached':
+        worktree.detached = true;
+        break;
+      case 'bare':
+        worktree.bare = true;
+        break;
+      case 'locked':
+        worktree.locked = true;
+        worktree.lockedReason = value || null;
+        break;
+      case 'prunable':
+        worktree.prunable = true;
+        worktree.prunableReason = value || null;
+        break;
+      default:
+        // Forward-compatible: ignore porcelain keys we don't know about yet.
+        break;
+    }
+  }
+
+  return worktree;
+}
