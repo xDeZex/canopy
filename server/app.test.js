@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createApp } from './app.js';
 import { parseWorktreeList } from './porcelain.js';
+import { parseStatus, buildFileTree } from './status.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -167,4 +168,76 @@ test('serializes injected worktrees end to end, including bare/detached/locked/p
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), fixture);
+});
+
+test('GET /api/files returns this worktree\'s real file tree with live status', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  // Independently derive the expected tree straight from git + the
+  // already-tested parser/merger, so this test verifies the HTTP wiring
+  // rather than re-asserting status.js's own logic.
+  const { stdout: worktreeOut } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
+  const [{ path: worktreePath }] = parseWorktreeList(worktreeOut);
+  const [{ stdout: statusOut }, { stdout: lsOut }] = await Promise.all([
+    execFileAsync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktreePath }),
+    execFileAsync('git', ['ls-files'], { cwd: worktreePath }),
+  ]);
+  const expected = buildFileTree(lsOut.split('\n').filter(Boolean), parseStatus(statusOut));
+
+  const res = await get(port, `/api/files?worktree=${encodeURIComponent(worktreePath)}`);
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
+  assert.deepEqual(JSON.parse(res.body), expected);
+});
+
+test('GET /api/files without a worktree query param is a 400', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, '/api/files');
+
+  assert.equal(res.statusCode, 400);
+});
+
+test('GET /api/files for an unknown worktree path is a 404', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, `/api/files?worktree=${encodeURIComponent('/nowhere')}`);
+
+  assert.equal(res.statusCode, 404);
+});
+
+test('GET /api/files serializes an injected file tree for the requested worktree', async (t) => {
+  const fixture = [
+    { path: '/repos/canopy', /* other worktree fields unused by /api/files */ },
+  ];
+  const tree = [
+    { name: 'README.md', type: 'file', path: 'README.md', status: 'clean' },
+    {
+      name: 'server',
+      type: 'dir',
+      path: 'server',
+      children: [{ name: 'app.js', type: 'file', path: 'server/app.js', status: 'modified' }],
+    },
+  ];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    getFileTree: async (worktreePath) => {
+      assert.equal(worktreePath, '/repos/canopy');
+      return tree;
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(port, `/api/files?worktree=${encodeURIComponent('/repos/canopy')}`);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), tree);
 });
