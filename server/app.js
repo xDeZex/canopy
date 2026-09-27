@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
+import { parseCommitLog, LOG_FORMAT } from './commits.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -19,9 +20,15 @@ const CONTENT_TYPES = {
 };
 
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
-// `listWorktrees` and `getFileTree` can be injected to bypass the real
-// `git` calls.
-export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree, getFileContent } = {}) {
+// `listWorktrees`, `getFileTree`, `getFileContent`, and `listCommits` can be
+// injected to bypass the real `git` calls.
+export function createApp({
+  repoRoot = process.cwd(),
+  listWorktrees,
+  getFileTree,
+  getFileContent,
+  listCommits,
+} = {}) {
   const getWorktrees =
     listWorktrees ??
     (async () => {
@@ -46,6 +53,21 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
 
   const getContent = getFileContent ?? readFileContent;
 
+  const getCommits =
+    listCommits ??
+    (async (worktreePath) => {
+      try {
+        const { stdout } = await execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], {
+          cwd: worktreePath,
+        });
+        return parseCommitLog(stdout);
+      } catch {
+        // `git log` exits non-zero for a repo with no commits yet; treat
+        // that the same as "no commit history" rather than an error.
+        return [];
+      }
+    });
+
   return createServer(async (req, res) => {
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://localhost');
@@ -65,9 +87,7 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
           return;
         }
 
-        const worktrees = await getWorktrees();
-        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
-        if (!isKnownWorktree) {
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
           respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
           return;
         }
@@ -85,9 +105,7 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
           return;
         }
 
-        const worktrees = await getWorktrees();
-        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
-        if (!isKnownWorktree) {
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
           respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
           return;
         }
@@ -101,13 +119,31 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
           return;
         }
 
-        const { head, working } = await getContent(worktreePath, filePath);
+        const ref = searchParams.get('ref') || 'HEAD';
+        const { head, working } = await getContent(worktreePath, filePath, ref);
         if (head === null && working === null) {
           respondJson(res, 404, { error: 'Not found' }, { includeBody });
           return;
         }
 
         respondJson(res, 200, { path: filePath, head, working }, { includeBody });
+        return;
+      }
+
+      if (isReadable && pathname === '/api/commits') {
+        const worktreePath = searchParams.get('worktree');
+        if (!worktreePath) {
+          respondJson(res, 400, { error: 'Missing "worktree" query param' }, { includeBody });
+          return;
+        }
+
+        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
+          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
+          return;
+        }
+
+        const commits = await getCommits(worktreePath);
+        respondJson(res, 200, commits, { includeBody });
         return;
       }
 
@@ -122,6 +158,14 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
       respondJson(res, 500, { error: 'Internal server error' });
     }
   });
+}
+
+// Shared by the /api/files, /api/file-content, and /api/commits routes,
+// each of which only accepts a `worktree` param that's one of the real
+// (or injected) worktrees, to guard against operating on an arbitrary path.
+async function isKnownWorktree(getWorktrees, worktreePath) {
+  const worktrees = await getWorktrees();
+  return worktrees.some((worktree) => worktree.path === worktreePath);
 }
 
 async function serveStatic(res, pathname, { includeBody = true } = {}) {

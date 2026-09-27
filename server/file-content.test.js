@@ -13,6 +13,8 @@ const execFileAsync = promisify(execFile);
 // files into exact states — clean, modified, untracked, deleted — without
 // touching the real working tree.
 let repoDir;
+let firstSha;
+let secondSha;
 
 before(async () => {
   repoDir = await mkdtemp(path.join(os.tmpdir(), 'canopy-file-content-'));
@@ -25,8 +27,17 @@ before(async () => {
   await writeFile(path.join(repoDir, 'clean.txt'), 'clean content\n');
   await writeFile(path.join(repoDir, 'to-modify.txt'), 'original content\n');
   await writeFile(path.join(repoDir, 'to-delete.txt'), 'will be deleted\n');
+  await writeFile(path.join(repoDir, 'across-commits.txt'), 'first commit content\n');
   await run(['add', '.']);
   await run(['commit', '-q', '-m', 'initial commit']);
+  firstSha = (await run(['rev-parse', 'HEAD'])).stdout.trim();
+
+  // A second commit, changing a file not otherwise used by the other tests,
+  // so a locked-to-an-older-commit lookup (the `ref` param) has two
+  // distinguishable versions of the same file to tell apart.
+  await writeFile(path.join(repoDir, 'across-commits.txt'), 'second commit content\n');
+  await run(['commit', '-q', '-am', 'second commit']);
+  secondSha = (await run(['rev-parse', 'HEAD'])).stdout.trim();
 
   // Now put the working tree into the states each test exercises.
   await writeFile(path.join(repoDir, 'to-modify.txt'), 'modified content\n');
@@ -61,4 +72,20 @@ test('a deleted file has no working-tree version', async () => {
 test('a path with neither a HEAD nor a working version returns both null', async () => {
   const result = await readFileContent(repoDir, 'does-not-exist.txt');
   assert.deepEqual(result, { head: null, working: null });
+});
+
+test('defaults to HEAD when no ref is given', async () => {
+  const withDefault = await readFileContent(repoDir, 'to-modify.txt');
+  const withExplicitHead = await readFileContent(repoDir, 'to-modify.txt', 'HEAD');
+  assert.deepEqual(withDefault, withExplicitHead);
+});
+
+test('an explicit ref reads that commit\'s content instead of HEAD, leaving working untouched', async () => {
+  const result = await readFileContent(repoDir, 'across-commits.txt', firstSha);
+  assert.deepEqual(result, { head: 'first commit content\n', working: 'second commit content\n' });
+});
+
+test('a later ref reads a newer commit\'s content', async () => {
+  const result = await readFileContent(repoDir, 'across-commits.txt', secondSha);
+  assert.deepEqual(result, { head: 'second commit content\n', working: 'second commit content\n' });
 });
