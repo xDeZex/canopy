@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createApp } from './app.js';
 import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
+import { readFileContent } from './file-content.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -240,4 +241,128 @@ test('GET /api/files serializes an injected file tree for the requested worktree
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), tree);
+});
+
+test('GET /api/file-content returns this worktree\'s real HEAD and working content for a clean file', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  // Independently derive the expected content straight from the already-
+  // tested readFileContent, so this test verifies the HTTP wiring rather
+  // than re-asserting file-content.js's own logic.
+  const { stdout: worktreeOut } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
+  const [{ path: worktreePath }] = parseWorktreeList(worktreeOut);
+  const expected = await readFileContent(worktreePath, 'README.md');
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent(worktreePath)}&file=${encodeURIComponent('README.md')}`
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
+  assert.deepEqual(JSON.parse(res.body), { path: 'README.md', ...expected });
+  assert.ok(expected.head, 'expected README.md to have HEAD content in this repo');
+  assert.equal(expected.head, expected.working, 'expected README.md to be clean (no local edits)');
+});
+
+test('GET /api/file-content without a worktree query param is a 400', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, '/api/file-content?file=README.md');
+
+  assert.equal(res.statusCode, 400);
+});
+
+test('GET /api/file-content without a file query param is a 400', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}`);
+
+  assert.equal(res.statusCode, 400);
+});
+
+test('GET /api/file-content for an unknown worktree path is a 404', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent('/nowhere')}&file=${encodeURIComponent('README.md')}`
+  );
+
+  assert.equal(res.statusCode, 404);
+});
+
+test('GET /api/file-content serializes injected content for the requested worktree and file', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    getFileContent: async (worktreePath, filePath) => {
+      assert.equal(worktreePath, '/repos/canopy');
+      assert.equal(filePath, 'server/app.js');
+      return { head: 'old content\n', working: 'new content\n' };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}&file=${encodeURIComponent('server/app.js')}`
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), {
+    path: 'server/app.js',
+    head: 'old content\n',
+    working: 'new content\n',
+  });
+});
+
+test('GET /api/file-content for a path with neither a HEAD nor a working version is a 404', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    getFileContent: async () => ({ head: null, working: null }),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}&file=${encodeURIComponent('gone.txt')}`
+  );
+
+  assert.equal(res.statusCode, 404);
+});
+
+test('GET /api/file-content rejects a file path that escapes the worktree', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    getFileContent: async () => {
+      throw new Error('should not be called for an escaping path');
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}&file=${encodeURIComponent('../../etc/passwd')}`
+  );
+
+  assert.equal(res.statusCode, 403);
 });

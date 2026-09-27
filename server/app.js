@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
+import { readFileContent } from './file-content.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,7 +21,7 @@ const CONTENT_TYPES = {
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
 // `listWorktrees` and `getFileTree` can be injected to bypass the real
 // `git` calls.
-export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree } = {}) {
+export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree, getFileContent } = {}) {
   const getWorktrees =
     listWorktrees ??
     (async () => {
@@ -42,6 +43,8 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
       const trackedPaths = lsOut.split('\n').filter(Boolean);
       return buildFileTree(trackedPaths, parseStatus(statusOut));
     });
+
+  const getContent = getFileContent ?? readFileContent;
 
   return createServer(async (req, res) => {
     try {
@@ -71,6 +74,40 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree
 
         const tree = await getTree(worktreePath);
         respondJson(res, 200, tree, { includeBody });
+        return;
+      }
+
+      if (isReadable && pathname === '/api/file-content') {
+        const worktreePath = searchParams.get('worktree');
+        const filePath = searchParams.get('file');
+        if (!worktreePath || !filePath) {
+          respondJson(res, 400, { error: 'Missing "worktree" or "file" query param' }, { includeBody });
+          return;
+        }
+
+        const worktrees = await getWorktrees();
+        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
+        if (!isKnownWorktree) {
+          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
+          return;
+        }
+
+        // Defense in depth: keep the resolved path inside the worktree even
+        // though callers are expected to pass paths from /api/files.
+        const worktreeRoot = path.resolve(worktreePath);
+        const resolvedPath = path.resolve(worktreeRoot, filePath);
+        if (resolvedPath !== worktreeRoot && !resolvedPath.startsWith(worktreeRoot + path.sep)) {
+          respondJson(res, 403, { error: 'Forbidden' }, { includeBody });
+          return;
+        }
+
+        const { head, working } = await getContent(worktreePath, filePath);
+        if (head === null && working === null) {
+          respondJson(res, 404, { error: 'Not found' }, { includeBody });
+          return;
+        }
+
+        respondJson(res, 200, { path: filePath, head, working }, { includeBody });
         return;
       }
 
