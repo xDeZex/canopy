@@ -8,6 +8,7 @@ import { createApp } from './app.js';
 import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
+import { parseCommitLog, LOG_FORMAT } from './commits.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -345,6 +346,59 @@ test('GET /api/file-content for a path with neither a HEAD nor a working version
   assert.equal(res.statusCode, 404);
 });
 
+test('GET /api/file-content with a ref param passes it through to content lookup', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    getFileContent: async (worktreePath, filePath, ref) => {
+      assert.equal(worktreePath, '/repos/canopy');
+      assert.equal(filePath, 'server/app.js');
+      assert.equal(ref, 'abc1234');
+      return { head: 'content as of abc1234\n', working: 'new content\n' };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}&file=${encodeURIComponent('server/app.js')}&ref=abc1234`
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), {
+    path: 'server/app.js',
+    head: 'content as of abc1234\n',
+    working: 'new content\n',
+  });
+});
+
+test('GET /api/file-content without a ref param defaults to HEAD', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    getFileContent: async (worktreePath, filePath, ref) => {
+      assert.equal(ref, 'HEAD');
+      return { head: 'old content\n', working: 'new content\n' };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(
+    port,
+    `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}&file=${encodeURIComponent('server/app.js')}`
+  );
+
+  assert.equal(res.statusCode, 200);
+});
+
 test('GET /api/file-content rejects a file path that escapes the worktree', async (t) => {
   const fixture = [{ path: '/repos/canopy' }];
 
@@ -365,4 +419,69 @@ test('GET /api/file-content rejects a file path that escapes the worktree', asyn
   );
 
   assert.equal(res.statusCode, 403);
+});
+
+test('GET /api/commits returns this worktree\'s real commit history as JSON', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  // Independently derive the expected list straight from git + the
+  // already-tested parser, so this test verifies the HTTP wiring rather
+  // than re-asserting commits.js's own logic.
+  const { stdout: worktreeOut } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
+  const [{ path: worktreePath }] = parseWorktreeList(worktreeOut);
+  const { stdout: logOut } = await execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], {
+    cwd: worktreePath,
+  });
+  const expected = parseCommitLog(logOut);
+
+  const res = await get(port, `/api/commits?worktree=${encodeURIComponent(worktreePath)}`);
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
+  assert.deepEqual(JSON.parse(res.body), expected);
+  assert.ok(expected.length >= 1, 'expected at least one commit in this repo');
+});
+
+test('GET /api/commits without a worktree query param is a 400', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, '/api/commits');
+
+  assert.equal(res.statusCode, 400);
+});
+
+test('GET /api/commits for an unknown worktree path is a 404', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, `/api/commits?worktree=${encodeURIComponent('/nowhere')}`);
+
+  assert.equal(res.statusCode, 404);
+});
+
+test('GET /api/commits serializes an injected commit list for the requested worktree', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+  const commits = [
+    { sha: 'abc1234', message: 'second commit', date: '2026-09-27T10:00:00+02:00' },
+    { sha: 'def5678', message: 'first commit', date: '2026-09-26T10:00:00+02:00' },
+  ];
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    listCommits: async (worktreePath) => {
+      assert.equal(worktreePath, '/repos/canopy');
+      return commits;
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await get(port, `/api/commits?worktree=${encodeURIComponent('/repos/canopy')}`);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), commits);
 });
