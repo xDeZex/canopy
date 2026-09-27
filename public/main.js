@@ -9,6 +9,7 @@
 // glue, left to manual/visual verification — see that file's header comment.
 
 import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
+import { defaultViewMode } from './view-mode.js';
 
 const tabsEl = document.getElementById('tabs');
 const railEl = document.getElementById('rail');
@@ -95,16 +96,12 @@ function disposeCurrentView() {
 async function selectFile(filePath) {
   if (filePath === activeFile) return;
   activeFile = filePath;
-  viewMode = defaultViewMode(filePath);
+  viewMode = defaultViewMode(fileStatusByPath.get(filePath));
   fileContent = null;
   fileContentError = null;
   renderRail();
   renderMain();
   await loadFileContent();
-}
-
-function defaultViewMode(filePath) {
-  return fileStatusByPath.get(filePath) === 'clean' ? 'file' : 'diff';
 }
 
 function setViewMode(mode) {
