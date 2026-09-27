@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseWorktreeList } from './porcelain.js';
+import { parseStatus, buildFileTree } from './status.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,8 +18,9 @@ const CONTENT_TYPES = {
 };
 
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
-// `listWorktrees` can be injected to bypass the real `git` call.
-export function createApp({ repoRoot = process.cwd(), listWorktrees } = {}) {
+// `listWorktrees` and `getFileTree` can be injected to bypass the real
+// `git` calls.
+export function createApp({ repoRoot = process.cwd(), listWorktrees, getFileTree } = {}) {
   const getWorktrees =
     listWorktrees ??
     (async () => {
@@ -28,15 +30,47 @@ export function createApp({ repoRoot = process.cwd(), listWorktrees } = {}) {
       return parseWorktreeList(stdout);
     });
 
+  const getTree =
+    getFileTree ??
+    (async (worktreePath) => {
+      const [{ stdout: statusOut }, { stdout: lsOut }] = await Promise.all([
+        execFileAsync('git', ['status', '--porcelain', '--untracked-files=all'], {
+          cwd: worktreePath,
+        }),
+        execFileAsync('git', ['ls-files'], { cwd: worktreePath }),
+      ]);
+      const trackedPaths = lsOut.split('\n').filter(Boolean);
+      return buildFileTree(trackedPaths, parseStatus(statusOut));
+    });
+
   return createServer(async (req, res) => {
     try {
-      const { pathname } = new URL(req.url, 'http://localhost');
+      const { pathname, searchParams } = new URL(req.url, 'http://localhost');
       const isReadable = req.method === 'GET' || req.method === 'HEAD';
       const includeBody = req.method !== 'HEAD';
 
       if (isReadable && pathname === '/api/worktrees') {
         const worktrees = await getWorktrees();
         respondJson(res, 200, worktrees, { includeBody });
+        return;
+      }
+
+      if (isReadable && pathname === '/api/files') {
+        const worktreePath = searchParams.get('worktree');
+        if (!worktreePath) {
+          respondJson(res, 400, { error: 'Missing "worktree" query param' }, { includeBody });
+          return;
+        }
+
+        const worktrees = await getWorktrees();
+        const isKnownWorktree = worktrees.some((worktree) => worktree.path === worktreePath);
+        if (!isKnownWorktree) {
+          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
+          return;
+        }
+
+        const tree = await getTree(worktreePath);
+        respondJson(res, 200, tree, { includeBody });
         return;
       }
 
