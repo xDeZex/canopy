@@ -4,12 +4,17 @@
 // the active worktree and re-fetches its file tree. Clicking a file fetches
 // its HEAD/working content and renders it via Monaco, either as a full-file
 // inline diff (Diff mode) or plain content (File mode), toggled per variant
-// D's Diff/File toggle. No build step; loaded directly as an ES module by
-// index.html. Monaco wiring itself (monaco-view.js) is thin third-party
-// glue, left to manual/visual verification — see that file's header comment.
+// D's Diff/File toggle. A commit dropdown in the file toolbar (also variant
+// D's shape) can lock the diff's comparison base to an older commit instead
+// of HEAD, scoped per worktree (#5) — see commit-lock.js. No build step;
+// loaded directly as an ES module by index.html. Monaco wiring itself
+// (monaco-view.js) is thin third-party glue, left to manual/visual
+// verification — see that file's header comment.
 
 import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
 import { defaultViewMode } from './view-mode.js';
+import { createCommitLockStore } from './commit-lock.js';
+import { formatRelativeTime } from './relative-time.js';
 
 const tabsEl = document.getElementById('tabs');
 const railEl = document.getElementById('rail');
@@ -27,6 +32,10 @@ let fileContent = null; // { path, head, working } once loaded
 let fileContentError = null;
 let currentView = null; // Monaco controller for the mounted editor, or null
 
+const commitLock = createCommitLockStore(); // per-worktree locked sha, or Auto
+let commits = []; // active worktree's commit history, newest first
+let commitsError = null;
+
 async function init() {
   try {
     const res = await fetch('/api/worktrees');
@@ -39,7 +48,7 @@ async function init() {
 
   activePath = worktrees[0]?.path ?? null;
   render();
-  await loadFileTree();
+  await Promise.all([loadFileTree(), loadCommits()]);
 }
 
 async function loadFileTree() {
@@ -65,6 +74,25 @@ async function loadFileTree() {
   renderRail();
 }
 
+async function loadCommits() {
+  if (!activePath) {
+    commits = [];
+    commitsError = null;
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/commits?worktree=${encodeURIComponent(activePath)}`);
+    if (!res.ok) throw new Error(`request failed with status ${res.status}`);
+    commits = await res.json();
+    commitsError = null;
+  } catch (err) {
+    commits = [];
+    commitsError = err;
+  }
+  refreshToolbarIfVisible();
+}
+
 function indexStatuses(nodes, statusByPath = new Map()) {
   for (const node of nodes) {
     if (node.type === 'file') statusByPath.set(node.path, node.status);
@@ -79,6 +107,7 @@ function selectWorktree(worktreePath) {
   clearSelectedFile();
   render();
   loadFileTree();
+  loadCommits();
 }
 
 function clearSelectedFile() {
@@ -112,8 +141,10 @@ function setViewMode(mode) {
 
 async function loadFileContent() {
   try {
+    const lockedSha = commitLock.getLockedCommit(activePath);
+    const refParam = lockedSha ? `&ref=${encodeURIComponent(lockedSha)}` : '';
     const res = await fetch(
-      `/api/file-content?worktree=${encodeURIComponent(activePath)}&file=${encodeURIComponent(activeFile)}`
+      `/api/file-content?worktree=${encodeURIComponent(activePath)}&file=${encodeURIComponent(activeFile)}${refParam}`
     );
     if (!res.ok) throw new Error(`request failed with status ${res.status}`);
     fileContent = await res.json();
@@ -123,6 +154,13 @@ async function loadFileContent() {
     fileContentError = err;
   }
   renderMain();
+}
+
+// Re-fetches the current file's content against the (possibly just changed)
+// lock state and re-renders. Called when the commit picker's selection
+// changes; a no-op when no file is open, since there's nothing to refetch.
+function onCommitLockChanged() {
+  if (activeFile) loadFileContent();
 }
 
 function render() {
@@ -211,8 +249,98 @@ function renderViewerToolbar() {
   toggle.className = 'view-toggle';
   toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
 
-  toolbar.append(pathLabel, toggle);
+  toolbar.append(pathLabel, renderCommitPicker(), toggle);
   return toolbar;
+}
+
+// Refreshes just the toolbar in place (e.g. once a slower-loading commit
+// list arrives) without touching the mounted Monaco editor, which would
+// otherwise be needlessly disposed and remounted by a full renderMain().
+function refreshToolbarIfVisible() {
+  if (!activeFile) return;
+  const oldToolbar = mainEl.querySelector('.viewer__toolbar');
+  if (!oldToolbar) return;
+  oldToolbar.replaceWith(renderViewerToolbar());
+}
+
+// Commit picker (variant D's shape): a trigger showing the current lock
+// state, opening a dropdown of the active worktree's commits plus "Auto".
+// Picking an item locks/unlocks and re-fetches the open file's diff against
+// the new base (#5). Menu open/close is plain DOM class toggling, not a
+// re-render, so it doesn't disturb the mounted Monaco editor.
+function renderCommitPicker() {
+  const lockedSha = commitLock.getLockedCommit(activePath);
+  const lockedCommit = commits.find((commit) => commit.sha === lockedSha) ?? null;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'commit-picker';
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'commit-picker__trigger';
+
+  const shaEl = document.createElement('span');
+  shaEl.className = 'commit-picker__trigger-sha';
+  shaEl.textContent = lockedCommit ? lockedCommit.sha.slice(0, 7) : 'HEAD';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'commit-picker__trigger-label';
+  labelEl.textContent = lockedCommit ? 'locked' : 'since last commit';
+
+  trigger.append(shaEl, labelEl);
+
+  const menu = document.createElement('div');
+  menu.className = 'commit-picker__menu';
+  trigger.addEventListener('click', () => menu.classList.toggle('is-open'));
+
+  const autoItem = document.createElement('div');
+  autoItem.className = `commit-picker__item${lockedCommit ? '' : ' is-selected'}`;
+  autoItem.textContent = 'Auto (since last commit)';
+  autoItem.addEventListener('click', () => {
+    commitLock.setAuto(activePath);
+    menu.classList.remove('is-open');
+    onCommitLockChanged();
+  });
+
+  menu.append(
+    autoItem,
+    ...commits.map((commit) => renderCommitMenuItem(commit, commit.sha === lockedSha, menu))
+  );
+  if (commitsError) {
+    const message = document.createElement('div');
+    message.className = 'commit-picker__item commit-picker__item--error';
+    message.textContent = `Failed to load commits: ${commitsError.message}`;
+    menu.append(message);
+  }
+
+  wrapper.append(trigger, menu);
+  return wrapper;
+}
+
+function renderCommitMenuItem(commit, isSelected, menu) {
+  const item = document.createElement('div');
+  item.className = `commit-picker__item${isSelected ? ' is-selected' : ''}`;
+
+  const shaEl = document.createElement('span');
+  shaEl.className = 'commit-picker__item-sha';
+  shaEl.textContent = commit.sha.slice(0, 7);
+
+  const messageEl = document.createElement('span');
+  messageEl.className = 'commit-picker__item-message';
+  messageEl.textContent = commit.message;
+  messageEl.title = commit.message;
+
+  const timeEl = document.createElement('span');
+  timeEl.className = 'commit-picker__item-time';
+  timeEl.textContent = formatRelativeTime(commit.date);
+
+  item.append(shaEl, messageEl, timeEl);
+  item.addEventListener('click', () => {
+    commitLock.lockCommit(activePath, commit.sha);
+    menu.classList.remove('is-open');
+    onCommitLockChanged();
+  });
+  return item;
 }
 
 function renderToggleButton(mode, label) {
