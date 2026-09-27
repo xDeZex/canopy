@@ -536,6 +536,161 @@ test('GET /api/file-content rejects a file path that escapes the worktree', asyn
   assert.equal(res.statusCode, 403);
 });
 
+test('HEAD /api/watch-worktrees returns SSE headers without starting a poll', async (t) => {
+  let pollStarted = false;
+
+  const server = createApp({
+    watchWorktreeList: () => {
+      pollStarted = true;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await request(port, 'HEAD', '/api/watch-worktrees');
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.equal(res.body, '');
+  assert.equal(pollStarted, false, 'a HEAD request should not start a live poll');
+});
+
+test('GET /api/watch-worktrees streams worktree-list changes as SSE', async (t) => {
+  let capturedOnChange;
+
+  const server = createApp({
+    watchWorktreeList: (onChange) => {
+      capturedOnChange = onChange;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, '/api/watch-worktrees');
+  t.after(() => req.destroy());
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.ok(capturedOnChange, 'expected the route to start a poll with an onChange callback');
+
+  const fixture = [{ path: '/repos/canopy' }, { path: '/repos/canopy-worktrees/new' }];
+  const chunkPromise = nextChunk(res);
+  capturedOnChange(fixture);
+  const chunk = await chunkPromise;
+
+  assert.equal(chunk, `data: ${JSON.stringify(fixture)}\n\n`);
+});
+
+test('closing the client connection stops the worktree-list poll', async (t) => {
+  let closeCalled;
+  const closedPromise = new Promise((resolve) => {
+    closeCalled = resolve;
+  });
+
+  const server = createApp({
+    watchWorktreeList: () => ({ close: () => closeCalled() }),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, '/api/watch-worktrees');
+  res.resume();
+
+  req.destroy();
+
+  await closedPromise;
+});
+
+test('concurrent /api/watch-worktrees connections share one underlying poll', async (t) => {
+  let startCount = 0;
+  let capturedOnChange;
+
+  const server = createApp({
+    watchWorktreeList: (onChange) => {
+      startCount++;
+      capturedOnChange = onChange;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const first = await openStream(port, '/api/watch-worktrees');
+  t.after(() => first.req.destroy());
+  const second = await openStream(port, '/api/watch-worktrees');
+  t.after(() => second.req.destroy());
+
+  assert.equal(startCount, 1, 'a second connection should not start a second poll');
+
+  const fixture = [{ path: '/repos/canopy' }];
+  const firstChunk = nextChunk(first.res);
+  const secondChunk = nextChunk(second.res);
+  capturedOnChange(fixture);
+
+  assert.equal(await firstChunk, `data: ${JSON.stringify(fixture)}\n\n`);
+  assert.equal(await secondChunk, `data: ${JSON.stringify(fixture)}\n\n`);
+});
+
+test('the shared poll stops only once every connection has closed', async (t) => {
+  let closeCallCount = 0;
+
+  const server = createApp({
+    watchWorktreeList: () => ({ close: () => closeCallCount++ }),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const first = await openStream(port, '/api/watch-worktrees');
+  first.res.resume();
+  const second = await openStream(port, '/api/watch-worktrees');
+  second.res.resume();
+  t.after(() => second.req.destroy());
+
+  first.req.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(closeCallCount, 0, 'the poll should stay alive while a connection remains open');
+
+  second.req.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(closeCallCount, 1, 'the poll should close once the last connection closes');
+});
+
+test('a worktree-poll error is forwarded to the client as a named SSE event', async (t) => {
+  let capturedOnError;
+
+  const server = createApp({
+    watchWorktreeList: (_onChange, { onError } = {}) => {
+      capturedOnError = onError;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, '/api/watch-worktrees');
+  t.after(() => req.destroy());
+
+  const chunkPromise = nextChunk(res);
+  capturedOnError(new Error('git worktree list failed'));
+  const chunk = await chunkPromise;
+
+  assert.equal(chunk, `event: worktree-poll-error\ndata: ${JSON.stringify({ message: 'git worktree list failed' })}\n\n`);
+});
+
 test('GET /api/commits returns this worktree\'s real commit history as JSON', async (t) => {
   const { server, port } = await startServer();
   t.after(() => server.close());

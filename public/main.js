@@ -20,12 +20,32 @@
 // wiring is thin DOM/EventSource glue with no automated test — left to
 // manual verification (edit a tracked file on disk while the app is open;
 // switch worktrees and confirm the old one stops updating).
+//
+// Worktree-list auto-update (#12): a second, separate EventSource subscribes
+// to `/api/watch-worktrees` (server/app.js + server/worktree-watch.js), the
+// worktree list's own live channel, opened once for the app's lifetime
+// (unlike the per-worktree file-watch above, this isn't scoped to the active
+// worktree). Each event carries the full current worktree list; the fallback
+// choice of which worktree becomes active if the current one was removed is
+// `pickActiveWorktree` (worktree-select.js), a pure, independently-tested
+// function. The rest of this wiring (opening the EventSource, re-rendering)
+// is thin glue left to manual verification.
+//
+// Tab bar scroll affordance (#14): with more worktrees than fit on screen,
+// the tab bar scrolls (`overflow-x: auto`) but showed no hint that it does.
+// `computeTabScrollAffordance` (tab-scroll.js) is a pure function of the tab
+// bar's scroll geometry; this file just re-runs it on render/scroll/resize
+// and toggles edge-fade classes on the wrapper (styles.css).
 
 import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
 import { defaultViewMode } from './view-mode.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
+import { pickActiveWorktree } from './worktree-select.js';
+import { createTreeExpansionStore } from './tree-state.js';
+import { computeTabScrollAffordance } from './tab-scroll.js';
 
+const tabsWrapperEl = document.getElementById('tabs-wrapper');
 const tabsEl = document.getElementById('tabs');
 const railEl = document.getElementById('rail');
 const mainEl = document.getElementById('main');
@@ -47,6 +67,8 @@ const commitLock = createCommitLockStore(); // per-worktree locked sha, or Auto
 let commits = []; // active worktree's commit history, newest first
 let commitsError = null;
 
+const treeExpansion = createTreeExpansionStore(); // per-worktree expanded folder paths (#13)
+
 async function init() {
   try {
     const res = await fetch('/api/worktrees');
@@ -60,7 +82,44 @@ async function init() {
   activePath = worktrees[0]?.path ?? null;
   render();
   connectWatch(activePath);
+  connectWorktreesWatch();
   await Promise.all([loadFileTree(), loadCommits()]);
+}
+
+// Opened once, for the app's lifetime: the worktree list is repo-wide, not
+// scoped to the active worktree, so unlike connectWatch() this never needs
+// to be re-opened when the active worktree changes.
+function connectWorktreesWatch() {
+  const worktreesWatchSource = new EventSource('/api/watch-worktrees');
+  worktreesWatchSource.onmessage = (event) => {
+    handleWorktreesChanged(JSON.parse(event.data));
+  };
+  worktreesWatchSource.addEventListener('worktree-poll-error', (event) => {
+    // The poll behind this channel failed (e.g. `git` unavailable, a
+    // corrupted repo) but the connection itself is still open and will keep
+    // retrying; surfaced to the console rather than left silent, matching
+    // the visibility the initial `/api/worktrees` fetch's error path has.
+    console.error('canopy: worktree list live-update failed:', JSON.parse(event.data).message);
+  });
+}
+
+function handleWorktreesChanged(newWorktrees) {
+  worktrees = newWorktrees;
+
+  const knownPaths = worktrees.map((worktree) => worktree.path);
+  treeExpansion.pruneToKnownWorktrees(knownPaths);
+  commitLock.pruneToKnownWorktrees(knownPaths);
+
+  const nextActivePath = pickActiveWorktree(worktrees, activePath);
+  if (nextActivePath !== activePath) {
+    activePath = nextActivePath;
+    clearSelectedFile();
+    connectWatch(activePath);
+    loadFileTree();
+    loadCommits();
+  }
+
+  render();
 }
 
 // Scopes live-update watching to a single worktree at a time, matching the
@@ -246,7 +305,27 @@ function renderTabs() {
       return tab;
     })
   );
+  updateTabScrollAffordance();
 }
+
+// Toggles edge-fade classes on the tab bar's wrapper (#14) so a tab bar with
+// more worktrees than fit on screen shows a visual hint that it scrolls,
+// instead of relying on silent `overflow-x: auto`. The geometry math itself
+// (computeTabScrollAffordance) is unit-tested; this is thin DOM glue around
+// it, re-run on render, scroll, and viewport resize.
+function updateTabScrollAffordance() {
+  if (!tabsWrapperEl) return;
+  const { showLeft, showRight } = computeTabScrollAffordance({
+    scrollLeft: tabsEl.scrollLeft,
+    scrollWidth: tabsEl.scrollWidth,
+    clientWidth: tabsEl.clientWidth,
+  });
+  tabsWrapperEl.classList.toggle('has-scroll-left', showLeft);
+  tabsWrapperEl.classList.toggle('has-scroll-right', showRight);
+}
+
+tabsEl.addEventListener('scroll', updateTabScrollAffordance);
+window.addEventListener('resize', updateTabScrollAffordance);
 
 function renderMain() {
   if (!activeFile) {
@@ -451,14 +530,30 @@ function renderRail() {
 
 function renderNode(node, depth) {
   if (node.type === 'dir') {
+    const isExpanded = treeExpansion.isExpanded(activePath, node.path);
+
+    const caret = document.createElement('span');
+    caret.className = 'rail__caret';
+    caret.textContent = isExpanded ? '▾' : '▸';
+
+    const name = document.createElement('span');
+    name.textContent = node.name;
+
     const label = document.createElement('div');
     label.className = 'rail__dir';
     label.style.paddingLeft = `${depth * 12 + 10}px`;
-    label.textContent = node.name;
+    label.append(caret, name);
+    label.addEventListener('click', () => {
+      treeExpansion.toggle(activePath, node.path);
+      renderRail();
+    });
 
     const group = document.createElement('div');
     group.className = 'rail__group';
-    group.append(label, ...node.children.map((child) => renderNode(child, depth + 1)));
+    group.append(label);
+    if (isExpanded) {
+      group.append(...node.children.map((child) => renderNode(child, depth + 1)));
+    }
     return group;
   }
 

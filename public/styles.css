@@ -36,11 +36,56 @@ body {
 
 /* ---------- Tab bar (variant D shape) ---------- */
 
+/* Wraps the scrolling .tabs bar so the edge-fade affordances below (#14) can
+   be absolutely positioned over its content without scrolling along with
+   it. */
+.tabs-wrapper {
+  position: relative;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Edge fades: hidden by default (a tab bar that fits needs no affordance),
+   shown via .has-scroll-left/.has-scroll-right, toggled in main.js from
+   computeTabScrollAffordance's geometry check. A translucent black vignette
+   rather than a fade to --bg-2: a same-color fade is invisible against the
+   tab bar's own background, while a darkening overlay reads clearly
+   regardless of whether the tab under it is idle, hovered, or active. */
+.tabs-wrapper::before,
+.tabs-wrapper::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 1;
+}
+
+.tabs-wrapper::before {
+  left: 0;
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.tabs-wrapper::after {
+  right: 0;
+  background: linear-gradient(to left, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.tabs-wrapper.has-scroll-left::before {
+  opacity: 1;
+}
+
+.tabs-wrapper.has-scroll-right::after {
+  opacity: 1;
+}
+
 .tabs {
   display: flex;
   align-items: center;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }
 
@@ -100,12 +145,28 @@ body {
 }
 
 .rail__dir {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--fg-dim);
   padding: 4px 10px;
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.rail__dir:hover {
+  background: var(--bg-2);
+}
+
+.rail__caret {
+  display: inline-block;
+  width: 10px;
+  flex-shrink: 0;
+  font-size: 9px;
+  text-align: center;
 }
 
 .rail__file {

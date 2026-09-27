@@ -9,6 +9,7 @@ import { parseStatus, buildFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
 import { parseCommitLog, LOG_FORMAT } from './commits.js';
 import { watchWorktree as watchWorktreeReal } from './watcher.js';
+import { pollWorktrees } from './worktree-watch.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +32,7 @@ export function createApp({
   getFileContent,
   listCommits,
   watchWorktree = watchWorktreeReal,
+  watchWorktreeList,
 } = {}) {
   const getWorktrees =
     listWorktrees ??
@@ -40,6 +42,48 @@ export function createApp({
       });
       return parseWorktreeList(stdout);
     });
+
+  // Defaults to polling `getWorktrees` itself (see worktree-watch.js for why
+  // polling rather than a filesystem watch), so an injected `listWorktrees`
+  // fake is also what drives this channel in tests.
+  const watchWorktrees =
+    watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, options));
+
+  // Fans one underlying poll out to every open `/api/watch-worktrees`
+  // connection instead of starting a new `watchWorktrees` (and, by default,
+  // a new `git worktree list` poll loop) per connection: without this, each
+  // open browser tab — or each EventSource auto-reconnect — would multiply
+  // the poll's process-spawn cost indefinitely. The poll starts on the first
+  // subscriber and stops when the last one disconnects.
+  let worktreesFanOut = null;
+
+  function subscribeToWorktreeChanges({ onChange, onError }) {
+    if (!worktreesFanOut) {
+      const subscribers = new Set();
+      const poll = watchWorktrees(
+        (worktreeList) => {
+          for (const subscriber of subscribers) subscriber.onChange(worktreeList);
+        },
+        {
+          onError: (err) => {
+            for (const subscriber of subscribers) subscriber.onError?.(err);
+          },
+        }
+      );
+      worktreesFanOut = { poll, subscribers };
+    }
+
+    const subscriber = { onChange, onError };
+    worktreesFanOut.subscribers.add(subscriber);
+
+    return () => {
+      worktreesFanOut.subscribers.delete(subscriber);
+      if (worktreesFanOut.subscribers.size === 0) {
+        worktreesFanOut.poll.close();
+        worktreesFanOut = null;
+      }
+    };
+  }
 
   const getTree =
     getFileTree ??
@@ -144,6 +188,39 @@ export function createApp({
         // this MVP needs (see server/watcher.js's header comment).
         req.on('close', () => {
           watcher.close();
+        });
+        return;
+      }
+
+      if (isReadable && pathname === '/api/watch-worktrees') {
+        // A separate, worktree-independent SSE channel from `/api/watch`
+        // above: the worktree list itself isn't scoped to any one worktree,
+        // so it's opened once for the app's lifetime rather than re-opened
+        // per active worktree (#12).
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+
+        if (!includeBody) {
+          res.end();
+          return;
+        }
+
+        res.flushHeaders();
+
+        const unsubscribe = subscribeToWorktreeChanges({
+          onChange: (worktreeList) => {
+            res.write(`data: ${JSON.stringify(worktreeList)}\n\n`);
+          },
+          onError: (err) => {
+            res.write(`event: worktree-poll-error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+          },
+        });
+
+        req.on('close', () => {
+          unsubscribe();
         });
         return;
       }
