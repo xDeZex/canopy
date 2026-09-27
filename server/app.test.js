@@ -38,6 +38,24 @@ function get(port, requestPath) {
   return request(port, 'GET', requestPath);
 }
 
+// Opens a request and resolves as soon as headers arrive, leaving the
+// response stream open — for exercising the SSE route at the protocol
+// level (status/headers, then individual `data: ...` frames as they're
+// written) rather than waiting for the connection to end.
+function openStream(port, requestPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: requestPath }, (res) => {
+      resolve({ req, res });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function nextChunk(res) {
+  return new Promise((resolve) => res.once('data', (chunk) => resolve(chunk.toString('utf8'))));
+}
+
 test('GET /api/worktrees returns this repo\'s real worktrees as JSON', async (t) => {
   const { server, port } = await startServer();
   t.after(() => server.close());
@@ -397,6 +415,103 @@ test('GET /api/file-content without a ref param defaults to HEAD', async (t) => 
   );
 
   assert.equal(res.statusCode, 200);
+});
+
+test('GET /api/watch without a worktree query param is a 400', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, '/api/watch');
+
+  assert.equal(res.statusCode, 400);
+});
+
+test('GET /api/watch for an unknown worktree path is a 404', async (t) => {
+  const { server, port } = await startServer();
+  t.after(() => server.close());
+
+  const res = await get(port, `/api/watch?worktree=${encodeURIComponent('/nowhere')}`);
+
+  assert.equal(res.statusCode, 404);
+});
+
+test('HEAD /api/watch returns SSE headers without opening a watcher', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+  let watcherStarted = false;
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    watchWorktree: () => {
+      watcherStarted = true;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const res = await request(port, 'HEAD', `/api/watch?worktree=${encodeURIComponent('/repos/canopy')}`);
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.equal(res.body, '');
+  assert.equal(watcherStarted, false, 'a HEAD request should not start a live watcher');
+});
+
+test('GET /api/watch starts watching the requested worktree and streams change events as SSE', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+  let capturedOnChange;
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    watchWorktree: (worktreePath, onChange) => {
+      assert.equal(worktreePath, '/repos/canopy');
+      capturedOnChange = onChange;
+      return { close: () => {} };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, `/api/watch?worktree=${encodeURIComponent('/repos/canopy')}`);
+  t.after(() => req.destroy());
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.ok(capturedOnChange, 'expected the route to start a watcher with an onChange callback');
+
+  const chunkPromise = nextChunk(res);
+  capturedOnChange(['server/app.js']);
+  const chunk = await chunkPromise;
+
+  assert.equal(chunk, `data: ${JSON.stringify({ paths: ['server/app.js'] })}\n\n`);
+});
+
+test('closing the client connection stops the underlying watcher', async (t) => {
+  const fixture = [{ path: '/repos/canopy' }];
+  let closeCalled;
+  const closedPromise = new Promise((resolve) => {
+    closeCalled = resolve;
+  });
+
+  const server = createApp({
+    listWorktrees: async () => fixture,
+    watchWorktree: () => ({ close: () => closeCalled() }),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  t.after(() => server.close());
+
+  const { req, res } = await openStream(port, `/api/watch?worktree=${encodeURIComponent('/repos/canopy')}`);
+  res.resume(); // drain, since nothing further is read from this response
+
+  req.destroy();
+
+  await closedPromise; // resolves once the route's close() handler runs; hangs (and times out) otherwise
 });
 
 test('GET /api/file-content rejects a file path that escapes the worktree', async (t) => {
