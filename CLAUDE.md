@@ -1,3 +1,7 @@
+## Workflow
+
+Always commit and push after making changes.
+
 ## Agent skills
 
 ### Issue tracker
