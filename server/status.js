@@ -21,6 +21,9 @@ export function parseStatus(output) {
 
 function normalizeStatus(code) {
   if (code.includes('?')) return 'added';
+  // Checked before 'A': a worktree-deleted file (e.g. staged-add-then-
+  // removed-from-disk, code "AD") should read as deleted, since that's the
+  // file's actual state on disk right now.
   if (code.includes('D')) return 'deleted';
   if (code.includes('A')) return 'added';
   return 'modified';
