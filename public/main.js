@@ -30,6 +30,12 @@
 // `pickActiveWorktree` (worktree-select.js), a pure, independently-tested
 // function. The rest of this wiring (opening the EventSource, re-rendering)
 // is thin glue left to manual verification.
+//
+// Tab bar scroll affordance (#14): with more worktrees than fit on screen,
+// the tab bar scrolls (`overflow-x: auto`) but showed no hint that it does.
+// `computeTabScrollAffordance` (tab-scroll.js) is a pure function of the tab
+// bar's scroll geometry; this file just re-runs it on render/scroll/resize
+// and toggles edge-fade classes on the wrapper (styles.css).
 
 import { mountDiffEditor, mountEditor, languageForPath } from './monaco-view.js';
 import { defaultViewMode } from './view-mode.js';
@@ -37,7 +43,9 @@ import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
 import { pickActiveWorktree } from './worktree-select.js';
 import { createTreeExpansionStore } from './tree-state.js';
+import { computeTabScrollAffordance } from './tab-scroll.js';
 
+const tabsWrapperEl = document.getElementById('tabs-wrapper');
 const tabsEl = document.getElementById('tabs');
 const railEl = document.getElementById('rail');
 const mainEl = document.getElementById('main');
@@ -286,7 +294,27 @@ function renderTabs() {
       return tab;
     })
   );
+  updateTabScrollAffordance();
 }
+
+// Toggles edge-fade classes on the tab bar's wrapper (#14) so a tab bar with
+// more worktrees than fit on screen shows a visual hint that it scrolls,
+// instead of relying on silent `overflow-x: auto`. The geometry math itself
+// (computeTabScrollAffordance) is unit-tested; this is thin DOM glue around
+// it, re-run on render, scroll, and viewport resize.
+function updateTabScrollAffordance() {
+  if (!tabsWrapperEl) return;
+  const { showLeft, showRight } = computeTabScrollAffordance({
+    scrollLeft: tabsEl.scrollLeft,
+    scrollWidth: tabsEl.scrollWidth,
+    clientWidth: tabsEl.clientWidth,
+  });
+  tabsWrapperEl.classList.toggle('has-scroll-left', showLeft);
+  tabsWrapperEl.classList.toggle('has-scroll-right', showRight);
+}
+
+tabsEl.addEventListener('scroll', updateTabScrollAffordance);
+window.addEventListener('resize', updateTabScrollAffordance);
 
 function renderMain() {
   if (!activeFile) {
