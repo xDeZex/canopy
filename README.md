@@ -8,14 +8,14 @@ When an agent works across several branches/worktrees in parallel, reviewing its
 
 - a file tree
 - a git tree (status, branches, worktrees)
-- a full-file view with edits highlighted inline (not just diff hunks)
+- a full-file view with edits highlighted, inline by default (not just diff hunks) — switchable to side-by-side or collapsed-unchanged-regions (#6)
 - auto-updating as files change on disk, live
 
 ## Planned features (MVP scope only)
 
 1. **File tree** — browse any worktree's files, edited or not.
 2. **Git tree** — list of worktrees and branches; pick one to view.
-3. **Full-file diff view** — show the whole current file with added/changed lines highlighted inline, not a hunk-only diff.
+3. **Full-file diff view** — show the whole current file with added/changed lines highlighted, defaulting to inline (not a hunk-only diff); a toggle also offers side-by-side and a collapsed-unchanged-regions mode, each one click from expanding back to the full file (#6).
 4. **Auto-update** — watch the filesystem; the view refreshes itself as the agent writes files, no manual refresh.
 5. **Worktree/branch switching** — swap which worktree the tree and diff view are pointed at.
 

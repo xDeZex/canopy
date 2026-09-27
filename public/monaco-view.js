@@ -27,18 +27,39 @@ function ensureLoader() {
   return loaderReady;
 }
 
-// Mounts a full-file inline diff: HEAD content vs on-disk content,
-// highlighted inline over the whole file (README: "not a hunk-only diff"),
-// via `renderSideBySide: false`. Returns a controller with `dispose()`.
-export async function mountDiffEditor(container, { original, modified, language }) {
+// Diff render modes, each a native Monaco diff editor option (see #6):
+// - inline: the original full-file default — one pane, edits highlighted
+//   over the whole file (README: "not a hunk-only diff").
+// - side-by-side: classic two-pane diff.
+// - collapsed: inline, but unchanged regions are folded (expandable),
+//   which is a hunk-*focused* view rather than a hunk-*only* one — full
+//   context is still one click away, unlike the hunk-only view the README
+//   rules out.
+export const DIFF_RENDER_MODES = ['inline', 'side-by-side', 'collapsed'];
+
+const DIFF_MODE_OPTIONS = {
+  inline: { renderSideBySide: false, hideUnchangedRegions: { enabled: false } },
+  'side-by-side': { renderSideBySide: true, hideUnchangedRegions: { enabled: false } },
+  collapsed: { renderSideBySide: false, hideUnchangedRegions: { enabled: true } },
+};
+
+// Mounts a full-file diff: HEAD content vs on-disk content. `mode` selects
+// the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'.
+// Returns a controller with `dispose()`.
+export async function mountDiffEditor(container, { original, modified, language, mode = 'inline' }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
     automaticLayout: true,
     readOnly: true,
-    renderSideBySide: false,
     originalEditable: false,
     theme: 'vs-dark',
+    // Detects relocated blocks and draws a connecting arrow between the old
+    // and new spot instead of an unrelated delete+add pair. Cheap (a native
+    // option) and orthogonal to `mode`, so it's always on rather than a
+    // fourth toggle position (#6).
+    experimental: { showMoves: true },
+    ...DIFF_MODE_OPTIONS[mode],
   });
 
   const originalModel = monaco.editor.createModel(original ?? '', language);
