@@ -6,8 +6,9 @@ import { changedFiles } from './changed-files.js';
 // the initial-load error message in #main belong to the app coordinator.
 export function createWorkspaceUI({
   tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
-  viewModeStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
+  viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
   DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged, getDiffRenderMode,
+  onAutoScrollChanged, onNextChange, onPrevChange,
   document, window,
 }) {
   let toolbarPath = null;
@@ -272,6 +273,32 @@ export function createWorkspaceUI({
     return toggle;
   }
 
+  function renderChangeNav() {
+    const nav = document.createElement('div');
+    nav.className = 'change-nav';
+    const steps = document.createElement('div');
+    steps.className = 'view-toggle change-nav__steps';
+    for (const [label, glyph, onClick] of [['Previous change', '▲', onPrevChange], ['Next change', '▼', onNextChange]]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'view-toggle__btn change-nav__step';
+      button.textContent = glyph;
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      button.addEventListener('click', onClick);
+      steps.append(button);
+    }
+    const auto = document.createElement('button');
+    auto.type = 'button';
+    auto.className = 'change-nav__auto';
+    auto.textContent = '⤓';
+    auto.title = 'Auto-scroll to the first change when a diff opens';
+    auto.setAttribute('aria-label', 'Auto-scroll to first change');
+    auto.addEventListener('click', () => onAutoScrollChanged(!autoScrollStore.isEnabled()));
+    nav.append(steps, auto);
+    return nav;
+  }
+
   function createToolbar() {
     const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
@@ -282,7 +309,10 @@ export function createWorkspaceUI({
     const toggle = document.createElement('div');
     toggle.className = 'view-toggle view-toggle--mode';
     toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
-    toolbar.append(left, toggle, renderDiffModeToggle());
+    const right = document.createElement('div');
+    right.className = 'viewer__toolbar-right';
+    right.append(renderChangeNav(), renderDiffModeToggle());
+    toolbar.append(left, toggle, right);
     return toolbar;
   }
 
@@ -303,7 +333,7 @@ export function createWorkspaceUI({
       toolbarEl.replaceChildren(createToolbar());
     }
     const pathLabel = toolbarEl.querySelector('.viewer__path');
-    pathLabel.hidden = !activeFile;
+    // Always mounted (never hidden) so selecting a file moves nothing.
     pathLabel.textContent = activeFile ?? '';
     pathLabel.title = activeFile ?? '';
 
@@ -313,7 +343,15 @@ export function createWorkspaceUI({
         ? viewModeStore.getMode() : getDiffRenderMode();
       button.classList.toggle('is-active', button.dataset.mode === selected);
     });
-    toolbarEl.querySelector('.view-toggle--diff').hidden = viewModeStore.getMode() !== 'diff';
+    const diffMode = viewModeStore.getMode() === 'diff';
+    // Concealed, not removed, in File mode: the space stays reserved.
+    toolbarEl.querySelector('.view-toggle--diff').classList.toggle('is-concealed', !diffMode);
+    toolbarEl.querySelectorAll('.change-nav__step').forEach((button) => {
+      button.disabled = !activeFile || !diffMode;
+    });
+    const auto = toolbarEl.querySelector('.change-nav__auto');
+    auto.classList.toggle('is-on', autoScrollStore.isEnabled());
+    auto.setAttribute('aria-pressed', String(autoScrollStore.isEnabled()));
   }
 
   function renderError(_err) {

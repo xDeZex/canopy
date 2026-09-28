@@ -35,12 +35,14 @@ function fixture() {
   let state = { activeFile: null, worktrees: [], activePath: null, fileContent: null, fileContentError: null };
   let mode = 'diff';
   let diffMode = 'inline';
+  let autoScroll = false;
   const viewer = createViewer({
     mainEl,
     document,
     getState: () => state,
     getViewMode: () => mode,
     getDiffRenderMode: () => diffMode,
+    getAutoScroll: () => autoScroll,
     languageForPath: (path) => path.endsWith('.js') ? 'javascript' : 'plaintext',
     mountEditor: (container, options) => {
       const pending = deferred();
@@ -58,6 +60,7 @@ function fixture() {
     setState(patch) { state = { ...state, ...patch }; },
     setMode(value) { mode = value; },
     setDiffMode(value) { diffMode = value; },
+    setAutoScroll(value) { autoScroll = value; },
   };
 }
 
@@ -101,7 +104,7 @@ test('out-of-order mounts dispose stale controllers without replacing the latest
   f.setState({ activeFile: 'first.js', fileContent: { head: 'before', working: 'after' } });
   f.viewer.render();
   assert.equal(f.calls[0].kind, 'diff');
-  assert.deepEqual(f.calls[0].options, { original: 'before', modified: 'after', language: 'javascript', mode: 'inline' });
+  assert.deepEqual(f.calls[0].options, { original: 'before', modified: 'after', language: 'javascript', mode: 'inline', autoScroll: false });
 
   f.setMode('file');
   f.setState({ activeFile: 'second.txt', fileContent: { head: null, working: 'second' } });
@@ -119,7 +122,7 @@ test('out-of-order mounts dispose stale controllers without replacing the latest
   f.setDiffMode('collapsed');
   f.viewer.render();
   assert.deepEqual(disposed, ['first', 'second']);
-  assert.deepEqual(f.calls[2].options, { original: '', modified: 'second', language: 'plaintext', mode: 'collapsed' });
+  assert.deepEqual(f.calls[2].options, { original: '', modified: 'second', language: 'plaintext', mode: 'collapsed', autoScroll: false });
   f.calls[2].resolve(controller('third'));
   await f.calls[2].promise;
   f.setState({ activeFile: null });
@@ -157,4 +160,36 @@ test('pending mounts are invalidated by message renders; only current failures a
   } finally {
     console.error = originalError;
   }
+});
+
+test('passes the auto-scroll preference to diff mounts and forwards change navigation to the current view', async () => {
+  const f = fixture();
+  f.setState({
+    activeFile: 'a.js', worktrees: [{ path: '/repo' }], activePath: '/repo',
+    fileContent: { head: 'old', working: 'new' },
+  });
+  f.setAutoScroll(true);
+  f.viewer.render();
+  assert.equal(f.calls[0].options.autoScroll, true);
+
+  const navigated = [];
+  f.calls[0].resolve({ dispose() {}, nextChange: () => navigated.push('next'), prevChange: () => navigated.push('prev') });
+  await f.calls[0].promise;
+  f.viewer.nextChange();
+  f.viewer.prevChange();
+  assert.deepEqual(navigated, ['next', 'prev']);
+});
+
+test('change navigation is a no-op with no view or a File mode view', async () => {
+  const f = fixture();
+  f.viewer.nextChange();
+  f.setState({
+    activeFile: 'a.js', worktrees: [{ path: '/repo' }], activePath: '/repo',
+    fileContent: { head: 'old', working: 'new' },
+  });
+  f.setMode('file');
+  f.viewer.render();
+  f.calls[0].resolve({ dispose() {} });
+  await f.calls[0].promise;
+  f.viewer.prevChange();
 });

@@ -8,6 +8,7 @@ import { createLiveUpdates } from './live-updates.js';
 import { createWorkspaceUI } from './workspace-ui.js';
 import { mountDiffEditor, mountEditor, languageForPath, DIFF_RENDER_MODES } from './monaco-view.js';
 import { createViewModeStore } from './view-mode.js';
+import { createAutoScrollStore } from './auto-scroll.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
 import { createTreeExpansionStore } from './tree-state.js';
@@ -37,6 +38,7 @@ export async function startApp({
     setItem: (key, value) => browserWindow.localStorage.setItem(key, value),
   };
   const viewModeStore = createViewModeStore(storage);
+  const autoScrollStore = createAutoScrollStore(storage);
   const commitLock = createCommitLockStore();
   const treeExpansion = createTreeExpansionStore();
   let viewer;
@@ -69,6 +71,7 @@ export async function startApp({
     mountEditor: mountFileEditor,
     mountDiffEditor: mountDiff,
     languageForPath: language,
+    getAutoScroll: () => autoScrollStore.isEnabled(),
   });
 
   function onViewModeChanged(mode) {
@@ -85,10 +88,16 @@ export async function startApp({
     if (workspace.getState().activeFile) viewer.render();
   }
 
+  function onAutoScrollChanged(enabled) {
+    autoScrollStore.setEnabled(enabled);
+    ui.renderToolbar();
+  }
+
   ui = createWorkspaceUI({
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
-    viewModeStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
+    viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
     DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged,
+    onAutoScrollChanged, onNextChange: () => viewer.nextChange(), onPrevChange: () => viewer.prevChange(),
     getDiffRenderMode: () => diffRenderMode,
     document: doc, window: browserWindow,
   });

@@ -266,12 +266,14 @@ body {
 
 .viewer__toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  /* The right cluster never shrinks or wraps; the path label absorbs the squeeze. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .viewer__toolbar-left {
@@ -281,33 +283,25 @@ body {
   min-width: 0;
 }
 
-.view-toggle--diff {
+.viewer__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   justify-self: end;
 }
 
-@media (max-width: 900px) {
-  .viewer__toolbar-left {
-    grid-column: 1 / -1;
-  }
-
-  .view-toggle--mode {
-    grid-column: 2;
-  }
-
-  .view-toggle--diff {
-    grid-column: 1 / -1;
-    justify-self: center;
-  }
-}
-
 .viewer__toolbar[hidden],
-.viewer__path[hidden],
 .view-toggle[hidden] {
   display: none;
 }
 
+.is-concealed {
+  visibility: hidden;
+}
+
 .viewer__path {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -452,4 +446,33 @@ body {
   font-size: 10px;
   color: var(--fg-dim);
   flex-shrink: 0;
+}
+
+/* ---------- Diff hunk navigation (#24) ---------- */
+
+.change-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.change-nav__step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.change-nav__auto {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-dim);
+  padding: 4px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.change-nav__auto.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
 }

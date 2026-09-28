@@ -42,9 +42,11 @@ const DIFF_MODE_OPTIONS = {
 };
 
 // Mounts a full-file diff: HEAD content vs on-disk content. `mode` selects
-// the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'.
+// the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'. With
+// `autoScroll`, the viewport moves to the first change once Monaco has
+// computed the diff (#24).
 // Returns a controller with `dispose()`, `nextChange()` and `prevChange()`.
-export async function mountDiffEditor(container, { original, modified, language, mode = 'inline' }) {
+export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
@@ -87,6 +89,13 @@ export async function mountDiffEditor(container, { original, modified, language,
     const target = lines[candidate === -1 ? (direction === 1 ? 0 : lines.length - 1) : candidate];
     currentLine = target;
     modifiedEditor.revealLineInCenter(target);
+  }
+
+  if (autoScroll) {
+    const diffUpdated = editor.onDidUpdateDiff(() => {
+      diffUpdated.dispose();
+      navigate(1);
+    });
   }
 
   return {

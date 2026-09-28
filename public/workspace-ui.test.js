@@ -4,6 +4,7 @@ import { createWorkspaceUI } from './workspace-ui.js';
 import { createWorkspaceStore } from './workspace-state.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { createViewModeStore } from './view-mode.js';
+import { createAutoScrollStore } from './auto-scroll.js';
 
 // Only the DOM surface used by the workspace controls; no browser dependency.
 class Element {
@@ -69,6 +70,8 @@ function fixture() {
   const toolbarEl = new Element('div');
   const commitLock = createCommitLockStore();
   const viewModeStore = createViewModeStore({ getItem: () => null, setItem() {} });
+  const autoScrollStore = createAutoScrollStore({ getItem: () => null, setItem() {} });
+  const navCalls = [];
   const requests = [];
   // File-scoped commit refetches (issued on file selection) are tracked apart
   // so tests can keep addressing tree/content requests by position.
@@ -91,18 +94,20 @@ function fixture() {
     },
   });
   ui = createWorkspaceUI({
-    tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, commitLock, viewModeStore,
+    tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, commitLock, viewModeStore, autoScrollStore,
     treeExpansion: { isExpanded: () => false, toggle() {} },
     computeTabScrollAffordance: () => ({ showLeft: false, showRight: false }),
     formatRelativeTime: () => 'recently', DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
     onViewModeChanged() {}, onDiffRenderModeChanged() {}, getDiffRenderMode: () => 'inline',
+    onNextChange: () => navCalls.push('next'), onPrevChange: () => navCalls.push('prev'),
+    onAutoScrollChanged: (enabled) => { autoScrollStore.setEnabled(enabled); ui.renderToolbar(); },
     document, window,
   });
   const reply = async (request, body) => {
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ui, workspace, commitLock, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, reply };
+  return { ui, workspace, commitLock, viewModeStore, autoScrollStore, navCalls, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, reply };
 }
 
 test('commit picker locks base, reloads tree and open file, then displays lock and Auto', async () => {
@@ -258,4 +263,64 @@ test('without an origin/main flag the commit dropdown shows no divider', async (
   f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
   await f.reply(f.requests[1], [{ sha: '1111111aaa', message: 'one', date: '2025-01-01' }]);
   assert.equal(f.toolbarEl.querySelector('.commit-picker__divider'), null);
+});
+
+async function openFile(f) {
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  await f.reply(f.requests[0], [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }]);
+  f.railEl.querySelector('.rail__file').click();
+}
+
+test('change navigation is disabled with no file open and in File mode, and enabled otherwise', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  const steps = () => f.toolbarEl.querySelectorAll('.change-nav__step');
+  assert.deepEqual(steps().map((button) => button.disabled), [true, true]);
+
+  await openFile(f);
+  assert.deepEqual(steps().map((button) => button.disabled), [false, false]);
+
+  f.viewModeStore.setMode('file');
+  f.ui.renderToolbar();
+  assert.deepEqual(steps().map((button) => button.disabled), [true, true]);
+});
+
+test('next and previous buttons call the change handlers', async () => {
+  const f = fixture();
+  await openFile(f);
+  const [prev, next] = f.toolbarEl.querySelectorAll('.change-nav__step');
+  next.click();
+  prev.click();
+  assert.deepEqual(f.navCalls, ['next', 'prev']);
+});
+
+test('auto-scroll toggle reflects and flips the global preference', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  const auto = f.toolbarEl.querySelector('.change-nav__auto');
+  assert.equal(auto.classList.contains('is-on'), false);
+  assert.equal(auto['aria-pressed'], 'false');
+  auto.click();
+  assert.equal(f.autoScrollStore.isEnabled(), true);
+  assert.equal(auto.classList.contains('is-on'), true);
+  assert.equal(auto['aria-pressed'], 'true');
+});
+
+test('selecting a file or switching mode moves no toolbar element: nothing is hidden or removed', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  const pathLabel = f.toolbarEl.querySelector('.viewer__path');
+  const diffToggle = f.toolbarEl.querySelector('.view-toggle--diff');
+  assert.notEqual(pathLabel.hidden, true);
+
+  await openFile(f);
+  assert.equal(f.toolbarEl.querySelector('.viewer__path'), pathLabel);
+  assert.notEqual(pathLabel.hidden, true);
+  assert.equal(pathLabel.textContent, 'a.txt');
+
+  f.viewModeStore.setMode('file');
+  f.ui.renderToolbar();
+  assert.equal(f.toolbarEl.querySelector('.view-toggle--diff'), diffToggle);
+  assert.notEqual(diffToggle.hidden, true);
+  assert.equal(diffToggle.classList.contains('is-concealed'), true);
 });

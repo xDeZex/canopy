@@ -21,6 +21,7 @@ test('diff controller navigates fresh hunks in both directions, wrapping at the 
         return {
           setModel() {},
           getLineChanges: () => changes,
+          onDidUpdateDiff: () => ({ dispose() {} }),
           getModifiedEditor: () => ({
             getModel: () => ({ getLineCount: () => 20 }),
             revealLineInCenter: (line) => revealed.push(line),
@@ -71,4 +72,40 @@ test('File mode controller does not expose change navigation', async () => {
   assert.equal(view.nextChange, undefined);
   assert.equal(view.prevChange, undefined);
   view.dispose();
+});
+
+test('auto-scroll reveals the first change once the diff is computed, and only once', async () => {
+  const revealed = [];
+  let diffUpdated;
+  let subscriptionDisposed = false;
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    editor: {
+      createDiffEditor() {
+        return {
+          setModel() {},
+          getLineChanges: () => [{ modifiedStartLineNumber: 7 }, { modifiedStartLineNumber: 12 }],
+          onDidUpdateDiff(listener) {
+            diffUpdated = listener;
+            return { dispose: () => { subscriptionDisposed = true; } };
+          },
+          getModifiedEditor: () => ({
+            getModel: () => ({ getLineCount: () => 20 }),
+            revealLineInCenter: (line) => revealed.push(line),
+          }),
+          dispose() {},
+        };
+      },
+      createModel() { return { dispose() {} }; },
+    },
+  };
+
+  await mountDiffEditor({}, { original: 'old', modified: 'new' });
+  assert.equal(diffUpdated, undefined, 'no subscription unless auto-scroll is on');
+
+  await mountDiffEditor({}, { original: 'old', modified: 'new', autoScroll: true });
+  assert.deepEqual(revealed, []);
+  diffUpdated();
+  assert.deepEqual(revealed, [7]);
+  assert.equal(subscriptionDisposed, true);
 });
