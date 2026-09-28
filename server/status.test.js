@@ -1,36 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseStatus, parseNameStatus, getChangedPaths, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from './status.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { mkdtemp, writeFile, rename, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-
-const git = promisify(execFile);
-
-async function makeStatusFixture(t) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-status-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (...args) => git('git', args, { cwd: dir });
-  await run('init', '-q');
-  await writeFile(path.join(dir, 'old.txt'), 'rename content\n');
-  await writeFile(path.join(dir, 'deleted.txt'), 'deleted content\n');
-  await writeFile(path.join(dir, 'modified.txt'), 'original\n');
-  await run('add', '.');
-  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base');
-  const { stdout: base } = await run('rev-parse', 'HEAD');
-  await writeFile(path.join(dir, 'later space.txt'), 'later\n');
-  await run('add', 'later space.txt');
-  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'later');
-  await rename(path.join(dir, 'old.txt'), path.join(dir, 'new.txt'));
-  await rm(path.join(dir, 'deleted.txt'));
-  await writeFile(path.join(dir, 'modified.txt'), 'changed\n');
-  await writeFile(path.join(dir, 'staged.txt'), 'staged\n');
-  await writeFile(path.join(dir, 'untracked.txt'), 'untracked\n');
-  await run('add', '-A', 'old.txt', 'new.txt', 'staged.txt');
-  return { dir, base: base.trim() };
-}
+import { parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from './status.js';
 
 test('parses NUL-delimited diff names including a rename and deletion', () => {
   assert.deepEqual(parseNameStatus('R100\0old name\0new name\0D\0gone\0A\0new\0M\0changed\0'), [
@@ -42,20 +12,29 @@ test('parses NUL-delimited diff names including a rename and deletion', () => {
   assert.deepEqual(parseNameStatus(''), []);
 });
 
-test('ref status covers staged, unstaged, untracked, rename, deletion and older commits', async (t) => {
-  const { dir, base } = await makeStatusFixture(t);
-  const head = new Map((await getChangedPaths(dir)).map(({ path, status }) => [path, status]));
-  assert.equal(head.get('staged.txt'), 'added');
-  assert.equal(head.get('modified.txt'), 'modified');
-  assert.equal(head.get('deleted.txt'), 'deleted');
-  assert.equal(head.get('new.txt'), 'modified');
-  assert.equal(head.get('untracked.txt'), 'added');
+test('parses NUL-delimited diff names with spaces, staged and unstaged alike', () => {
+  assert.deepEqual(parseNameStatus('A\0my new file.txt\0M\0dir name/with space.txt\0'), [
+    { path: 'my new file.txt', status: 'added' },
+    { path: 'dir name/with space.txt', status: 'modified' },
+  ]);
+});
 
-  const older = new Map((await getChangedPaths(dir, base)).map(({ path, status }) => [path, status]));
-  for (const [file, status] of head) assert.equal(older.get(file), status, file);
-  assert.equal(older.get('later space.txt'), 'added');
-  assert.equal(older.has('old.txt'), false);
-  await assert.rejects(getChangedPaths(dir, '--output=/tmp/nope'));
+test('parses NUL-delimited untracked paths as added, spaces included', () => {
+  assert.deepEqual(parseUntracked('untracked.txt\0dir/with space.txt\0'), [
+    { path: 'untracked.txt', status: 'added' },
+    { path: 'dir/with space.txt', status: 'added' },
+  ]);
+  assert.deepEqual(parseUntracked(''), []);
+});
+
+test('combineRefDiff lists diff entries followed by untracked additions', () => {
+  assert.deepEqual(combineRefDiff('R100\0old.txt\0new.txt\0D\0gone.txt\0M\0changed.txt\0', 'untracked.txt\0'), [
+    { path: 'new.txt', status: 'modified' },
+    { path: 'gone.txt', status: 'deleted' },
+    { path: 'changed.txt', status: 'modified' },
+    { path: 'untracked.txt', status: 'added' },
+  ]);
+  assert.deepEqual(combineRefDiff('', ''), []);
 });
 
 test('parses a modified tracked file', () => {

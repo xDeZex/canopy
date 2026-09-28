@@ -30,10 +30,17 @@ export async function getChangedPaths(worktreePath, ref = 'HEAD') {
     }),
     execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: worktreePath }),
   ]);
-  return [
-    ...parseNameStatus(diff),
-    ...untracked.split('\0').filter(Boolean).map((path) => ({ path, status: 'added' })),
-  ];
+  return combineRefDiff(diff, untracked);
+}
+
+// A ref diff never lists untracked files, so they are appended as additions.
+export function combineRefDiff(diffOutput, untrackedOutput) {
+  return [...parseNameStatus(diffOutput), ...parseUntracked(untrackedOutput)];
+}
+
+// `git ls-files --others -z`: NUL-terminated paths.
+export function parseUntracked(output) {
+  return output.split('\0').filter(Boolean).map((path) => ({ path, status: 'added' }));
 }
 
 // `git diff --name-status -z`: status and path are separate NUL fields;
