@@ -13,6 +13,9 @@ function deferred() {
 
 function fixture(savedMode = null) {
   const requests = [];
+  // File-scoped commit refetches (issued on file selection) are tracked apart
+  // so tree/content tests can keep addressing `requests` by position.
+  const fileCommitRequests = [];
   const changes = [];
   const watches = [];
   const commitLock = createCommitLockStore();
@@ -21,7 +24,8 @@ function fixture(savedMode = null) {
     commitLock, viewModeStore,
     fetch(url) {
       const pending = deferred();
-      requests.push({ url, ...pending });
+      const isFileCommits = url.startsWith('/api/commits') && url.includes('&file=');
+      (isFileCommits ? fileCommitRequests : requests).push({ url, ...pending });
       return pending.promise;
     },
     onChange: (part) => changes.push(part),
@@ -31,7 +35,7 @@ function fixture(savedMode = null) {
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { store, requests, changes, watches, commitLock, viewModeStore, reply };
+  return { store, requests, fileCommitRequests, changes, watches, commitLock, viewModeStore, reply };
 }
 
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
@@ -157,7 +161,7 @@ test('toolbar is notified on file selection and commit arrival, independently of
   f.store.selectFile('open');
   assert.deepEqual(f.changes, ['rail', 'toolbar', 'main']);
   f.changes.length = 0;
-  await f.reply(f.requests[1], [{ sha: 'abc', message: 'commit' }]);
+  await f.reply(f.fileCommitRequests[0], [{ sha: 'abc', message: 'commit' }]);
   assert.deepEqual(f.changes, ['toolbar'], 'commit arrival must not remount the editor');
   await f.reply(f.requests[2], { working: 'content' });
   assert.deepEqual(f.changes, ['toolbar', 'main']);
@@ -299,4 +303,34 @@ test('same selection reloads reject older successes and current errors remain vi
   f.store.updateWorktrees(list(['/a']));
   assert.deepEqual(f.watches, ['/a'], 'unchanged worktree list does not reopen watcher');
   assert.equal(f.requests.length, 5, 'unchanged worktree list does not refetch');
+});
+
+test('opening a file refetches commits for that file; with no file open they are fetched unmarked', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  assert.match(f.requests[1].url, /^\/api\/commits\?worktree=%2Fa$/);
+  f.store.selectFile('src/x.js');
+  const [commitsRequest] = f.fileCommitRequests;
+  assert.match(commitsRequest.url, /^\/api\/commits\?worktree=%2Fa&file=src%2Fx\.js$/);
+  await f.reply(commitsRequest, [{ sha: 'abc', message: 'm', touchesFile: true }]);
+  assert.deepEqual(f.store.getState().commits, [{ sha: 'abc', message: 'm', touchesFile: true }]);
+});
+
+test('marks from the previous file never linger on commits while the next file\'s commits load', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('one');
+  await f.reply(f.fileCommitRequests[0], [{ sha: 'abc', message: 'm', touchesFile: true }]);
+  f.store.selectFile('two');
+  assert.deepEqual(f.store.getState().commits, [{ sha: 'abc', message: 'm' }], 'stale marks dropped, commit kept');
+});
+
+test('deselecting the file refetches unmarked commits', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('one');
+  const before = f.requests.length;
+  f.store.selectFile(null);
+  assert.equal(f.requests.length, before + 1);
+  assert.equal(f.requests.at(-1).url, '/api/commits?worktree=%2Fa');
 });

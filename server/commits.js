@@ -19,3 +19,11 @@ export function parseCommitLog(output) {
     return { sha, message, date };
   });
 }
+
+// Marks each commit with whether it appears in `touchingSha` (the shas from
+// `git log -- <file>`). `touchesFile` is present only when a file was asked
+// about: absent means "no file open, no marking", `false` means "didn't touch".
+export function markTouching(commits, touchingSha) {
+  const touched = new Set(touchingSha);
+  return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
+}
