@@ -62,3 +62,12 @@ function parseBlock(block) {
 
   return worktree;
 }
+
+// Moves the worktree at `selectedPath` to the front so the UI starts on the
+// folder passed to the CLI, even when it is a linked worktree. Returns a new
+// array; an unknown path leaves the order unchanged.
+export function selectedFirst(worktrees, selectedPath) {
+  const selected = worktrees.findIndex((worktree) => worktree.path === selectedPath);
+  if (selected <= 0) return worktrees;
+  return [worktrees[selected], ...worktrees.slice(0, selected), ...worktrees.slice(selected + 1)];
+}

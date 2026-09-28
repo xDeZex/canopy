@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWorktreeList } from './porcelain.js';
+import { parseWorktreeList, selectedFirst } from './porcelain.js';
 
 test('parses a single worktree with a branch', () => {
   const output = [
@@ -121,4 +121,15 @@ test('parses a prunable worktree with a reason', () => {
 test('returns an empty array for empty output', () => {
   assert.deepEqual(parseWorktreeList(''), []);
   assert.deepEqual(parseWorktreeList('\n'), []);
+});
+
+test('selectedFirst moves the selected linked worktree to the front', () => {
+  const worktrees = [{ path: '/main' }, { path: '/a' }, { path: '/b' }];
+  assert.deepEqual(selectedFirst(worktrees, '/b'), [{ path: '/b' }, { path: '/main' }, { path: '/a' }]);
+});
+
+test('selectedFirst leaves the order alone when the main or an unknown path is selected', () => {
+  const worktrees = [{ path: '/main' }, { path: '/a' }];
+  assert.deepEqual(selectedFirst(worktrees, '/main'), worktrees);
+  assert.deepEqual(selectedFirst(worktrees, '/elsewhere'), worktrees);
 });

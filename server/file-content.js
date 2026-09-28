@@ -11,17 +11,21 @@
 // expected states for a file under active edit — the caller decides what
 // "neither exists" (both null) means for its path.
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { runGit as defaultRunGit } from './git.js';
 
-const execFileAsync = promisify(execFile);
+const defaultReadFile = (absolutePath) => readFile(absolutePath, 'utf8');
 
-export async function readFileContent(worktreePath, filePath, ref = 'HEAD') {
+export async function readFileContent(
+  worktreePath,
+  filePath,
+  ref = 'HEAD',
+  { runGit = defaultRunGit, readWorkingFile = defaultReadFile } = {},
+) {
   const [head, working] = await Promise.all([
-    readRefContent(worktreePath, filePath, ref),
-    readWorkingContent(worktreePath, filePath),
+    readRefContent(worktreePath, filePath, ref, runGit),
+    readWorkingContent(worktreePath, filePath, readWorkingFile),
   ]);
   return { head, working };
 }
@@ -39,22 +43,18 @@ export function isMissingWorkingSide(err) {
   return err?.code === 'ENOENT' || err?.code === 'ENOTDIR';
 }
 
-async function readRefContent(worktreePath, filePath, ref) {
+async function readRefContent(worktreePath, filePath, ref, runGit) {
   try {
-    const { stdout } = await execFileAsync('git', ['show', `${ref}:${filePath}`], {
-      cwd: worktreePath,
-      maxBuffer: 1024 * 1024 * 32,
-    });
-    return stdout;
+    return await runGit(['show', `${ref}:${filePath}`], worktreePath, { maxBuffer: 1024 * 1024 * 32 });
   } catch (err) {
     if (isMissingRefSide(err)) return null;
     throw err;
   }
 }
 
-async function readWorkingContent(worktreePath, filePath) {
+async function readWorkingContent(worktreePath, filePath, readWorkingFile) {
   try {
-    return await readFile(path.join(worktreePath, filePath), 'utf8');
+    return await readWorkingFile(path.join(worktreePath, filePath));
   } catch (err) {
     if (isMissingWorkingSide(err)) return null;
     throw err;

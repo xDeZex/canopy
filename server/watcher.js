@@ -12,9 +12,15 @@ const DEFAULT_DEBOUNCE_MS = 150;
 // Ignore git's own bookkeeping churn (.git/index, .git/HEAD, lock files,
 // etc.), so routine git operations the app itself performs don't trigger a
 // refresh — only real working-tree edits should.
-const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
+export const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
 
-export function watchWorktree(worktreePath, onChange, { debounceMs = DEFAULT_DEBOUNCE_MS } = {}) {
+// `watch`, `setTimer` and `clearTimer` default to chokidar and the real
+// timers; they exist so tests can drive events and time by hand.
+export function watchWorktree(
+  worktreePath,
+  onChange,
+  { debounceMs = DEFAULT_DEBOUNCE_MS, watch = chokidar.watch, setTimer = setTimeout, clearTimer = clearTimeout } = {},
+) {
   const changedPaths = new Set();
   let timer = null;
 
@@ -28,11 +34,11 @@ export function watchWorktree(worktreePath, onChange, { debounceMs = DEFAULT_DEB
 
   const schedule = (relativePath) => {
     changedPaths.add(relativePath);
-    clearTimeout(timer);
-    timer = setTimeout(flush, debounceMs);
+    clearTimer(timer);
+    timer = setTimer(flush, debounceMs);
   };
 
-  const watcher = chokidar.watch(worktreePath, {
+  const watcher = watch(worktreePath, {
     cwd: worktreePath,
     ignored: IGNORE_GIT_DIR,
     ignoreInitial: true,
@@ -66,7 +72,7 @@ export function watchWorktree(worktreePath, onChange, { debounceMs = DEFAULT_DEB
     // instead of guessing timings; production callers don't need to.
     ready,
     close() {
-      clearTimeout(timer);
+      clearTimer(timer);
       return watcher.close();
     },
   };

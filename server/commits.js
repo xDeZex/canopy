@@ -8,6 +8,8 @@
 // commit subject, so no escaping is needed. Git inserts a newline between
 // commits automatically, with no trailing newline after the last one.
 
+import { runGit as defaultRunGit } from './git.js';
+
 export const LOG_FORMAT = '%H%x1f%s%x1f%cI';
 
 export function parseCommitLog(output) {
@@ -34,4 +36,42 @@ export function markTouching(commits, touchingSha) {
 export function markOriginMain(commits, originSha) {
   if (!commits.some((commit) => commit.sha === originSha)) return commits;
   return commits.map((commit) => ({ ...commit, isOriginMain: commit.sha === originSha }));
+}
+
+// Shas of commits that touched `file` (following renames), or null when the
+// filter fails (e.g. a path outside the worktree): that must only cost the
+// marking, never the commit list itself.
+async function shasTouching(worktreePath, file, runGit) {
+  try {
+    const stdout = await runGit(['--literal-pathspecs', 'log', '--follow', '--pretty=format:%H', '--', file], worktreePath);
+    return stdout.split('\n').filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+// Sha `origin/main` points at, or null when there is no such remote branch.
+async function originMainSha(worktreePath, runGit) {
+  try {
+    const stdout = await runGit(['rev-parse', '--verify', '-q', 'origin/main^{commit}'], worktreePath);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listCommits(worktreePath, file, runGit = defaultRunGit) {
+  try {
+    const [stdout, touching, originSha] = await Promise.all([
+      runGit(['log', `--pretty=format:${LOG_FORMAT}`], worktreePath),
+      file ? shasTouching(worktreePath, file, runGit) : null,
+      originMainSha(worktreePath, runGit),
+    ]);
+    const commits = parseCommitLog(stdout);
+    return markOriginMain(touching ? markTouching(commits, touching) : commits, originSha);
+  } catch {
+    // `git log` exits non-zero for a repo with no commits yet; treat
+    // that the same as "no commit history" rather than an error.
+    return [];
+  }
 }

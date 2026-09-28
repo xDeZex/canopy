@@ -6,31 +6,31 @@
 // makes untracked directories expand to their individual files, so no
 // separate directory walk is needed. See `git status --help`.
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { runGit as defaultRunGit } from './git.js';
 
-const execFileAsync = promisify(execFile);
-
-export async function getChangedPaths(worktreePath, ref = 'HEAD') {
+export async function getChangedPaths(worktreePath, ref = 'HEAD', runGit = defaultRunGit) {
   if (ref === 'HEAD') {
-    const { stdout } = await execFileAsync('git', ['status', '--porcelain', '--untracked-files=all'], {
-      cwd: worktreePath,
-    });
-    return parseStatus(stdout);
+    return parseStatus(await runGit(['status', '--porcelain', '--untracked-files=all'], worktreePath));
   }
 
   // Resolve before using the ref as a diff argument: even a caller-supplied
   // value beginning with '-' cannot become a git option. Invalid refs fail.
-  const { stdout: resolved } = await execFileAsync('git', ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
-    cwd: worktreePath,
-  });
-  const [{ stdout: diff }, { stdout: untracked }] = await Promise.all([
-    execFileAsync('git', ['diff', '--no-ext-diff', '--name-status', '-z', resolved.trim(), '--'], {
-      cwd: worktreePath,
-    }),
-    execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: worktreePath }),
+  const resolved = await runGit(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], worktreePath);
+  const [diff, untracked] = await Promise.all([
+    runGit(['diff', '--no-ext-diff', '--name-status', '-z', resolved.trim(), '--'], worktreePath),
+    runGit(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath),
   ]);
   return combineRefDiff(diff, untracked);
+}
+
+// The tracked files merged with their changed-path statuses, as a nested tree.
+export async function getFileTree(worktreePath, ref = 'HEAD', runGit = defaultRunGit) {
+  const [changedPaths, lsOut] = await Promise.all([
+    getChangedPaths(worktreePath, ref, runGit),
+    runGit(['ls-files', '-z'], worktreePath),
+  ]);
+  const trackedPaths = lsOut.split('\0').filter(Boolean);
+  return nestIntoTree(mergeFileStatuses(trackedPaths, changedPaths));
 }
 
 // A ref diff never lists untracked files, so they are appended as additions.

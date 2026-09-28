@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from './status.js';
+import { getChangedPaths, getFileTree, parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from './status.js';
 
 test('parses NUL-delimited diff names including a rename and deletion', () => {
   assert.deepEqual(parseNameStatus('R100\0old name\0new name\0D\0gone\0A\0new\0M\0changed\0'), [
@@ -227,4 +227,78 @@ test('buildFileTree sorts directories before files, each alphabetically', () => 
 
 test('buildFileTree returns an empty array when given no paths', () => {
   assert.deepEqual(buildFileTree([], []), []);
+});
+
+test('buildFileTree keeps a deleted tracked child when its directory is replaced by an untracked file', () => {
+  assert.deepEqual(
+    buildFileTree(['foo/bar.txt'], [{ path: 'foo/bar.txt', status: 'deleted' }, { path: 'foo', status: 'added' }]),
+    [
+      {
+        name: 'foo', type: 'dir', path: 'foo', children: [
+          { name: 'bar.txt', type: 'file', path: 'foo/bar.txt', status: 'deleted' },
+        ],
+      },
+      { name: 'foo', type: 'file', path: 'foo', status: 'added' },
+    ]
+  );
+});
+
+// A fake runGit keyed by git subcommand; records every call's args and cwd.
+function fakeGit(responses) {
+  const calls = [];
+  const runGit = async (args, cwd) => {
+    calls.push({ args, cwd });
+    const response = responses[args[0]];
+    if (response instanceof Error) throw response;
+    return response;
+  };
+  return { runGit, calls };
+}
+
+test('getChangedPaths on HEAD parses `git status --porcelain` in the worktree', async () => {
+  const { runGit, calls } = fakeGit({ status: ' M modified.txt\n?? new.txt\n' });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit), [
+    { path: 'modified.txt', status: 'modified' },
+    { path: 'new.txt', status: 'added' },
+  ]);
+  assert.deepEqual(calls, [{ args: ['status', '--porcelain', '--untracked-files=all'], cwd: '/wt' }]);
+});
+
+test('getChangedPaths against a ref diffs the resolved sha and appends untracked files', async () => {
+  const { runGit, calls } = fakeGit({
+    'rev-parse': 'abc123\n',
+    diff: 'A\0later.txt\0',
+    'ls-files': 'untracked.txt\0',
+  });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'v1', runGit), [
+    { path: 'later.txt', status: 'added' },
+    { path: 'untracked.txt', status: 'added' },
+  ]);
+  assert.deepEqual(calls[0].args, ['rev-parse', '--verify', '--end-of-options', 'v1^{commit}']);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'diff').args,
+    ['diff', '--no-ext-diff', '--name-status', '-z', 'abc123', '--']);
+  assert.ok(calls.every(({ cwd }) => cwd === '/wt'));
+});
+
+test('getChangedPaths rejects, without diffing, when the ref does not resolve', async () => {
+  const { runGit, calls } = fakeGit({ 'rev-parse': new Error('bad revision') });
+
+  await assert.rejects(getChangedPaths('/wt', '--output=/tmp/nope', runGit), /bad revision/);
+  assert.equal(calls.length, 1);
+});
+
+test('getFileTree merges tracked files with changed-path statuses', async () => {
+  const { runGit } = fakeGit({
+    status: ' M src/a.js\n',
+    'ls-files': 'README.md\0src/a.js\0',
+  });
+
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit), [
+    { name: 'src', type: 'dir', path: 'src', children: [
+      { name: 'a.js', type: 'file', path: 'src/a.js', status: 'modified' },
+    ] },
+    { name: 'README.md', type: 'file', path: 'README.md', status: 'clean' },
+  ]);
 });

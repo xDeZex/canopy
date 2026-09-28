@@ -1,14 +1,6 @@
-import test, { before, after } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { worktreeListsEqual, pollWorktrees } from './worktree-watch.js';
-import { parseWorktreeList } from './porcelain.js';
-
-const execFileAsync = promisify(execFile);
 
 test('two empty lists are equal', () => {
   assert.equal(worktreeListsEqual([], []), true);
@@ -36,144 +28,135 @@ test('a different set of paths (added/removed worktree) makes lists unequal', ()
   assert.equal(worktreeListsEqual(a, b), false);
 });
 
-// pollWorktrees integration: a disposable scratch git repo (not this
-// project's own repo), matching the pattern in watcher.test.js, so we can
-// run real `git worktree add`/`remove` commands and observe the poll react,
-// rather than mocking `git` output.
-let repoDir;
-let worktreeDir;
-
-before(async () => {
-  repoDir = await mkdtemp(path.join(os.tmpdir(), 'canopy-worktree-watch-'));
-  const run = (args, cwd = repoDir) => execFileAsync('git', args, { cwd });
-
-  await run(['init', '-q']);
-  await run(['config', 'user.email', 'test@example.com']);
-  await run(['config', 'user.name', 'Canopy Test']);
-  await run(['commit', '--allow-empty', '-q', '-m', 'initial commit']);
-
-  worktreeDir = path.join(os.tmpdir(), `canopy-worktree-watch-wt-${process.pid}`);
-});
-
-after(async () => {
-  await execFileAsync('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: repoDir }).catch(() => {});
-  await rm(repoDir, { recursive: true, force: true });
-  await rm(worktreeDir, { recursive: true, force: true });
-});
-
-async function realWorktreeList() {
-  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: repoDir });
-  return parseWorktreeList(stdout);
-}
-
-function recordingCallback() {
-  let resolve;
-  const next = () =>
-    new Promise((r) => {
-      resolve = r;
-    });
-  let pending = next();
-  const calls = [];
-  const fn = (list) => {
-    calls.push(list);
-    resolve(list);
-    pending = next();
+// pollWorktrees is driven with a fake list source and a hand-cranked
+// scheduler, so no test spawns git or waits on a real timer.
+function fakeScheduler() {
+  let pending = null;
+  return {
+    setTimer: (fn) => {
+      pending = fn;
+      return 'timer';
+    },
+    clearTimer: () => {
+      pending = null;
+    },
+    hasPending: () => pending !== null,
+    // Fires the scheduled tick and waits for it to finish.
+    async fire() {
+      const fn = pending;
+      pending = null;
+      await fn();
+    },
   };
-  fn.calls = calls;
-  fn.waitForNext = () => pending;
-  return fn;
 }
+
+// Lets the immediate first tick (not awaited by pollWorktrees) settle.
+async function settle() {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+function listSource(...lists) {
+  let call = 0;
+  return async () => lists[Math.min(call++, lists.length - 1)];
+}
+
+const main = { path: '/main', branch: 'main' };
+const linked = { path: '/linked', branch: 'wip' };
 
 test('pollWorktrees reports the initial snapshot right away', async (t) => {
-  const onChange = recordingCallback();
-  const poll = pollWorktrees(realWorktreeList, onChange, { intervalMs: 20 });
+  const scheduler = fakeScheduler();
+  const changes = [];
+  const poll = pollWorktrees(listSource([main]), (list) => changes.push(list), scheduler);
   t.after(() => poll.close());
+  await settle();
 
-  const list = await onChange.waitForNext();
-  assert.equal(list.length, 1);
+  assert.deepEqual(changes, [[main]]);
 });
 
-test('running `git worktree add` is reflected by the poll', async (t) => {
-  const onChange = recordingCallback();
-  const poll = pollWorktrees(realWorktreeList, onChange, { intervalMs: 20 });
+test('a worktree added between polls is reported', async (t) => {
+  const scheduler = fakeScheduler();
+  const changes = [];
+  const poll = pollWorktrees(listSource([main], [main, linked]), (list) => changes.push(list), scheduler);
   t.after(() => poll.close());
-  await onChange.waitForNext(); // initial snapshot
+  await settle();
+  await scheduler.fire();
 
-  const nextChange = onChange.waitForNext();
-  await execFileAsync('git', ['worktree', 'add', '-b', 'poll-add-branch', worktreeDir], { cwd: repoDir });
-
-  const list = await nextChange;
-  assert.equal(list.length, 2);
-  assert.ok(list.some((w) => w.path === worktreeDir));
+  assert.deepEqual(changes, [[main], [main, linked]]);
 });
 
-test('running `git worktree remove` is reflected by the poll', async (t) => {
-  const onChange = recordingCallback();
-  const poll = pollWorktrees(realWorktreeList, onChange, { intervalMs: 20 });
+test('a worktree removed between polls is reported', async (t) => {
+  const scheduler = fakeScheduler();
+  const changes = [];
+  const poll = pollWorktrees(listSource([main, linked], [main]), (list) => changes.push(list), scheduler);
   t.after(() => poll.close());
-  await onChange.waitForNext(); // initial snapshot (still has the worktree from the previous test)
+  await settle();
+  await scheduler.fire();
 
-  const nextChange = onChange.waitForNext();
-  await execFileAsync('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: repoDir });
-
-  const list = await nextChange;
-  assert.equal(list.length, 1);
-  assert.ok(!list.some((w) => w.path === worktreeDir));
+  assert.deepEqual(changes, [[main, linked], [main]]);
 });
 
-test('a slow getWorktrees call never overlaps with the next tick', async (t) => {
+test('an unchanged list is not reported again', async (t) => {
+  const scheduler = fakeScheduler();
+  const changes = [];
+  const poll = pollWorktrees(listSource([main], [{ ...main }]), (list) => changes.push(list), scheduler);
+  t.after(() => poll.close());
+  await settle();
+  await scheduler.fire();
+  await scheduler.fire();
+
+  assert.equal(changes.length, 1);
+});
+
+test('the next tick is not scheduled until a slow getWorktrees call settles', async (t) => {
   // Regression test for a race where `setInterval` could start a new tick
-  // before the previous tick's `getWorktrees()` had resolved. A `getWorktrees`
-  // that's slower than `intervalMs` would previously let two calls be
-  // in-flight at once, racing on `previous`; this asserts calls are strictly
-  // sequential instead (no new call starts until the last one settled).
-  let inFlight = 0;
-  let overlapped = false;
-  let callCount = 0;
-
-  const slowGetWorktrees = async () => {
-    callCount++;
-    inFlight++;
-    if (inFlight > 1) overlapped = true;
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    inFlight--;
-    return [{ path: '/a', call: callCount }];
+  // before the previous tick's `getWorktrees()` had resolved, letting two
+  // calls race on `previous`. Ticks must be strictly sequential.
+  const scheduler = fakeScheduler();
+  let calls = 0;
+  let finish;
+  const slowGetWorktrees = () => {
+    calls++;
+    return new Promise((resolve) => {
+      finish = () => resolve([main]);
+    });
   };
 
-  const poll = pollWorktrees(slowGetWorktrees, () => {}, { intervalMs: 5 });
+  const poll = pollWorktrees(slowGetWorktrees, () => {}, scheduler);
   t.after(() => poll.close());
+  await settle();
 
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(calls, 1);
+  assert.equal(scheduler.hasPending(), false, 'a tick was scheduled while getWorktrees was still in flight');
 
-  assert.equal(overlapped, false, 'a new tick started before the previous one settled');
-  assert.ok(callCount >= 2, 'expected more than one tick to have run');
+  finish();
+  await settle();
+  assert.equal(scheduler.hasPending(), true);
 });
 
 test('a persistent getWorktrees failure is reported via onError on every tick', async (t) => {
+  const scheduler = fakeScheduler();
   const errors = [];
   const failingGetWorktrees = async () => {
     throw new Error('git worktree list failed');
   };
 
-  const poll = pollWorktrees(failingGetWorktrees, () => {}, {
-    intervalMs: 10,
-    onError: (err) => errors.push(err),
-  });
+  const poll = pollWorktrees(failingGetWorktrees, () => {}, { ...scheduler, onError: (err) => errors.push(err) });
   t.after(() => poll.close());
+  await settle();
+  await scheduler.fire();
+  await scheduler.fire();
 
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  assert.ok(errors.length >= 2, 'expected onError to fire on more than one failed tick');
+  assert.equal(errors.length, 3);
   assert.equal(errors[0].message, 'git worktree list failed');
 });
 
-test('close() stops further polling', async (t) => {
-  const onChange = recordingCallback();
-  const poll = pollWorktrees(realWorktreeList, onChange, { intervalMs: 20 });
-  await onChange.waitForNext(); // initial snapshot
+test('close() stops further polling', async () => {
+  const scheduler = fakeScheduler();
+  const changes = [];
+  const poll = pollWorktrees(listSource([main], [main, linked]), (list) => changes.push(list), scheduler);
+  await settle();
   poll.close();
 
-  const callsAtClose = onChange.calls.length;
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(onChange.calls.length, callsAtClose);
+  assert.equal(scheduler.hasPending(), false);
+  assert.equal(changes.length, 1);
 });

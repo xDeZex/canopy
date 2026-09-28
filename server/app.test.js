@@ -2,17 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import http from 'node:http';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { createApp } from './app.js';
-import { parseWorktreeList } from './porcelain.js';
-import { parseStatus, buildFileTree } from './status.js';
-import { readFileContent } from './file-content.js';
-
-const execFileAsync = promisify(execFile);
 
 async function startServer() {
   const server = createApp();
@@ -58,39 +48,18 @@ function nextChunk(res) {
   return new Promise((resolve) => res.once('data', (chunk) => resolve(chunk.toString('utf8'))));
 }
 
-test('GET /api/worktrees returns this repo\'s real worktrees as JSON', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  // Independently derive the expected result straight from git + the
-  // already-tested parser, so this test verifies the HTTP wiring rather
-  // than re-asserting the parser's own logic.
-  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
-  const expected = parseWorktreeList(stdout);
-  const selected = expected.findIndex((worktree) => worktree.path === process.cwd());
-  if (selected > 0) expected.unshift(expected.splice(selected, 1)[0]);
-
-  const res = await get(port, '/api/worktrees');
-
-  assert.equal(res.statusCode, 200);
-  assert.match(res.headers['content-type'], /application\/json/);
-  assert.deepEqual(JSON.parse(res.body), expected);
-  assert.ok(expected.length >= 1, 'expected at least this worktree to be listed');
-});
-
-test('GET /api/worktrees puts the selected linked worktree first', async (t) => {
-  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
-  const worktrees = parseWorktreeList(stdout);
-  if (worktrees.length < 2) return t.skip('requires a linked worktree');
-
-  const repoRoot = worktrees[1].path;
-  const server = createApp({ repoRoot });
+test('GET /api/worktrees returns the listed worktrees as JSON', async (t) => {
+  const worktrees = [{ path: '/main', branch: 'main' }, { path: '/linked', branch: 'wip' }];
+  const server = createApp({ listWorktrees: async () => worktrees });
   server.listen(0);
   await once(server, 'listening');
   t.after(() => server.close());
 
   const res = await get(server.address().port, '/api/worktrees');
-  assert.equal(JSON.parse(res.body)[0].path, repoRoot);
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
+  assert.deepEqual(JSON.parse(res.body), worktrees);
 });
 
 test('GET / serves the page shell', async (t) => {
@@ -209,28 +178,6 @@ test('serializes injected worktrees end to end, including bare/detached/locked/p
   assert.deepEqual(JSON.parse(res.body), fixture);
 });
 
-test('GET /api/files returns this worktree\'s real file tree with live status', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  // Independently derive the expected tree straight from git + the
-  // already-tested parser/merger, so this test verifies the HTTP wiring
-  // rather than re-asserting status.js's own logic.
-  const { stdout: worktreeOut } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
-  const [{ path: worktreePath }] = parseWorktreeList(worktreeOut);
-  const [{ stdout: statusOut }, { stdout: lsOut }] = await Promise.all([
-    execFileAsync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktreePath }),
-    execFileAsync('git', ['ls-files'], { cwd: worktreePath }),
-  ]);
-  const expected = buildFileTree(lsOut.split('\n').filter(Boolean), parseStatus(statusOut));
-
-  const res = await get(port, `/api/files?worktree=${encodeURIComponent(worktreePath)}`);
-
-  assert.equal(res.statusCode, 200);
-  assert.match(res.headers['content-type'], /application\/json/);
-  assert.deepEqual(JSON.parse(res.body), expected);
-});
-
 test('worktree-scoped routes reject missing and unknown paths before doing route work', async (t) => {
   let listCalls = 0;
   let routeCalls = 0;
@@ -303,6 +250,7 @@ test('GET /api/files serializes an injected file tree for the requested worktree
   const res = await get(port, `/api/files?worktree=${encodeURIComponent('/repos/canopy')}`);
 
   assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
   assert.deepEqual(JSON.parse(res.body), tree);
 });
 
@@ -319,97 +267,6 @@ test('GET /api/files forwards the ref and defaults to HEAD', async (t) => {
   assert.equal((await get(server.address().port, url)).statusCode, 200);
   assert.equal((await get(server.address().port, `${url}&ref=abc1234`)).statusCode, 200);
   assert.deepEqual(calls, [['/repos/canopy', 'HEAD'], ['/repos/canopy', 'abc1234']]);
-});
-
-test('GET /api/files compares a real worktree against an older ref', async (t) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-files-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (...args) => execFileAsync('git', args, { cwd: dir });
-  await run('init', '-q');
-  await writeFile(path.join(dir, 'before.txt'), 'before\n');
-  await run('add', '.');
-  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base');
-  const { stdout: base } = await run('rev-parse', 'HEAD');
-  await writeFile(path.join(dir, 'later.txt'), 'later\n');
-  await run('add', '.');
-  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'later');
-
-  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
-  server.listen(0);
-  await once(server, 'listening');
-  t.after(() => server.close());
-  const url = `/api/files?worktree=${encodeURIComponent(dir)}`;
-  const current = await get(server.address().port, url);
-  const older = await get(server.address().port, `${url}&ref=${base.trim()}`);
-  assert.equal(current.statusCode, 200);
-  assert.equal(older.statusCode, 200);
-  assert.deepEqual(JSON.parse(current.body), [
-    { name: 'before.txt', type: 'file', path: 'before.txt', status: 'clean' },
-    { name: 'later.txt', type: 'file', path: 'later.txt', status: 'clean' },
-  ]);
-  assert.deepEqual(JSON.parse(older.body), [
-    { name: 'before.txt', type: 'file', path: 'before.txt', status: 'clean' },
-    { name: 'later.txt', type: 'file', path: 'later.txt', status: 'added' },
-  ]);
-});
-
-test('deleted tracked child remains readable when its directory is replaced by an untracked file', async (t) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-files-collision-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (...args) => execFileAsync('git', args, { cwd: dir });
-  await run('init', '-q');
-  await mkdir(path.join(dir, 'foo'));
-  await writeFile(path.join(dir, 'foo/bar.txt'), 'old\n');
-  await run('add', '.');
-  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base');
-  await rm(path.join(dir, 'foo'), { recursive: true });
-  await writeFile(path.join(dir, 'foo'), 'new\n');
-
-  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
-  server.listen(0);
-  await once(server, 'listening');
-  t.after(() => server.close());
-
-  const res = await get(server.address().port, `/api/files?worktree=${encodeURIComponent(dir)}`);
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(JSON.parse(res.body), [
-    {
-      name: 'foo', type: 'dir', path: 'foo', children: [
-        { name: 'bar.txt', type: 'file', path: 'foo/bar.txt', status: 'deleted' },
-      ],
-    },
-    { name: 'foo', type: 'file', path: 'foo', status: 'added' },
-  ]);
-
-  const content = { head: 'old\n', working: null };
-  assert.deepEqual(await readFileContent(dir, 'foo/bar.txt'), content);
-  const contentRes = await get(server.address().port,
-    `/api/file-content?worktree=${encodeURIComponent(dir)}&file=${encodeURIComponent('foo/bar.txt')}`);
-  assert.equal(contentRes.statusCode, 200);
-  assert.deepEqual(JSON.parse(contentRes.body), { path: 'foo/bar.txt', ...content });
-});
-
-test('GET /api/file-content returns this worktree\'s real HEAD and working content for a clean file', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  // Independently derive the expected content straight from the already-
-  // tested readFileContent, so this test verifies the HTTP wiring rather
-  // than re-asserting file-content.js's own logic.
-  const { stdout: worktreeOut } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
-  const [{ path: worktreePath }] = parseWorktreeList(worktreeOut);
-  const expected = await readFileContent(worktreePath, 'README.md');
-
-  const res = await get(
-    port,
-    `/api/file-content?worktree=${encodeURIComponent(worktreePath)}&file=${encodeURIComponent('README.md')}`
-  );
-
-  assert.equal(res.statusCode, 200);
-  assert.match(res.headers['content-type'], /application\/json/);
-  assert.deepEqual(JSON.parse(res.body), { path: 'README.md', ...expected });
-  assert.ok(expected.head, 'expected README.md to have HEAD content in this repo');
-  assert.equal(expected.head, expected.working, 'expected README.md to be clean (no local edits)');
 });
 
 test('GET /api/file-content checks a missing file before resolving the worktree', async (t) => {
@@ -456,6 +313,7 @@ test('GET /api/file-content serializes injected content for the requested worktr
   );
 
   assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
   assert.deepEqual(JSON.parse(res.body), {
     path: 'server/app.js',
     head: 'old content\n',
@@ -506,6 +364,7 @@ test('GET /api/file-content with a ref param passes it through to content lookup
   );
 
   assert.equal(res.statusCode, 200);
+  assert.match(res.headers['content-type'], /application\/json/);
   assert.deepEqual(JSON.parse(res.body), {
     path: 'server/app.js',
     head: 'content as of abc1234\n',

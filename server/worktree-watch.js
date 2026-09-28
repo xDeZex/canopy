@@ -53,7 +53,9 @@ function shallowEqual(a, b) {
 // optional `onError` callback, so a caller pushing this over a live channel
 // (the SSE route) can tell a connected client the channel is unhealthy
 // instead of going silent.
-export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POLL_MS, onError } = {}) {
+// `setTimer`/`clearTimer` default to the real timers and exist so tests can
+// drive ticks by hand instead of sleeping.
+export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POLL_MS, onError, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let previous = null;
   let stopped = false;
   let timer = null;
@@ -72,7 +74,7 @@ export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POL
       onError?.(err);
     }
     if (!stopped) {
-      timer = setTimeout(tick, intervalMs);
+      timer = setTimer(tick, intervalMs);
     }
   };
 
@@ -81,7 +83,7 @@ export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POL
   return {
     close() {
       stopped = true;
-      clearTimeout(timer);
+      clearTimer(timer);
     },
   };
 }

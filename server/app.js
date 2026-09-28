@@ -1,17 +1,14 @@
 import { createServer } from 'node:http';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { runGit } from './git.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseWorktreeList } from './porcelain.js';
-import { getChangedPaths, mergeFileStatuses, nestIntoTree } from './status.js';
+import { parseWorktreeList, selectedFirst } from './porcelain.js';
+import { getFileTree as getFileTreeReal } from './status.js';
 import { readFileContent } from './file-content.js';
-import { parseCommitLog, markTouching, markOriginMain, LOG_FORMAT } from './commits.js';
+import { listCommits as listCommitsReal } from './commits.js';
 import { watchWorktree as watchWorktreeReal } from './watcher.js';
 import { pollWorktrees } from './worktree-watch.js';
-
-const execFileAsync = promisify(execFile);
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -39,14 +36,8 @@ export function createApp({
   const getWorktrees =
     listWorktrees ??
     (async () => {
-      const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
-        cwd: repoRoot,
-      });
-      const worktrees = parseWorktreeList(stdout);
-      // Start on the folder passed to the CLI, even when it is a linked worktree.
-      const selected = worktrees.findIndex((worktree) => worktree.path === repoRoot);
-      if (selected > 0) worktrees.unshift(worktrees.splice(selected, 1)[0]);
-      return worktrees;
+      const stdout = await runGit(['worktree', 'list', '--porcelain'], repoRoot);
+      return selectedFirst(parseWorktreeList(stdout), repoRoot);
     });
 
   // Defaults to polling `getWorktrees` itself (see worktree-watch.js for why
@@ -91,62 +82,9 @@ export function createApp({
     };
   }
 
-  const getTree =
-    getFileTree ??
-    (async (worktreePath, ref = 'HEAD') => {
-      const [changedPaths, { stdout: lsOut }] = await Promise.all([
-        getChangedPaths(worktreePath, ref),
-        execFileAsync('git', ['ls-files', '-z'], { cwd: worktreePath }),
-      ]);
-      const trackedPaths = lsOut.split('\0').filter(Boolean);
-      return nestIntoTree(mergeFileStatuses(trackedPaths, changedPaths));
-    });
-
+  const getTree = getFileTree ?? getFileTreeReal;
   const getContent = getFileContent ?? readFileContent;
-
-  // Shas of commits that touched `file` (following renames), or null when the
-  // filter fails (e.g. a path outside the worktree): that must only cost the
-  // marking, never the commit list itself.
-  async function shasTouching(worktreePath, file) {
-    try {
-      const { stdout } = await execFileAsync(
-        'git',
-        ['--literal-pathspecs', 'log', '--follow', '--pretty=format:%H', '--', file],
-        { cwd: worktreePath },
-      );
-      return stdout.split('\n').filter(Boolean);
-    } catch {
-      return null;
-    }
-  }
-
-  // Sha `origin/main` points at, or null when there is no such remote branch.
-  async function originMainSha(worktreePath) {
-    try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', '-q', 'origin/main^{commit}'], { cwd: worktreePath });
-      return stdout.trim() || null;
-    } catch {
-      return null;
-    }
-  }
-
-  const getCommits =
-    listCommits ??
-    (async (worktreePath, file) => {
-      try {
-        const [{ stdout }, touching, originSha] = await Promise.all([
-          execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], { cwd: worktreePath }),
-          file ? shasTouching(worktreePath, file) : null,
-          originMainSha(worktreePath),
-        ]);
-        const commits = parseCommitLog(stdout);
-        return markOriginMain(touching ? markTouching(commits, touching) : commits, originSha);
-      } catch {
-        // `git log` exits non-zero for a repo with no commits yet; treat
-        // that the same as "no commit history" rather than an error.
-        return [];
-      }
-    });
+  const getCommits = listCommits ?? listCommitsReal;
 
   return createServer(async (req, res) => {
     try {
