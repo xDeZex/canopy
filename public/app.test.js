@@ -1,20 +1,47 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { startApp } from './app.js';
+import { Element } from './fake-dom.js';
 
 function browserStub() {
-  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'rail', 'toolbar', 'main'].map((id) => [id, {
-    children: [],
-    classList: { toggle() {} },
-    replaceChildren(...children) { this.children = children; },
-    addEventListener() {},
-  }]));
+  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'rail', 'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
+  elements.toolbar.isRoot = true;
+  elements['shortcut-help'].hidden = true;
+  const listeners = { keydown: new Set(), click: new Set() };
   const document = {
     getElementById: (id) => elements[id],
-    createElement: () => ({ className: '', textContent: '' }),
+    addEventListener: (event, listener) => listeners[event].add(listener),
+    removeEventListener: (event, listener) => listeners[event].delete(listener),
+    createElement: (tag) => new Element(tag),
+    createDocumentFragment: () => new Element('fragment'),
   };
   const window = { localStorage: { getItem: () => null }, addEventListener() {} };
-  return { document, window, elements };
+  const keydownListeners = listeners.keydown;
+  const pressKey = (key, extra = {}) => [...keydownListeners].forEach((listener) => listener({
+    key, target: { tagName: 'BODY' }, preventDefault() {}, ...extra,
+  }));
+  return { document, window, elements, keydownListeners, pressKey };
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+class EventSourceStub {
+  addEventListener() {}
+  close() {}
+}
+
+// Two worktrees, one modified file and no commits, served from memory.
+function fakeFetch(urls = []) {
+  const responses = {
+    '/api/worktrees': [{ path: '/a', branch: 'a' }, { path: '/b', branch: 'b' }],
+    '/api/files': [{ type: 'file', name: 'f.js', path: 'f.js', status: 'modified' }],
+    '/api/commits': [],
+    '/api/file-content': { head: 'old', working: 'new' },
+  };
+  return async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => responses[url.split('?')[0]] };
+  };
 }
 
 test('startup renders an empty workspace and opens the repo-wide stream after loading', async () => {
@@ -60,4 +87,75 @@ test('initial request failure shows the original error without opening a stream'
   assert.deepEqual(elements.rail.children, []);
   assert.equal(elements.toolbar.hidden, true);
   assert.equal(streams, 0);
+});
+
+test('? toggles the shortcut help, Escape closes it, and typing in a field is ignored', async () => {
+  const { document, window, elements, pressKey } = browserStub();
+  await startApp({
+    document, window,
+    EventSource: class { addEventListener() {} },
+    fetch: async () => ({ ok: true, json: async () => [] }),
+  });
+  pressKey('?');
+  assert.equal(elements['shortcut-help'].hidden, false);
+  pressKey('Escape');
+  assert.equal(elements['shortcut-help'].hidden, true);
+  pressKey('?', { target: { tagName: 'INPUT', readOnly: false } });
+  assert.equal(elements['shortcut-help'].hidden, true);
+});
+
+test('worktree and change shortcuts do nothing without worktrees, and dispose removes the key listener', async () => {
+  const { document, window, keydownListeners, pressKey } = browserStub();
+  const app = await startApp({
+    document, window,
+    EventSource: class { addEventListener() {} close() {} },
+    fetch: async () => ({ ok: true, json: async () => [] }),
+  });
+  pressKey('1');
+  pressKey('j');
+  pressKey('l');
+  assert.equal(keydownListeners.size, 1);
+  app.dispose();
+  assert.equal(keydownListeners.size, 0);
+});
+
+test('j and l step the mounted diff to the previous and next change', async () => {
+  const { document, window, elements, pressKey } = browserStub();
+  const navigated = [];
+  await startApp({
+    document, window, EventSource: EventSourceStub, fetch: fakeFetch(),
+    mountDiffEditor: async () => ({
+      dispose() {},
+      nextChange: () => navigated.push('next'),
+      prevChange: () => navigated.push('prev'),
+    }),
+  });
+  await settle();
+  elements.rail.querySelector('.rail__file').click();
+  await settle();
+  pressKey('j');
+  pressKey('l');
+  assert.deepEqual(navigated, ['prev', 'next']);
+  pressKey('j', { ctrlKey: true });
+  pressKey('l', { target: { tagName: 'INPUT', readOnly: false } });
+  assert.deepEqual(navigated, ['prev', 'next'], 'modifiers and typing leave the keys alone');
+});
+
+test('digit keys switch to the worktree tab at that position and ignore missing ones', async () => {
+  const { document, window, elements, pressKey } = browserStub();
+  const urls = [];
+  await startApp({ document, window, EventSource: EventSourceStub, fetch: fakeFetch(urls) });
+  await settle();
+  const activeTabs = () => elements.tabs.children.map((tab) => tab.classList.contains('is-active'));
+  assert.deepEqual(activeTabs(), [true, false]);
+  pressKey('2');
+  await settle();
+  assert.deepEqual(activeTabs(), [false, true]);
+  assert.ok(urls.includes('/api/files?worktree=%2Fb'));
+  pressKey('3');
+  await settle();
+  assert.deepEqual(activeTabs(), [false, true]);
+  pressKey('1');
+  await settle();
+  assert.deepEqual(activeTabs(), [true, false]);
 });

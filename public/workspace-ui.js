@@ -8,7 +8,7 @@ export function createWorkspaceUI({
   tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
   viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
   DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged, getDiffRenderMode,
-  onAutoScrollChanged, onNextChange, onPrevChange,
+  onAutoScrollChanged, onNextChange, onPrevChange, onToggleHelp,
   document, window,
 }) {
   let toolbarPath = null;
@@ -308,6 +308,17 @@ export function createWorkspaceUI({
     return nav;
   }
 
+  function renderHelpButton() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'help-button';
+    button.textContent = '?';
+    button.title = 'Keyboard shortcuts';
+    button.setAttribute('aria-label', 'Keyboard shortcuts');
+    button.addEventListener('click', onToggleHelp);
+    return button;
+  }
+
   function createToolbar() {
     const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
@@ -320,7 +331,7 @@ export function createWorkspaceUI({
     toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
     const right = document.createElement('div');
     right.className = 'viewer__toolbar-right';
-    right.append(renderChangeNav(), renderDiffModeToggle());
+    right.append(renderChangeNav(), renderDiffModeToggle(), renderHelpButton());
     toolbar.append(left, toggle, right);
     return toolbar;
   }
@@ -374,5 +385,9 @@ export function createWorkspaceUI({
     toolbarLockedSha = null;
   }
 
-  return { renderTabs, renderRail, renderToolbar, renderError };
+  function closeMenus() {
+    toolbarEl.querySelector('.commit-picker__menu')?.classList.remove('is-open');
+  }
+
+  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus };
 }

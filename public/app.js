@@ -14,6 +14,7 @@ import { formatRelativeTime } from './relative-time.js';
 import { createTreeExpansionStore } from './tree-state.js';
 import { computeTabScrollAffordance } from './tab-scroll.js';
 import { createWorkspaceStore } from './workspace-state.js';
+import { shortcutAction } from './keyboard-shortcuts.js';
 
 export async function startApp({
   document: doc = globalThis.document,
@@ -29,6 +30,7 @@ export async function startApp({
   const railEl = doc.getElementById('rail');
   const toolbarEl = doc.getElementById('toolbar');
   const mainEl = doc.getElementById('main');
+  const helpEl = doc.getElementById('shortcut-help');
 
   let diffRenderMode = 'inline';
   // Defer access to localStorage: even reading the property may throw when
@@ -93,15 +95,45 @@ export async function startApp({
     ui.renderToolbar();
   }
 
+  function toggleHelp() {
+    helpEl.hidden = !helpEl.hidden;
+  }
+
   ui = createWorkspaceUI({
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
     viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
     DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged,
     onAutoScrollChanged, onNextChange: () => viewer.nextChange(), onPrevChange: () => viewer.prevChange(),
+    onToggleHelp: toggleHelp,
     getDiffRenderMode: () => diffRenderMode,
     document: doc, window: browserWindow,
   });
   liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: EventSourceClass });
+
+  function onShortcut(action) {
+    switch (action.type) {
+      case 'next-change': return viewer.nextChange();
+      case 'prev-change': return viewer.prevChange();
+      case 'select-worktree': {
+        const worktree = workspace.getState().worktrees[action.index];
+        return worktree && workspace.selectWorktree(worktree.path);
+      }
+      case 'toggle-help': return toggleHelp();
+      case 'close': helpEl.hidden = true; ui.closeMenus(); return;
+    }
+  }
+  function onKeyDown(event) {
+    const action = shortcutAction(event);
+    if (!action) return;
+    event.preventDefault();
+    onShortcut(action);
+  }
+  helpEl.addEventListener('click', () => { helpEl.hidden = true; });
+  doc.addEventListener('keydown', onKeyDown);
+  const dispose = () => {
+    doc.removeEventListener('keydown', onKeyDown);
+    liveUpdates.dispose();
+  };
 
   let worktrees;
   try {
@@ -114,10 +146,10 @@ export async function startApp({
     message.className = 'empty';
     message.textContent = `Failed to load worktrees: ${err.message}`;
     mainEl.replaceChildren(message);
-    return { dispose: () => liveUpdates.dispose() };
+    return { dispose };
   }
 
   treeExpansion.pruneToKnownWorktrees(workspace.updateWorktrees(worktrees));
   liveUpdates.connectWorktrees();
-  return { dispose: () => liveUpdates.dispose() };
+  return { dispose };
 }

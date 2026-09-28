@@ -52,6 +52,9 @@ export async function mountDiffEditor(container, { original, modified, language,
   const editor = monaco.editor.createDiffEditor(container, {
     automaticLayout: true,
     readOnly: true,
+    // Sets the DOM readonly attribute on Monaco's input so keyboard shortcuts
+    // can tell it is not being typed into.
+    domReadOnly: true,
     originalEditable: false,
     theme: 'vs-dark',
     // Detects relocated blocks and draws a connecting arrow between the old
@@ -119,6 +122,7 @@ export async function mountEditor(container, { content, language }) {
     language,
     automaticLayout: true,
     readOnly: true,
+    domReadOnly: true,
     theme: 'vs-dark',
   });
 

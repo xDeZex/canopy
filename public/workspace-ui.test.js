@@ -5,67 +5,7 @@ import { createWorkspaceStore } from './workspace-state.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { createViewModeStore } from './view-mode.js';
 import { createAutoScrollStore } from './auto-scroll.js';
-
-// Only the DOM surface used by the workspace controls; no browser dependency.
-class Element {
-  constructor(tag) {
-    this.tag = tag;
-    this.children = [];
-    this.className = '';
-    this.dataset = {};
-    this.style = {};
-    this.listeners = new Map();
-  }
-
-  get classList() {
-    const tokens = () => this.className.split(' ').filter(Boolean);
-    return {
-      contains: (name) => tokens().includes(name),
-      add: (name) => { this.className = [...new Set([...tokens(), name])].join(' '); },
-      remove: (name) => { this.className = tokens().filter((token) => token !== name).join(' '); },
-      toggle: (name, force) => {
-        if (force ?? !tokens().includes(name)) this.classList.add(name);
-        else this.classList.remove(name);
-      },
-    };
-  }
-
-  append(...children) {
-    for (const child of children) {
-      if (child.tag === 'fragment') this.append(...child.children);
-      else {
-        child.parentElement = this;
-        this.children.push(child);
-      }
-    }
-  }
-
-  replaceChildren(...children) {
-    this.children.forEach((child) => { child.parentElement = null; });
-    this.children = [];
-    this.append(...children);
-  }
-
-  contains(node) {
-    return node === this || this.children.some((child) => child.contains(node));
-  }
-
-  get isConnected() {
-    return this.isRoot || Boolean(this.parentElement?.isConnected);
-  }
-
-  querySelectorAll(selector) {
-    const name = selector.slice(1);
-    return this.children.flatMap((child) => [
-      ...(child.classList.contains(name) ? [child] : []), ...child.querySelectorAll(selector),
-    ]);
-  }
-
-  querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
-  addEventListener(event, listener) { this.listeners.set(event, listener); }
-  click() { this.listeners.get('click')?.(); }
-  setAttribute(name, value) { this[name] = value; }
-}
+import { Element } from './fake-dom.js';
 
 function fixture() {
   const documentListeners = new Set();
@@ -114,6 +54,7 @@ function fixture() {
     formatRelativeTime: () => 'recently', DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
     onViewModeChanged() {}, onDiffRenderModeChanged() {}, getDiffRenderMode: () => 'inline',
     onNextChange: () => navCalls.push('next'), onPrevChange: () => navCalls.push('prev'),
+    onToggleHelp: () => navCalls.push('help'),
     onAutoScrollChanged: (enabled) => { autoScrollStore.setEnabled(enabled); ui.renderToolbar(); },
     document, window,
   });
@@ -137,6 +78,17 @@ test('commit dropdown closes on an outside click, stays open on inside clicks, a
   f.tabsEl.children[1].click();
   f.clickOn(f.railEl);
   assert.equal(f.documentListeners.size, 1, 'the replaced picker removed its document listener');
+});
+
+test('closeMenus closes an open commit dropdown and is safe with no toolbar', () => {
+  const f = fixture();
+  f.ui.closeMenus();
+  f.workspace.updateWorktrees([{ path: '/a' }]);
+  const menu = f.toolbarEl.querySelector('.commit-picker__menu');
+  f.toolbarEl.querySelector('.commit-picker__trigger').click();
+  assert.equal(menu.classList.contains('is-open'), true);
+  f.ui.closeMenus();
+  assert.equal(menu.classList.contains('is-open'), false);
 });
 
 test('commit picker locks base, reloads tree and open file, then displays lock and Auto', async () => {
@@ -321,6 +273,16 @@ test('next and previous buttons call the change handlers', async () => {
   next.click();
   prev.click();
   assert.deepEqual(f.navCalls, ['next', 'prev']);
+});
+
+test('the help button sits last in the toolbar and calls the help handler', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }]);
+  const right = f.toolbarEl.querySelector('.viewer__toolbar-right');
+  const button = right.querySelector('.help-button');
+  assert.equal(right.children.at(-1), button);
+  button.click();
+  assert.deepEqual(f.navCalls, ['help']);
 });
 
 test('auto-scroll toggle reflects and flips the global preference', () => {

@@ -476,3 +476,69 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ---------- Keyboard shortcut help ---------- */
+
+.help-button {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-dim);
+  padding: 4px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.help-button:hover {
+  color: var(--fg);
+}
+
+.shortcut-help {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.shortcut-help[hidden] {
+  display: none;
+}
+
+.shortcut-help__panel {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 16px 20px;
+  min-width: 300px;
+}
+
+.shortcut-help__title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shortcut-help__list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 20px;
+  margin: 0;
+}
+
+.shortcut-help__list dd {
+  margin: 0;
+  color: var(--fg-dim);
+}
+
+.shortcut-help kbd {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
