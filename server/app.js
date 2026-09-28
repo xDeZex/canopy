@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseWorktreeList } from './porcelain.js';
 import { getChangedPaths, mergeFileStatuses, nestIntoTree } from './status.js';
 import { readFileContent } from './file-content.js';
-import { parseCommitLog, markTouching, LOG_FORMAT } from './commits.js';
+import { parseCommitLog, markTouching, markOriginMain, LOG_FORMAT } from './commits.js';
 import { watchWorktree as watchWorktreeReal } from './watcher.js';
 import { pollWorktrees } from './worktree-watch.js';
 
@@ -120,16 +120,27 @@ export function createApp({
     }
   }
 
+  // Sha `origin/main` points at, or null when there is no such remote branch.
+  async function originMainSha(worktreePath) {
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', '-q', 'origin/main^{commit}'], { cwd: worktreePath });
+      return stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
   const getCommits =
     listCommits ??
     (async (worktreePath, file) => {
       try {
-        const [{ stdout }, touching] = await Promise.all([
+        const [{ stdout }, touching, originSha] = await Promise.all([
           execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], { cwd: worktreePath }),
           file ? shasTouching(worktreePath, file) : null,
+          originMainSha(worktreePath),
         ]);
         const commits = parseCommitLog(stdout);
-        return touching ? markTouching(commits, touching) : commits;
+        return markOriginMain(touching ? markTouching(commits, touching) : commits, originSha);
       } catch {
         // `git log` exits non-zero for a repo with no commits yet; treat
         // that the same as "no commit history" rather than an error.

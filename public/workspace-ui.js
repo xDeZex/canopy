@@ -205,7 +205,16 @@ export function createWorkspaceUI({
       menu.classList.remove('is-open');
       onCommitLockChanged();
     });
-    menu.replaceChildren(autoItem, ...commits.map((commit) => renderCommitMenuItem(commit, commit.sha === lockedSha, menu, activePath)));
+    const commitItems = commits.flatMap((commit) => {
+      const item = renderCommitMenuItem(commit, commit.sha === lockedSha, menu, activePath);
+      if (!commit.isOriginMain) return [item];
+      const divider = document.createElement('div');
+      divider.className = 'commit-picker__divider';
+      divider.textContent = 'origin/main';
+      divider.title = 'origin/main';
+      return [divider, item];
+    });
+    menu.replaceChildren(autoItem, ...commitItems);
     if (commitsError) {
       const message = document.createElement('div');
       message.className = 'commit-picker__item commit-picker__item--error';

@@ -829,7 +829,9 @@ test('GET /api/commits returns this worktree\'s real commit history as JSON', as
 
   assert.equal(res.statusCode, 200);
   assert.match(res.headers['content-type'], /application\/json/);
-  assert.deepEqual(JSON.parse(res.body), expected);
+  // origin/main marking depends on this checkout's remotes; it is covered by origin-main.test.js.
+  const withoutOriginMark = JSON.parse(res.body).map(({ isOriginMain, ...commit }) => commit);
+  assert.deepEqual(withoutOriginMark, expected);
   assert.ok(expected.length >= 1, 'expected at least one commit in this repo');
 });
 

@@ -27,3 +27,11 @@ export function markTouching(commits, touchingSha) {
   const touched = new Set(touchingSha);
   return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
 }
+
+// Flags the commit `origin/main` points at (`originSha`) so the client can draw
+// a divider there. When origin/main is unknown or not in the listed history
+// the commits come back unchanged: no marker rather than a wrong one.
+export function markOriginMain(commits, originSha) {
+  if (!commits.some((commit) => commit.sha === originSha)) return commits;
+  return commits.map((commit) => ({ ...commit, isOriginMain: commit.sha === originSha }));
+}

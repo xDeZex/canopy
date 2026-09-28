@@ -238,3 +238,24 @@ test('changed-files list updates when a watcher event refetches the tree', async
   assert.deepEqual(f.railEl.querySelectorAll('.changed-files__file').map((row) => row.textContent), ['a.txt']);
   assert.equal(f.railEl.querySelector('.changed-files__empty'), null);
 });
+
+test('commit dropdown draws an origin/main divider above the flagged commit, separating local from pushed', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  await f.reply(f.requests[1], [
+    { sha: '3333333ccc', message: 'local', date: '2025-01-03', isOriginMain: false },
+    { sha: '2222222bbb', message: 'pushed', date: '2025-01-02', isOriginMain: true },
+    { sha: '1111111aaa', message: 'older', date: '2025-01-01', isOriginMain: false },
+  ]);
+  const rows = f.toolbarEl.querySelector('.commit-picker__menu').children.slice(1);
+  assert.deepEqual(rows.map((r) => r.classList.contains('commit-picker__divider') ? 'divider' : r.querySelector('.commit-picker__item-sha').textContent),
+    ['3333333', 'divider', '2222222', '1111111']);
+  assert.equal(rows[1].textContent, 'origin/main');
+});
+
+test('without an origin/main flag the commit dropdown shows no divider', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  await f.reply(f.requests[1], [{ sha: '1111111aaa', message: 'one', date: '2025-01-01' }]);
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__divider'), null);
+});

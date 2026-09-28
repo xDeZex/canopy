@@ -421,6 +421,14 @@ body {
   color: var(--modified);
 }
 
+/* Text stays in the DOM (and as a tooltip) for a11y, but only the line shows. */
+.commit-picker__divider {
+  height: 2px;
+  margin: 3px 0;
+  font-size: 0;
+  background: var(--accent);
+}
+
 .commit-picker__item--error {
   color: var(--deleted);
   cursor: default;
