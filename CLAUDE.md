@@ -2,6 +2,10 @@
 
 Use Conventional Commits for commits pushed to `main`.
 
+## Coding standards
+
+Read `CODING_STANDARDS.md` before making changes.
+
 ## Agent skills
 
 ### Issue tracker
