@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from './route-logic.js';
+import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from '../../server/route-logic.js';
 
 test('isInsideWorktree accepts the root and paths beneath it', () => {
   assert.equal(isInsideWorktree('/repos/canopy', 'server/app.js'), true);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeTabScrollAffordance } from './tab-scroll.js';
+import { computeTabScrollAffordance } from '../../public/tab-scroll.js';
 
 test('no affordance when content fits without scrolling', () => {
   const result = computeTabScrollAffordance({ scrollLeft: 0, scrollWidth: 400, clientWidth: 400 });

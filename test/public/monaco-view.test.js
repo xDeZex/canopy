@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mountDiffEditor, mountEditor } from './monaco-view.js';
+import { mountDiffEditor, mountEditor } from '../../public/monaco-view.js';
 
 const originalWindow = globalThis.window;
 const originalMonaco = globalThis.monaco;

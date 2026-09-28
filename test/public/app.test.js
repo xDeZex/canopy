@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { startApp } from './app.js';
+import { startApp } from '../../public/app.js';
 import { Element } from './fake-dom.js';
 
 function browserStub() {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getChangedPaths, getFileTree, parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from './status.js';
+import { getChangedPaths, getFileTree, parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from '../../server/status.js';
 
 test('parses NUL-delimited diff names including a rename and deletion', () => {
   assert.deepEqual(parseNameStatus('R100\0old name\0new name\0D\0gone\0A\0new\0M\0changed\0'), [

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCommitLockStore } from './commit-lock.js';
+import { createCommitLockStore } from '../../public/commit-lock.js';
 
 test('a worktree with no lock set is Auto (null)', () => {
   const store = createCommitLockStore();

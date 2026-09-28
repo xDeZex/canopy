@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWorktreeList, selectedFirst } from './porcelain.js';
+import { parseWorktreeList, selectedFirst } from '../../server/porcelain.js';
 
 test('parses a single worktree with a branch', () => {
   const output = [

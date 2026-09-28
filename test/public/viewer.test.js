@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createViewer } from './viewer.js';
+import { createViewer } from '../../public/viewer.js';
 
 function element(tagName) {
   const classes = new Set();

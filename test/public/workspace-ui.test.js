@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkspaceUI } from './workspace-ui.js';
-import { createWorkspaceStore } from './workspace-state.js';
-import { createCommitLockStore } from './commit-lock.js';
-import { createViewModeStore } from './view-mode.js';
-import { createAutoScrollStore } from './auto-scroll.js';
+import { createWorkspaceUI } from '../../public/workspace-ui.js';
+import { createWorkspaceStore } from '../../public/workspace-state.js';
+import { createCommitLockStore } from '../../public/commit-lock.js';
+import { createViewModeStore } from '../../public/view-mode.js';
+import { createAutoScrollStore } from '../../public/auto-scroll.js';
 import { Element } from './fake-dom.js';
 
 function fixture() {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { watchWorktree, IGNORE_GIT_DIR } from './watcher.js';
+import { watchWorktree, IGNORE_GIT_DIR } from '../../server/watcher.js';
 
 // A stand-in for a chokidar watcher: tests emit 'add'/'change'/'unlink'
 // themselves, and time only moves when `fire()` runs the pending timer.

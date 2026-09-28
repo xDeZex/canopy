@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickActiveWorktree } from './worktree-select.js';
+import { pickActiveWorktree } from '../../public/worktree-select.js';
 
 test('keeps the current active path when it is still in the list', () => {
   const worktrees = [{ path: '/a' }, { path: '/b' }];

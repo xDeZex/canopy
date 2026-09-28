@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFanOut } from './fan-out.js';
+import { createFanOut } from '../../server/fan-out.js';
 
 // A fake source that records starts/closes and exposes its callbacks.
 function fakeSource() {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequestHandler } from './handle-request.js';
+import { createRequestHandler } from '../../server/handle-request.js';
 
 const PUBLIC = '/srv/public';
 const worktrees = [{ path: '/main' }, { path: '/linked' }];

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAutoScrollStore } from './auto-scroll.js';
+import { createAutoScrollStore } from '../../public/auto-scroll.js';
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));

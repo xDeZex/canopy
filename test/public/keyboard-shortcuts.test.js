@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isTypingTarget, shortcutAction } from './keyboard-shortcuts.js';
+import { isTypingTarget, shortcutAction } from '../../public/keyboard-shortcuts.js';
 
 const press = (key, extra = {}) => shortcutAction({ key, target: { tagName: 'DIV' }, ...extra });
 

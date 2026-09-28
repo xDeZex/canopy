@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewModeStore, defaultViewMode } from './view-mode.js';
+import { createViewModeStore, defaultViewMode } from '../../public/view-mode.js';
 
 function memoryStorage() {
   const values = new Map();

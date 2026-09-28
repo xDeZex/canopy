@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changedFiles } from './changed-files.js';
+import { changedFiles } from '../../public/changed-files.js';
 
 test('changedFiles lists non-clean files at any depth, sorted by full path', () => {
   const zAdded = { type: 'file', name: 'z.txt', path: 'z.txt', status: 'added' };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectFiles } from './collect-files.js';
+import { collectFiles } from '../../public/collect-files.js';
 
 test('collectFiles returns every file leaf in tree order, without directories', () => {
   const first = { type: 'file', path: 'a', status: 'clean' };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { markOriginMain } from './commits.js';
+import { markOriginMain } from '../../server/commits.js';
 
 const commits = [
   { sha: 'c3', message: 'local two', date: '2025-01-03' },

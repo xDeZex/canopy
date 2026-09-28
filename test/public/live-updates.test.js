@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLiveUpdates } from './live-updates.js';
-import { createWorkspaceStore } from './workspace-state.js';
-import { createTreeExpansionStore } from './tree-state.js';
-import { createCommitLockStore } from './commit-lock.js';
-import { createViewModeStore } from './view-mode.js';
+import { createLiveUpdates } from '../../public/live-updates.js';
+import { createWorkspaceStore } from '../../public/workspace-state.js';
+import { createTreeExpansionStore } from '../../public/tree-state.js';
+import { createCommitLockStore } from '../../public/commit-lock.js';
+import { createViewModeStore } from '../../public/view-mode.js';
 
 function fixture() {
   const sources = [];

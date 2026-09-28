@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTreeExpansionStore } from './tree-state.js';
+import { createTreeExpansionStore } from '../../public/tree-state.js';
 
 test('a folder is collapsed by default', () => {
   const store = createTreeExpansionStore();

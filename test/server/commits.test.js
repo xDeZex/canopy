@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCommitLog, markTouching, listCommits, LOG_FORMAT } from './commits.js';
+import { parseCommitLog, markTouching, listCommits, LOG_FORMAT } from '../../server/commits.js';
 
 // Captured `git log --pretty=format:LOG_FORMAT` output: fields joined by the
 // unit separator (0x1f), commits by a newline, no trailing newline.

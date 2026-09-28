@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatRelativeTime } from './relative-time.js';
+import { formatRelativeTime } from '../../public/relative-time.js';
 
 const now = new Date('2026-09-27T12:00:00Z');
 

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import http from 'node:http';
-import { createApp } from './app.js';
+import { createApp } from '../../server/app.js';
 
 // The one test that runs the app's default git-backed dependencies against a
 // real repo (this one), to check the wiring the injected-fake tests skip.

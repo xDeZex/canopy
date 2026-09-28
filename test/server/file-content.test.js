@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isMissingRefSide, isMissingWorkingSide, readFileContent } from './file-content.js';
+import { isMissingRefSide, isMissingWorkingSide, readFileContent } from '../../server/file-content.js';
 
 const errWithCode = (code) => Object.assign(new Error('boom'), { code });
 
