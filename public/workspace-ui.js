@@ -121,7 +121,7 @@ export function createWorkspaceUI({
 
   function renderCommitMenuItem(commit, isSelected, menu, activePath) {
     const item = document.createElement('div');
-    item.className = `commit-picker__item${isSelected ? ' is-selected' : ''}`;
+    item.className = `commit-picker__item${isSelected ? ' is-selected' : ''}${commit.touchesFile ? ' commit-picker__item--touches-file' : ''}`;
 
     const shaEl = document.createElement('span');
     shaEl.className = 'commit-picker__item-sha';

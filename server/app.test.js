@@ -839,3 +839,36 @@ test('GET /api/commits serializes an injected commit list for the requested work
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), commits);
 });
+
+test('GET /api/commits?file= marks commits that touched the file, keeping every commit in order', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-commits-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileAsync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: dir });
+  await run('init', '-q');
+  await writeFile(path.join(dir, 'a.txt'), '1\n');
+  await writeFile(path.join(dir, 'b.txt'), '1\n');
+  await run('add', '.');
+  await run('commit', '-qm', 'add both');
+  await writeFile(path.join(dir, 'b.txt'), '2\n');
+  await run('commit', '-qam', 'edit b');
+  await writeFile(path.join(dir, 'a.txt'), '2\n');
+  await run('commit', '-qam', 'edit a');
+
+  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const base = `/api/commits?worktree=${encodeURIComponent(dir)}`;
+
+  const res = await get(server.address().port, `${base}&file=a.txt`);
+  const commits = JSON.parse(res.body);
+  assert.deepEqual(commits.map((c) => [c.message, c.touchesFile]), [
+    ['edit a', true],
+    ['edit b', false],
+    ['add both', true],
+  ]);
+
+  const unmarked = JSON.parse((await get(server.address().port, base)).body);
+  assert.deepEqual(unmarked.map((c) => c.message), ['edit a', 'edit b', 'add both']);
+  assert.ok(unmarked.every((c) => !('touchesFile' in c)), 'no file open means no marking');
+});

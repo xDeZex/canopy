@@ -96,13 +96,15 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   async function loadCommits() {
     const generation = ++commitsRequest;
     const path = activePath;
+    const file = activeFile;
     if (!path) {
       commits = [];
       commitsError = null;
       return;
     }
     try {
-      const result = await fetchJson(`/api/commits?worktree=${encodeURIComponent(path)}`);
+      const fileParam = file ? `&file=${encodeURIComponent(file)}` : '';
+      const result = await fetchJson(`/api/commits?worktree=${encodeURIComponent(path)}${fileParam}`);
       if (generation !== commitsRequest) return;
       commits = result;
       commitsError = null;
@@ -162,6 +164,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       onChange('rail');
       onChange('toolbar');
       onChange('main');
+      loadCommits();
       return loadFileContent();
     },
     remoteChange(paths) {

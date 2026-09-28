@@ -104,12 +104,20 @@ export function createApp({
 
   const getCommits =
     listCommits ??
-    (async (worktreePath) => {
+    (async (worktreePath, file) => {
       try {
         const { stdout } = await execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], {
           cwd: worktreePath,
         });
-        return parseCommitLog(stdout);
+        const commits = parseCommitLog(stdout);
+        if (!file) return commits;
+        const { stdout: touching } = await execFileAsync(
+          'git',
+          ['log', '--pretty=format:%H', '--', file],
+          { cwd: worktreePath },
+        );
+        const touched = new Set(touching.split('\n').filter(Boolean));
+        return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
       } catch {
         // `git log` exits non-zero for a repo with no commits yet; treat
         // that the same as "no commit history" rather than an error.
@@ -248,7 +256,7 @@ export function createApp({
         const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
         if (worktreePath === null) return;
 
-        const commits = await getCommits(worktreePath);
+        const commits = await getCommits(worktreePath, searchParams.get('file') || null);
         respondJson(res, 200, commits, { includeBody });
         return;
       }

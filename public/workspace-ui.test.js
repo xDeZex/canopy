@@ -109,14 +109,15 @@ test('commit picker locks base, reloads tree and open file, then displays lock a
   f.railEl.querySelector('.rail__file').click();
   assert.equal(f.workspace.getState().activeFile, 'a.txt');
   const sha = 'abcdef123456';
-  await f.reply(f.requests[1], [{ sha, message: 'Earlier version', date: '2025-01-01' }]);
+  const fileCommits = f.requests.find((r) => r.url === '/api/commits?worktree=%2Frepo&file=a.txt');
+  await f.reply(fileCommits, [{ sha, message: 'Earlier version', date: '2025-01-01' }]);
   const picker = f.toolbarEl.querySelector('.commit-picker');
   picker.querySelector('.commit-picker__trigger').click();
   assert.equal(picker.querySelector('.commit-picker__menu').classList.contains('is-open'), true);
   picker.querySelector('.commit-picker__item-sha').parentElement.click();
   assert.equal(f.commitLock.getLockedCommit('/repo'), sha);
-  assert.equal(f.requests[3].url, `/api/files?worktree=%2Frepo&ref=${sha}`);
-  assert.equal(f.requests[4].url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
+  assert.equal(f.requests[4].url, `/api/files?worktree=%2Frepo&ref=${sha}`);
+  assert.equal(f.requests[5].url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
   assert.equal(f.toolbarEl.querySelector('.commit-picker'), picker, 'editor controls stay mounted');
   assert.equal(picker.querySelector('.commit-picker__menu').classList.contains('is-open'), false);
   assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
@@ -125,8 +126,8 @@ test('commit picker locks base, reloads tree and open file, then displays lock a
 
   picker.querySelector('.commit-picker__menu').children[0].click();
   assert.equal(f.commitLock.getLockedCommit('/repo'), null);
-  assert.equal(f.requests[5].url, '/api/files?worktree=%2Frepo');
-  assert.equal(f.requests[6].url, '/api/file-content?worktree=%2Frepo&file=a.txt');
+  assert.equal(f.requests[6].url, '/api/files?worktree=%2Frepo');
+  assert.equal(f.requests[7].url, '/api/file-content?worktree=%2Frepo&file=a.txt');
   assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
 });
@@ -157,4 +158,19 @@ test('locking without a selected file still refreshes the tree, not file content
   assert.equal(f.requests.length, 3);
   assert.equal(f.requests[2].url, '/api/files?worktree=%2Fa&ref=12345678');
   assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger-sha').textContent, '1234567');
+});
+
+test('commit dropdown marks only commits that touched the open file, keeping all in order', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
+  await f.reply(f.requests[0], [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }]);
+  f.railEl.querySelector('.rail__file').click();
+  const fileCommits = f.requests.find((r) => r.url === '/api/commits?worktree=%2Frepo&file=a.txt');
+  await f.reply(fileCommits, [
+    { sha: '1111111aaa', message: 'touched', date: '2025-01-01', touchesFile: true },
+    { sha: '2222222bbb', message: 'unrelated', date: '2025-01-01', touchesFile: false },
+  ]);
+  const items = f.toolbarEl.querySelector('.commit-picker__menu').children.slice(1);
+  assert.deepEqual(items.map((i) => i.classList.contains('commit-picker__item--touches-file')), [true, false]);
+  assert.deepEqual(items.map((i) => i.querySelector('.commit-picker__item-sha').textContent), ['1111111', '2222222']);
 });
