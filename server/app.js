@@ -5,15 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { createListWorktrees, defaultDeps } from './default-deps.js';
 import { pollWorktrees } from './worktree-watch.js';
 import { createFanOut } from './fan-out.js';
-import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from './route-logic.js';
+import { createRequestHandler } from './handle-request.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
-
-const CONTENT_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-};
 
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
 // `listWorktrees`, `getFileTree`, `getFileContent`, `listCommits`, and
@@ -45,197 +39,45 @@ export function createApp({
   const getContent = getFileContent ?? defaultDeps.getFileContent;
   const getCommits = listCommits ?? defaultDeps.listCommits;
 
+  const handleRequest = createRequestHandler({
+    getWorktrees,
+    getTree,
+    getContent,
+    getCommits,
+    watchWorktree,
+    subscribeToWorktreeChanges,
+    readStatic: readFile,
+    publicDir: PUBLIC_DIR,
+  });
+
+  // Translates between Node's `req`/`res` and the pure request handler.
   return createServer(async (req, res) => {
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://localhost');
-      const isReadable = req.method === 'GET' || req.method === 'HEAD';
-      const includeBody = req.method !== 'HEAD';
+      const response = await handleRequest({ method: req.method, pathname, searchParams });
 
-      if (isReadable && pathname === '/api/worktrees') {
-        const worktrees = await getWorktrees();
-        respondJson(res, 200, worktrees, { includeBody });
-        return;
-      }
+      res.writeHead(response.status, response.headers);
 
-      if (isReadable && pathname === '/api/files') {
-        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
-        if (worktreePath === null) return;
-
-        const tree = await getTree(worktreePath, searchParams.get('ref') || 'HEAD');
-        respondJson(res, 200, tree, { includeBody });
-        return;
-      }
-
-      if (isReadable && pathname === '/api/watch') {
-        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
-        if (worktreePath === null) return;
-
-        // Server-sent events: a one-way push channel is all a change
-        // notification needs (README: "pushes change events to the
-        // frontend"), and it rides plain HTTP/GET, so it needs no extra
-        // dependency or upgrade handshake the way WebSocket would.
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream; charset=utf-8',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
-
-        if (!includeBody) {
-          // HEAD: confirm the endpoint exists without opening a live watcher.
-          res.end();
-          return;
-        }
-
+      if (response.stream) {
         // writeHead() alone only queues the status line/headers; without a
         // body write, Node won't put them on the wire until end() — which
         // never comes for a long-lived stream. Flush explicitly so the
         // client's connection is confirmed open right away.
         res.flushHeaders();
-
-        const watcher = watchWorktree(worktreePath, (paths) => {
-          res.write(formatChangeEvent(paths));
-        });
-
-        // One watcher per connection, scoped to that connection's worktree:
-        // the client re-opens this connection (closing the old one) when it
-        // switches worktrees, so tearing down here is all the re-scoping
-        // this MVP needs (see server/watcher.js's header comment).
-        req.on('close', () => {
-          watcher.close();
-        });
+        const cleanup = response.stream.subscribe((frame) => res.write(frame));
+        req.on('close', cleanup);
         return;
       }
 
-      if (isReadable && pathname === '/api/watch-worktrees') {
-        // A separate, worktree-independent SSE channel from `/api/watch`
-        // above: the worktree list itself isn't scoped to any one worktree,
-        // so it's opened once for the app's lifetime rather than re-opened
-        // per active worktree (#12).
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream; charset=utf-8',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
-
-        if (!includeBody) {
-          res.end();
-          return;
-        }
-
-        res.flushHeaders();
-
-        const unsubscribe = subscribeToWorktreeChanges({
-          onChange: (worktreeList) => {
-            res.write(formatWorktreeListEvent(worktreeList));
-          },
-          onError: (err) => {
-            res.write(formatPollErrorEvent(err));
-          },
-        });
-
-        req.on('close', () => {
-          unsubscribe();
-        });
-        return;
-      }
-
-      if (isReadable && pathname === '/api/file-content') {
-        const filePath = searchParams.get('file');
-        if (!filePath) {
-          respondJson(res, 400, { error: 'Missing "worktree" or "file" query param' }, { includeBody });
-          return;
-        }
-
-        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, {
-          includeBody,
-          missingError: 'Missing "worktree" or "file" query param',
-        });
-        if (worktreePath === null) return;
-
-        // Defense in depth: keep the resolved path inside the worktree even
-        // though callers are expected to pass paths from /api/files.
-        if (!isInsideWorktree(worktreePath, filePath)) {
-          respondJson(res, 403, { error: 'Forbidden' }, { includeBody });
-          return;
-        }
-
-        const ref = searchParams.get('ref') || 'HEAD';
-        const { head, working } = await getContent(worktreePath, filePath, ref);
-        if (head === null && working === null) {
-          respondJson(res, 404, { error: 'Not found' }, { includeBody });
-          return;
-        }
-
-        respondJson(res, 200, { path: filePath, head, working }, { includeBody });
-        return;
-      }
-
-      if (isReadable && pathname === '/api/commits') {
-        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
-        if (worktreePath === null) return;
-
-        const commits = await getCommits(worktreePath, searchParams.get('file') || null);
-        respondJson(res, 200, commits, { includeBody });
-        return;
-      }
-
-      if (isReadable) {
-        await serveStatic(res, pathname, { includeBody });
-        return;
-      }
-
-      respondJson(res, 404, { error: 'Not found' });
+      res.end(response.body);
     } catch (err) {
       console.error(err);
-      respondJson(res, 500, { error: 'Internal server error' });
+      const payload = JSON.stringify({ error: 'Internal server error' });
+      res.writeHead(500, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(payload),
+      });
+      res.end(payload);
     }
   });
-}
-
-// Reject missing and unknown worktrees before any route operates on a path.
-// file-content uses a different missing-param message to preserve its API.
-async function resolveWorktree(getWorktrees, searchParams, res, { includeBody, missingError = 'Missing "worktree" query param' }) {
-  const worktreePath = searchParams.get('worktree');
-  if (!worktreePath) {
-    respondJson(res, 400, { error: missingError }, { includeBody });
-    return null;
-  }
-
-  const worktrees = await getWorktrees();
-  if (!worktrees.some((worktree) => worktree.path === worktreePath)) {
-    respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
-    return null;
-  }
-
-  return worktreePath;
-}
-
-async function serveStatic(res, pathname, { includeBody = true } = {}) {
-  const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
-  const filePath = path.resolve(PUBLIC_DIR, relativePath);
-
-  // Keep resolved paths inside PUBLIC_DIR (defense in depth; the URL parser
-  // above already collapses `..` segments before we get here).
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    respondJson(res, 403, { error: 'Forbidden' }, { includeBody });
-    return;
-  }
-
-  try {
-    const data = await readFile(filePath);
-    const contentType = CONTENT_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': data.length });
-    res.end(includeBody ? data : undefined);
-  } catch {
-    respondJson(res, 404, { error: 'Not found' }, { includeBody });
-  }
-}
-
-function respondJson(res, status, body, { includeBody = true } = {}) {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload),
-  });
-  res.end(includeBody ? payload : undefined);
 }
