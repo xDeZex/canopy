@@ -902,6 +902,18 @@ test('GET /api/commits?file= still lists every commit when the file filter fails
   assert.deepEqual(renamed.map((c) => c.touchesFile), [true, true]);
 });
 
+test('GET /api/commits?file= matches the file name literally, not as a git pathspec', async (t) => {
+  const { dir, run } = await makeGitRepo(t);
+  await writeFile(path.join(dir, 'a.txt'), '1\n');
+  await run('add', '.');
+  await run('commit', '-qm', 'add a');
+
+  const { port, base } = await serveWorktree(t, dir);
+
+  const res = await get(port, `${base}&file=${encodeURIComponent('*.txt')}`);
+  assert.deepEqual(JSON.parse(res.body).map((c) => c.touchesFile), [false]);
+});
+
 test('GET /api/commits passes the requested file to an injected listCommits, and null when absent', async (t) => {
   const seen = [];
   const server = createApp({

@@ -111,7 +111,7 @@ export function createApp({
     try {
       const { stdout } = await execFileAsync(
         'git',
-        ['log', '--follow', '--pretty=format:%H', '--', file],
+        ['--literal-pathspecs', 'log', '--follow', '--pretty=format:%H', '--', file],
         { cwd: worktreePath },
       );
       return stdout.split('\n').filter(Boolean);
