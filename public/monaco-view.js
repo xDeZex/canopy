@@ -1,10 +1,8 @@
 // Client glue over Monaco's editor widgets — loaded from a CDN AMD build
 // (see the classic <script> tag in index.html) per the README's
 // no-build-step approach, same version validated in prototype/ui-layout's
-// throwaway UI (variant D). Thin third-party wiring; deliberately not unit
-// tested — see server/file-content.test.js and server/app.test.js for the
-// seam that is tested (fetching a file's HEAD/working content). Monaco
-// itself is left to manual/visual verification.
+// throwaway UI (variant D). The mounted controller is tested with a Monaco
+// stub; Monaco's rendering itself is left to manual/visual verification.
 
 let loaderReady = null;
 
@@ -45,7 +43,7 @@ const DIFF_MODE_OPTIONS = {
 
 // Mounts a full-file diff: HEAD content vs on-disk content. `mode` selects
 // the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'.
-// Returns a controller with `dispose()`.
+// Returns a controller with `dispose()`, `nextChange()` and `prevChange()`.
 export async function mountDiffEditor(container, { original, modified, language, mode = 'inline' }) {
   await ensureLoader();
 
@@ -66,7 +64,34 @@ export async function mountDiffEditor(container, { original, modified, language,
   const modifiedModel = monaco.editor.createModel(modified ?? '', language);
   editor.setModel({ original: originalModel, modified: modifiedModel });
 
+  // Monaco may still be computing the diff immediately after setModel().
+  // Start at the first/last hunk and keep navigation local to this mount;
+  // each call reads fresh hunks so a recomputed diff cannot leave a stale index.
+  let currentLine = null;
+  function navigate(direction) {
+    const changes = editor.getLineChanges();
+    if (!changes?.length) {
+      currentLine = null;
+      return;
+    }
+
+    const modifiedEditor = editor.getModifiedEditor();
+    const lastLine = modifiedEditor.getModel().getLineCount();
+    const lines = changes.map((change) => Math.min(lastLine, Math.max(1, change.modifiedStartLineNumber)));
+    let candidate = -1;
+    if (currentLine !== null) {
+      candidate = direction === 1
+        ? lines.findIndex((line) => line > currentLine)
+        : lines.findLastIndex((line) => line < currentLine);
+    }
+    const target = lines[candidate === -1 ? (direction === 1 ? 0 : lines.length - 1) : candidate];
+    currentLine = target;
+    modifiedEditor.revealLineInCenter(target);
+  }
+
   return {
+    nextChange() { navigate(1); },
+    prevChange() { navigate(-1); },
     dispose() {
       editor.dispose();
       originalModel.dispose();
@@ -76,7 +101,7 @@ export async function mountDiffEditor(container, { original, modified, language,
 }
 
 // Mounts a plain read-only full-file view (File mode). Returns a
-// controller with `dispose()`.
+// controller with `dispose()` only; File mode has no hunks to navigate.
 export async function mountEditor(container, { content, language }) {
   await ensureLoader();
 

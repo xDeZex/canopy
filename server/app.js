@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseWorktreeList } from './porcelain.js';
-import { parseStatus, buildFileTree } from './status.js';
+import { getChangedPaths, mergeFileStatuses, nestIntoTree } from './status.js';
 import { readFileContent } from './file-content.js';
 import { parseCommitLog, LOG_FORMAT } from './commits.js';
 import { watchWorktree as watchWorktreeReal } from './watcher.js';
@@ -91,15 +91,13 @@ export function createApp({
 
   const getTree =
     getFileTree ??
-    (async (worktreePath) => {
-      const [{ stdout: statusOut }, { stdout: lsOut }] = await Promise.all([
-        execFileAsync('git', ['status', '--porcelain', '--untracked-files=all'], {
-          cwd: worktreePath,
-        }),
-        execFileAsync('git', ['ls-files'], { cwd: worktreePath }),
+    (async (worktreePath, ref = 'HEAD') => {
+      const [changedPaths, { stdout: lsOut }] = await Promise.all([
+        getChangedPaths(worktreePath, ref),
+        execFileAsync('git', ['ls-files', '-z'], { cwd: worktreePath }),
       ]);
-      const trackedPaths = lsOut.split('\n').filter(Boolean);
-      return buildFileTree(trackedPaths, parseStatus(statusOut));
+      const trackedPaths = lsOut.split('\0').filter(Boolean);
+      return nestIntoTree(mergeFileStatuses(trackedPaths, changedPaths));
     });
 
   const getContent = getFileContent ?? readFileContent;
@@ -132,33 +130,17 @@ export function createApp({
       }
 
       if (isReadable && pathname === '/api/files') {
-        const worktreePath = searchParams.get('worktree');
-        if (!worktreePath) {
-          respondJson(res, 400, { error: 'Missing "worktree" query param' }, { includeBody });
-          return;
-        }
+        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
+        if (worktreePath === null) return;
 
-        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
-          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
-          return;
-        }
-
-        const tree = await getTree(worktreePath);
+        const tree = await getTree(worktreePath, searchParams.get('ref') || 'HEAD');
         respondJson(res, 200, tree, { includeBody });
         return;
       }
 
       if (isReadable && pathname === '/api/watch') {
-        const worktreePath = searchParams.get('worktree');
-        if (!worktreePath) {
-          respondJson(res, 400, { error: 'Missing "worktree" query param' }, { includeBody });
-          return;
-        }
-
-        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
-          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
-          return;
-        }
+        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
+        if (worktreePath === null) return;
 
         // Server-sent events: a one-way push channel is all a change
         // notification needs (README: "pushes change events to the
@@ -230,17 +212,17 @@ export function createApp({
       }
 
       if (isReadable && pathname === '/api/file-content') {
-        const worktreePath = searchParams.get('worktree');
         const filePath = searchParams.get('file');
-        if (!worktreePath || !filePath) {
+        if (!filePath) {
           respondJson(res, 400, { error: 'Missing "worktree" or "file" query param' }, { includeBody });
           return;
         }
 
-        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
-          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
-          return;
-        }
+        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, {
+          includeBody,
+          missingError: 'Missing "worktree" or "file" query param',
+        });
+        if (worktreePath === null) return;
 
         // Defense in depth: keep the resolved path inside the worktree even
         // though callers are expected to pass paths from /api/files.
@@ -263,16 +245,8 @@ export function createApp({
       }
 
       if (isReadable && pathname === '/api/commits') {
-        const worktreePath = searchParams.get('worktree');
-        if (!worktreePath) {
-          respondJson(res, 400, { error: 'Missing "worktree" query param' }, { includeBody });
-          return;
-        }
-
-        if (!(await isKnownWorktree(getWorktrees, worktreePath))) {
-          respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
-          return;
-        }
+        const worktreePath = await resolveWorktree(getWorktrees, searchParams, res, { includeBody });
+        if (worktreePath === null) return;
 
         const commits = await getCommits(worktreePath);
         respondJson(res, 200, commits, { includeBody });
@@ -292,13 +266,22 @@ export function createApp({
   });
 }
 
-// Shared by the /api/files, /api/file-content, /api/commits, and /api/watch
-// routes, each of which only accepts a `worktree` param that's one of the
-// real (or injected) worktrees, to guard against operating on an arbitrary
-// path.
-async function isKnownWorktree(getWorktrees, worktreePath) {
+// Reject missing and unknown worktrees before any route operates on a path.
+// file-content uses a different missing-param message to preserve its API.
+async function resolveWorktree(getWorktrees, searchParams, res, { includeBody, missingError = 'Missing "worktree" query param' }) {
+  const worktreePath = searchParams.get('worktree');
+  if (!worktreePath) {
+    respondJson(res, 400, { error: missingError }, { includeBody });
+    return null;
+  }
+
   const worktrees = await getWorktrees();
-  return worktrees.some((worktree) => worktree.path === worktreePath);
+  if (!worktrees.some((worktree) => worktree.path === worktreePath)) {
+    respondJson(res, 404, { error: 'Unknown worktree' }, { includeBody });
+    return null;
+  }
+
+  return worktreePath;
 }
 
 async function serveStatic(res, pathname, { includeBody = true } = {}) {

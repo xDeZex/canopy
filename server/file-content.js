@@ -46,7 +46,8 @@ async function readWorkingContent(worktreePath, filePath) {
   try {
     return await readFile(path.join(worktreePath, filePath), 'utf8');
   } catch (err) {
-    if (err.code === 'ENOENT') return null;
+    // A former directory can now be a file, blocking access to its deleted children.
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
     throw err;
   }
 }

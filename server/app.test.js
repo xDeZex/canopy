@@ -4,6 +4,9 @@ import { once } from 'node:events';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createApp } from './app.js';
 import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
@@ -229,22 +232,47 @@ test('GET /api/files returns this worktree\'s real file tree with live status', 
   assert.deepEqual(JSON.parse(res.body), expected);
 });
 
-test('GET /api/files without a worktree query param is a 400', async (t) => {
-  const { server, port } = await startServer();
+test('worktree-scoped routes reject missing and unknown paths before doing route work', async (t) => {
+  let listCalls = 0;
+  let routeCalls = 0;
+  const server = createApp({
+    listWorktrees: async () => {
+      listCalls++;
+      return [{ path: '/repos/canopy' }];
+    },
+    getFileTree: async () => { routeCalls++; return []; },
+    getFileContent: async () => { routeCalls++; return { head: '', working: '' }; },
+    listCommits: async () => { routeCalls++; return []; },
+    watchWorktree: () => { routeCalls++; return { close() {} }; },
+  });
+  server.listen(0);
+  await once(server, 'listening');
   t.after(() => server.close());
+  const { port } = server.address();
 
-  const res = await get(port, '/api/files');
+  for (const method of ['GET', 'HEAD']) {
+    for (const route of ['/api/files', '/api/watch', '/api/file-content?file=README.md', '/api/commits']) {
+      const separator = route.includes('?') ? '&' : '?';
+      const missingError = route.startsWith('/api/file-content')
+        ? 'Missing "worktree" or "file" query param'
+        : 'Missing "worktree" query param';
+      const before = listCalls;
+      const missing = await request(port, method, route);
+      assert.equal(missing.statusCode, 400, `${method} ${route}`);
+      assert.equal(missing.headers['content-type'], 'application/json; charset=utf-8');
+      assert.equal(missing.headers['content-length'], String(Buffer.byteLength(JSON.stringify({ error: missingError }))));
+      assert.equal(missing.body, method === 'HEAD' ? '' : JSON.stringify({ error: missingError }));
+      assert.equal(listCalls, before, 'missing worktree must not query worktrees');
 
-  assert.equal(res.statusCode, 400);
-});
-
-test('GET /api/files for an unknown worktree path is a 404', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(port, `/api/files?worktree=${encodeURIComponent('/nowhere')}`);
-
-  assert.equal(res.statusCode, 404);
+      const unknown = await request(port, method, `${route}${separator}worktree=${encodeURIComponent('/nowhere')}`);
+      assert.equal(unknown.statusCode, 404, `${method} ${route}`);
+      assert.equal(unknown.headers['content-type'], 'application/json; charset=utf-8');
+      assert.equal(unknown.headers['content-length'], String(Buffer.byteLength(JSON.stringify({ error: 'Unknown worktree' }))));
+      assert.equal(unknown.body, method === 'HEAD' ? '' : JSON.stringify({ error: 'Unknown worktree' }));
+      assert.equal(listCalls, before + 1, 'unknown worktree must query worktrees once');
+      assert.equal(routeCalls, 0, 'rejected requests must not start route work or SSE watchers');
+    }
+  }
 });
 
 test('GET /api/files serializes an injected file tree for the requested worktree', async (t) => {
@@ -279,6 +307,89 @@ test('GET /api/files serializes an injected file tree for the requested worktree
   assert.deepEqual(JSON.parse(res.body), tree);
 });
 
+test('GET /api/files forwards the ref and defaults to HEAD', async (t) => {
+  const calls = [];
+  const server = createApp({
+    listWorktrees: async () => [{ path: '/repos/canopy' }],
+    getFileTree: async (...args) => { calls.push(args); return []; },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const url = `/api/files?worktree=${encodeURIComponent('/repos/canopy')}`;
+  assert.equal((await get(server.address().port, url)).statusCode, 200);
+  assert.equal((await get(server.address().port, `${url}&ref=abc1234`)).statusCode, 200);
+  assert.deepEqual(calls, [['/repos/canopy', 'HEAD'], ['/repos/canopy', 'abc1234']]);
+});
+
+test('GET /api/files compares a real worktree against an older ref', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-files-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileAsync('git', args, { cwd: dir });
+  await run('init', '-q');
+  await writeFile(path.join(dir, 'before.txt'), 'before\n');
+  await run('add', '.');
+  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base');
+  const { stdout: base } = await run('rev-parse', 'HEAD');
+  await writeFile(path.join(dir, 'later.txt'), 'later\n');
+  await run('add', '.');
+  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'later');
+
+  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const url = `/api/files?worktree=${encodeURIComponent(dir)}`;
+  const current = await get(server.address().port, url);
+  const older = await get(server.address().port, `${url}&ref=${base.trim()}`);
+  assert.equal(current.statusCode, 200);
+  assert.equal(older.statusCode, 200);
+  assert.deepEqual(JSON.parse(current.body), [
+    { name: 'before.txt', type: 'file', path: 'before.txt', status: 'clean' },
+    { name: 'later.txt', type: 'file', path: 'later.txt', status: 'clean' },
+  ]);
+  assert.deepEqual(JSON.parse(older.body), [
+    { name: 'before.txt', type: 'file', path: 'before.txt', status: 'clean' },
+    { name: 'later.txt', type: 'file', path: 'later.txt', status: 'added' },
+  ]);
+});
+
+test('deleted tracked child remains readable when its directory is replaced by an untracked file', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-files-collision-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileAsync('git', args, { cwd: dir });
+  await run('init', '-q');
+  await mkdir(path.join(dir, 'foo'));
+  await writeFile(path.join(dir, 'foo/bar.txt'), 'old\n');
+  await run('add', '.');
+  await run('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base');
+  await rm(path.join(dir, 'foo'), { recursive: true });
+  await writeFile(path.join(dir, 'foo'), 'new\n');
+
+  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+
+  const res = await get(server.address().port, `/api/files?worktree=${encodeURIComponent(dir)}`);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), [
+    {
+      name: 'foo', type: 'dir', path: 'foo', children: [
+        { name: 'bar.txt', type: 'file', path: 'foo/bar.txt', status: 'deleted' },
+      ],
+    },
+    { name: 'foo', type: 'file', path: 'foo', status: 'added' },
+  ]);
+
+  const content = { head: 'old\n', working: null };
+  assert.deepEqual(await readFileContent(dir, 'foo/bar.txt'), content);
+  const contentRes = await get(server.address().port,
+    `/api/file-content?worktree=${encodeURIComponent(dir)}&file=${encodeURIComponent('foo/bar.txt')}`);
+  assert.equal(contentRes.statusCode, 200);
+  assert.deepEqual(JSON.parse(contentRes.body), { path: 'foo/bar.txt', ...content });
+});
+
 test('GET /api/file-content returns this worktree\'s real HEAD and working content for a clean file', async (t) => {
   const { server, port } = await startServer();
   t.after(() => server.close());
@@ -302,34 +413,26 @@ test('GET /api/file-content returns this worktree\'s real HEAD and working conte
   assert.equal(expected.head, expected.working, 'expected README.md to be clean (no local edits)');
 });
 
-test('GET /api/file-content without a worktree query param is a 400', async (t) => {
-  const { server, port } = await startServer();
+test('GET /api/file-content checks a missing file before resolving the worktree', async (t) => {
+  let listCalls = 0;
+  const server = createApp({
+    listWorktrees: async () => {
+      listCalls++;
+      return [];
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
   t.after(() => server.close());
 
-  const res = await get(port, '/api/file-content?file=README.md');
+  for (const query of ['', `?worktree=${encodeURIComponent('/nowhere')}`]) {
+    const res = await get(port, `/api/file-content${query}`);
 
-  assert.equal(res.statusCode, 400);
-});
-
-test('GET /api/file-content without a file query param is a 400', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(port, `/api/file-content?worktree=${encodeURIComponent('/repos/canopy')}`);
-
-  assert.equal(res.statusCode, 400);
-});
-
-test('GET /api/file-content for an unknown worktree path is a 404', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(
-    port,
-    `/api/file-content?worktree=${encodeURIComponent('/nowhere')}&file=${encodeURIComponent('README.md')}`
-  );
-
-  assert.equal(res.statusCode, 404);
+    assert.equal(res.statusCode, 400);
+    assert.deepEqual(JSON.parse(res.body), { error: 'Missing "worktree" or "file" query param' });
+  }
+  assert.equal(listCalls, 0);
 });
 
 test('GET /api/file-content serializes injected content for the requested worktree and file', async (t) => {
@@ -432,24 +535,6 @@ test('GET /api/file-content without a ref param defaults to HEAD', async (t) => 
   );
 
   assert.equal(res.statusCode, 200);
-});
-
-test('GET /api/watch without a worktree query param is a 400', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(port, '/api/watch');
-
-  assert.equal(res.statusCode, 400);
-});
-
-test('GET /api/watch for an unknown worktree path is a 404', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(port, `/api/watch?worktree=${encodeURIComponent('/nowhere')}`);
-
-  assert.equal(res.statusCode, 404);
 });
 
 test('HEAD /api/watch returns SSE headers without opening a watcher', async (t) => {
@@ -728,24 +813,6 @@ test('GET /api/commits returns this worktree\'s real commit history as JSON', as
   assert.match(res.headers['content-type'], /application\/json/);
   assert.deepEqual(JSON.parse(res.body), expected);
   assert.ok(expected.length >= 1, 'expected at least one commit in this repo');
-});
-
-test('GET /api/commits without a worktree query param is a 400', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(port, '/api/commits');
-
-  assert.equal(res.statusCode, 400);
-});
-
-test('GET /api/commits for an unknown worktree path is a 404', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  const res = await get(port, `/api/commits?worktree=${encodeURIComponent('/nowhere')}`);
-
-  assert.equal(res.statusCode, 404);
 });
 
 test('GET /api/commits serializes an injected commit list for the requested worktree', async (t) => {

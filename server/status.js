@@ -1,11 +1,54 @@
-// Parses `git status --porcelain --untracked-files=all` output into a flat
-// list of changed paths with a normalized status, and merges that with a
-// full tracked-file listing (`git ls-files`) into a nested file tree.
+// Acquires changed paths from porcelain (HEAD) or a ref diff, then merges
+// them with `git ls-files` for flat and nested views.
 //
 // Porcelain v1 short format: each line is a two-character XY status code, a
 // space, then the path (`old -> new` for renames). `--untracked-files=all`
 // makes untracked directories expand to their individual files, so no
 // separate directory walk is needed. See `git status --help`.
+
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+export async function getChangedPaths(worktreePath, ref = 'HEAD') {
+  if (ref === 'HEAD') {
+    const { stdout } = await execFileAsync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: worktreePath,
+    });
+    return parseStatus(stdout);
+  }
+
+  // Resolve before using the ref as a diff argument: even a caller-supplied
+  // value beginning with '-' cannot become a git option. Invalid refs fail.
+  const { stdout: resolved } = await execFileAsync('git', ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
+    cwd: worktreePath,
+  });
+  const [{ stdout: diff }, { stdout: untracked }] = await Promise.all([
+    execFileAsync('git', ['diff', '--no-ext-diff', '--name-status', '-z', resolved.trim(), '--'], {
+      cwd: worktreePath,
+    }),
+    execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: worktreePath }),
+  ]);
+  return [
+    ...parseNameStatus(diff),
+    ...untracked.split('\0').filter(Boolean).map((path) => ({ path, status: 'added' })),
+  ];
+}
+
+// `git diff --name-status -z`: status and path are separate NUL fields;
+// rename/copy records have one extra (old) path field.
+export function parseNameStatus(output) {
+  const fields = output.split('\0');
+  const entries = [];
+  for (let i = 0; i < fields.length - 1;) {
+    const code = fields[i++];
+    const firstPath = fields[i++];
+    const path = /^[RC]/.test(code) ? fields[i++] : firstPath;
+    entries.push({ path, status: normalizeStatus(code) });
+  }
+  return entries;
+}
 
 export function parseStatus(output) {
   const trimmed = output.replace(/\r?\n$/, '');
@@ -29,18 +72,28 @@ function normalizeStatus(code) {
   return 'modified';
 }
 
-// Merges the full set of tracked paths (from `git ls-files`) with the
-// (possibly empty) set of changed paths from `parseStatus` into a nested
-// file tree. Tracked paths with no matching status entry are clean; status
-// entries not present in `trackedPaths` are untracked additions.
-export function buildFileTree(trackedPaths, statusEntries) {
+// Tracked paths with no matching status entry are clean; status entries not
+// present in `trackedPaths` are included too (e.g. untracked additions).
+export function mergeFileStatuses(trackedPaths, statusEntries) {
   const statusByPath = new Map(statusEntries.map((entry) => [entry.path, entry.status]));
   const allPaths = new Set([...trackedPaths, ...statusByPath.keys()]);
 
+  return [...allPaths]
+    .sort((a, b) => a.localeCompare(b))
+    .map((path) => ({ path, status: statusByPath.get(path) ?? 'clean' }));
+}
+
+// The merged entries are already sorted by full path.
+export function listChangedFiles(mergedEntries) {
+  return mergedEntries.filter((entry) => entry.status !== 'clean');
+}
+
+// Nest the flat view into the existing dirs-before-files tree shape.
+export function nestIntoTree(mergedEntries) {
   const root = new Map();
 
-  for (const filePath of allPaths) {
-    const segments = filePath.split('/');
+  for (const { path, status } of mergedEntries) {
+    const segments = path.split('/');
     let level = root;
     let prefix = '';
 
@@ -48,20 +101,28 @@ export function buildFileTree(trackedPaths, statusEntries) {
       prefix = prefix ? `${prefix}/${segment}` : segment;
       const isFile = i === segments.length - 1;
 
-      if (!level.has(segment)) {
+      // Git can report both a deleted tracked child (foo/bar) and an added
+      // untracked file (foo). They have the same name/path but need separate
+      // nodes so neither status is lost.
+      const key = `${isFile ? 'file' : 'dir'}:${segment}`;
+      if (!level.has(key)) {
         level.set(
-          segment,
+          key,
           isFile
-            ? { name: segment, type: 'file', path: prefix, status: statusByPath.get(prefix) ?? 'clean' }
+            ? { name: segment, type: 'file', path: prefix, status }
             : { name: segment, type: 'dir', path: prefix, childMap: new Map() }
         );
       }
 
-      if (!isFile) level = level.get(segment).childMap;
+      if (!isFile) level = level.get(key).childMap;
     });
   }
 
   return toSortedArray(root);
+}
+
+export function buildFileTree(trackedPaths, statusEntries) {
+  return nestIntoTree(mergeFileStatuses(trackedPaths, statusEntries));
 }
 
 function toSortedArray(levelMap) {
