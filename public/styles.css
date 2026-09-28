@@ -378,6 +378,14 @@ body {
   background: var(--bg-3);
 }
 
+.commit-picker__item--touches-file {
+  box-shadow: inset 3px 0 0 var(--modified);
+}
+
+.commit-picker__item--touches-file .commit-picker__item-sha {
+  color: var(--modified);
+}
+
 .commit-picker__item--error {
   color: var(--deleted);
   cursor: default;

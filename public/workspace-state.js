@@ -25,6 +25,11 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     return res.json();
   }
 
+  // Optional `&name=value` query fragment.
+  function param(name, value) {
+    return value ? `&${name}=${encodeURIComponent(value)}` : '';
+  }
+
   function clearFile() {
     activeFile = null;
     fileContent = null;
@@ -66,9 +71,8 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       return;
     }
     const lockedSha = commitLock.getLockedCommit(path);
-    const refParam = lockedSha ? `&ref=${encodeURIComponent(lockedSha)}` : '';
     try {
-      const tree = await fetchJson(`/api/files?worktree=${encodeURIComponent(path)}${refParam}`);
+      const tree = await fetchJson(`/api/files?worktree=${encodeURIComponent(path)}${param('ref', lockedSha)}`);
       if (generation !== treeRequest) return;
       fileTree = tree;
       fileTreeError = null;
@@ -96,13 +100,14 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   async function loadCommits() {
     const generation = ++commitsRequest;
     const path = activePath;
+    const file = activeFile;
     if (!path) {
       commits = [];
       commitsError = null;
       return;
     }
     try {
-      const result = await fetchJson(`/api/commits?worktree=${encodeURIComponent(path)}`);
+      const result = await fetchJson(`/api/commits?worktree=${encodeURIComponent(path)}${param('file', file)}`);
       if (generation !== commitsRequest) return;
       commits = result;
       commitsError = null;
@@ -120,10 +125,9 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     const path = activePath;
     const file = activeFile;
     const lockedSha = commitLock.getLockedCommit(path);
-    const refParam = lockedSha ? `&ref=${encodeURIComponent(lockedSha)}` : '';
     try {
       const content = await fetchJson(
-        `/api/file-content?worktree=${encodeURIComponent(path)}&file=${encodeURIComponent(file)}${refParam}`
+        `/api/file-content?worktree=${encodeURIComponent(path)}${param('file', file)}${param('ref', lockedSha)}`
       );
       if (generation !== contentRequest) return;
       fileContent = content;
@@ -159,9 +163,12 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       if (treeResolved && file) viewModeStore.seed(fileStatusByPath.get(file));
       fileContent = null;
       fileContentError = null;
+      // Marks belong to the previous file; drop them until this file's commits load.
+      commits = commits.map(({ touchesFile, ...commit }) => commit);
       onChange('rail');
       onChange('toolbar');
       onChange('main');
+      loadCommits();
       return loadFileContent();
     },
     remoteChange(paths) {
