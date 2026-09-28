@@ -315,3 +315,22 @@ test('opening a file refetches commits for that file; with no file open they are
   await f.reply(commitsRequest, [{ sha: 'abc', message: 'm', touchesFile: true }]);
   assert.deepEqual(f.store.getState().commits, [{ sha: 'abc', message: 'm', touchesFile: true }]);
 });
+
+test('marks from the previous file never linger on commits while the next file\'s commits load', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('one');
+  await f.reply(f.fileCommitRequests[0], [{ sha: 'abc', message: 'm', touchesFile: true }]);
+  f.store.selectFile('two');
+  assert.deepEqual(f.store.getState().commits, [{ sha: 'abc', message: 'm' }], 'stale marks dropped, commit kept');
+});
+
+test('deselecting the file refetches unmarked commits', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('one');
+  const before = f.requests.length;
+  f.store.selectFile(null);
+  assert.equal(f.requests.length, before + 1);
+  assert.equal(f.requests.at(-1).url, '/api/commits?worktree=%2Fa');
+});

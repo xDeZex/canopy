@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseWorktreeList } from './porcelain.js';
 import { getChangedPaths, mergeFileStatuses, nestIntoTree } from './status.js';
 import { readFileContent } from './file-content.js';
-import { parseCommitLog, LOG_FORMAT } from './commits.js';
+import { parseCommitLog, markTouching, LOG_FORMAT } from './commits.js';
 import { watchWorktree as watchWorktreeReal } from './watcher.js';
 import { pollWorktrees } from './worktree-watch.js';
 
@@ -24,7 +24,9 @@ const CONTENT_TYPES = {
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
 // `listWorktrees`, `getFileTree`, `getFileContent`, `listCommits`, and
 // `watchWorktree` can be injected to bypass the real `git`/filesystem-
-// watching calls.
+// watching calls. An injected `listCommits(worktreePath, file)` receives the
+// open file (or null) and should set `touchesFile` on each commit only when
+// a file is given (see `markTouching`).
 export function createApp({
   repoRoot = process.cwd(),
   listWorktrees,
@@ -102,29 +104,32 @@ export function createApp({
 
   const getContent = getFileContent ?? readFileContent;
 
+  // Shas of commits that touched `file` (following renames), or null when the
+  // filter fails (e.g. a path outside the worktree): that must only cost the
+  // marking, never the commit list itself.
+  async function shasTouching(worktreePath, file) {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['log', '--follow', '--pretty=format:%H', '--', file],
+        { cwd: worktreePath },
+      );
+      return stdout.split('\n').filter(Boolean);
+    } catch {
+      return null;
+    }
+  }
+
   const getCommits =
     listCommits ??
     (async (worktreePath, file) => {
       try {
-        const { stdout } = await execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], {
-          cwd: worktreePath,
-        });
+        const [{ stdout }, touching] = await Promise.all([
+          execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], { cwd: worktreePath }),
+          file ? shasTouching(worktreePath, file) : null,
+        ]);
         const commits = parseCommitLog(stdout);
-        if (!file) return commits;
-        // A failed filter (e.g. a path outside the worktree) must only cost
-        // the marking, never the commit list itself.
-        let touching = '';
-        try {
-          ({ stdout: touching } = await execFileAsync(
-            'git',
-            ['log', '--follow', '--pretty=format:%H', '--', file],
-            { cwd: worktreePath },
-          ));
-        } catch {
-          return commits;
-        }
-        const touched = new Set(touching.split('\n').filter(Boolean));
-        return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
+        return touching ? markTouching(commits, touching) : commits;
       } catch {
         // `git log` exits non-zero for a repo with no commits yet; treat
         // that the same as "no commit history" rather than an error.

@@ -22,6 +22,24 @@ async function startServer() {
   return { server, port: server.address().port };
 }
 
+// A throwaway git repo (removed after the test) plus a `run(...git args)` helper.
+async function makeGitRepo(t) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-commits-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileAsync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: dir });
+  await run('init', '-q');
+  return { dir, run };
+}
+
+// Serves `dir` as the only worktree; returns the port and the commits URL.
+async function serveWorktree(t, dir) {
+  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  return { port: server.address().port, base: `/api/commits?worktree=${encodeURIComponent(dir)}` };
+}
+
 function request(port, method, requestPath) {
   return new Promise((resolve, reject) => {
     http
@@ -841,10 +859,7 @@ test('GET /api/commits serializes an injected commit list for the requested work
 });
 
 test('GET /api/commits?file= marks commits that touched the file, keeping every commit in order', async (t) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-commits-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (...args) => execFileAsync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: dir });
-  await run('init', '-q');
+  const { dir, run } = await makeGitRepo(t);
   await writeFile(path.join(dir, 'a.txt'), '1\n');
   await writeFile(path.join(dir, 'b.txt'), '1\n');
   await run('add', '.');
@@ -854,13 +869,9 @@ test('GET /api/commits?file= marks commits that touched the file, keeping every 
   await writeFile(path.join(dir, 'a.txt'), '2\n');
   await run('commit', '-qam', 'edit a');
 
-  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
-  server.listen(0);
-  await once(server, 'listening');
-  t.after(() => server.close());
-  const base = `/api/commits?worktree=${encodeURIComponent(dir)}`;
+  const { port, base } = await serveWorktree(t, dir);
 
-  const res = await get(server.address().port, `${base}&file=a.txt`);
+  const res = await get(port, `${base}&file=a.txt`);
   const commits = JSON.parse(res.body);
   assert.deepEqual(commits.map((c) => [c.message, c.touchesFile]), [
     ['edit a', true],
@@ -868,32 +879,42 @@ test('GET /api/commits?file= marks commits that touched the file, keeping every 
     ['add both', true],
   ]);
 
-  const unmarked = JSON.parse((await get(server.address().port, base)).body);
+  const unmarked = JSON.parse((await get(port, base)).body);
   assert.deepEqual(unmarked.map((c) => c.message), ['edit a', 'edit b', 'add both']);
   assert.ok(unmarked.every((c) => !('touchesFile' in c)), 'no file open means no marking');
 });
 
 test('GET /api/commits?file= still lists every commit when the file filter fails, and follows renames', async (t) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-commits-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (...args) => execFileAsync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: dir });
-  await run('init', '-q');
+  const { dir, run } = await makeGitRepo(t);
   await writeFile(path.join(dir, 'old.txt'), 'some content\nmore lines\n');
   await run('add', '.');
   await run('commit', '-qm', 'add old');
   await run('mv', 'old.txt', 'new.txt');
   await run('commit', '-qm', 'rename');
 
-  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
-  server.listen(0);
-  await once(server, 'listening');
-  t.after(() => server.close());
-  const base = `/api/commits?worktree=${encodeURIComponent(dir)}`;
+  const { port, base } = await serveWorktree(t, dir);
 
-  const outside = JSON.parse((await get(server.address().port, `${base}&file=${encodeURIComponent('../outside')}`)).body);
+  const outside = JSON.parse((await get(port, `${base}&file=${encodeURIComponent('../outside')}`)).body);
   assert.deepEqual(outside.map((c) => c.message), ['rename', 'add old']);
   assert.ok(outside.every((c) => !c.touchesFile));
 
-  const renamed = JSON.parse((await get(server.address().port, `${base}&file=new.txt`)).body);
+  const renamed = JSON.parse((await get(port, `${base}&file=new.txt`)).body);
   assert.deepEqual(renamed.map((c) => c.touchesFile), [true, true]);
+});
+
+test('GET /api/commits passes the requested file to an injected listCommits, and null when absent', async (t) => {
+  const seen = [];
+  const server = createApp({
+    listWorktrees: async () => [{ path: '/repos/canopy' }],
+    listCommits: async (worktreePath, file) => { seen.push(file); return []; },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const base = `/api/commits?worktree=${encodeURIComponent('/repos/canopy')}`;
+
+  await get(server.address().port, `${base}&file=src%2Fx.js`);
+  await get(server.address().port, base);
+
+  assert.deepEqual(seen, ['src/x.js', null]);
 });
