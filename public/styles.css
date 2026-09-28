@@ -136,8 +136,36 @@ body {
   flex-shrink: 0;
   background: var(--bg-1);
   border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0 0;
+  overflow: hidden;
+}
+
+.rail__tree {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 8px 0;
+}
+
+/* Pinned below the tree so changed files stay visible (#22). */
+.changed-files {
+  flex-shrink: 0;
+  max-height: 40%;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.changed-files__heading {
+  color: var(--fg-dim);
+  font-size: 11px;
+  padding: 6px 10px 2px;
+}
+
+.changed-files__empty {
+  color: var(--fg-dim);
+  padding: 4px 10px;
 }
 
 .rail__message {
@@ -197,6 +225,13 @@ body {
 .rail__file.status-deleted {
   color: var(--deleted);
   text-decoration: line-through;
+}
+
+/* Changed-files rows show the full path, so wrap rather than truncate the
+   filename off the end. Reuses .rail__file's colors and highlight. */
+.rail__file.changed-files__file {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Main content ---------- */

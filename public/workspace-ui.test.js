@@ -188,3 +188,53 @@ test('with no file open the commit dropdown applies no marking', async () => {
   assert.equal(items.length, 2);
   assert.ok(items.every((i) => !i.classList.contains('commit-picker__item--touches-file')));
 });
+
+test('changed-files list shows full paths sorted, status-colored, and opens a file on click', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[0], [
+    { type: 'dir', name: 'src', path: 'src', children: [
+      { type: 'file', name: 'b.js', path: 'src/b.js', status: 'deleted' },
+      { type: 'file', name: 'ok.js', path: 'src/ok.js', status: 'clean' },
+    ] },
+    { type: 'file', name: 'a.txt', path: 'a.txt', status: 'added' },
+  ]);
+
+  const rows = f.railEl.querySelectorAll('.changed-files__file');
+  assert.deepEqual(rows.map((row) => row.textContent), ['a.txt', 'src/b.js']);
+  assert.equal(rows[0].classList.contains('status-added'), true);
+  assert.equal(rows[1].classList.contains('status-deleted'), true);
+
+  rows[1].click();
+  assert.equal(f.workspace.getState().activeFile, 'src/b.js');
+});
+
+test('changed-files list stays visible with an empty state when nothing changed, the tree is empty, or loading failed', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[0], [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'clean' }]);
+  assert.equal(f.railEl.querySelector('.changed-files__empty').textContent, 'No changed files');
+
+  f.workspace.remoteChange([]);
+  await f.reply(f.requests.at(-1), []);
+  assert.equal(f.railEl.querySelector('.rail__message').textContent, 'No files.');
+  assert.equal(f.railEl.querySelector('.changed-files__empty').textContent, 'No changed files');
+
+  f.workspace.remoteChange([]);
+  f.requests.at(-1).resolve({ ok: false, status: 503 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(f.railEl.querySelector('.rail__message').textContent, /^Failed to load files/);
+  assert.equal(f.railEl.querySelector('.changed-files__empty').textContent, 'No changed files');
+});
+
+test('changed-files list updates when a watcher event refetches the tree', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[0], [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'clean' }]);
+  assert.equal(f.railEl.querySelectorAll('.changed-files__file').length, 0);
+
+  f.workspace.remoteChange(['a.txt']);
+  await f.reply(f.requests.at(-1), [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }]);
+  assert.deepEqual(f.railEl.querySelectorAll('.changed-files__file').map((row) => row.textContent), ['a.txt']);
+  assert.equal(f.railEl.querySelector('.changed-files__empty'), null);
+});

@@ -1,3 +1,5 @@
+import { changedFiles } from './changed-files.js';
+
 // DOM controls for the workspace: the tab bar, the file rail and the viewer
 // toolbar (commit picker, Diff/File toggle #5, diff render modes #6, per
 // worktree tree expansion #13, tab-bar scroll affordance #14). The editor and
@@ -88,26 +90,61 @@ export function createWorkspaceUI({
       return group;
     }
 
-    const file = document.createElement('div');
-    const { activeFile } = workspace.getState();
-    file.className = `rail__file status-${node.status}${node.path === activeFile ? ' is-active' : ''}`;
-    file.title = node.path;
-    file.textContent = node.name;
+    const file = renderFileRow(node, node.name, 'rail__file');
     file.style.paddingLeft = `${depth * 12 + 10}px`;
-    file.addEventListener('click', () => workspace.selectFile(node.path));
     return file;
   }
 
+  // A clickable file row, shared by the tree and the changed-files list so
+  // status colors, the active highlight and click-to-open stay identical.
+  function renderFileRow(node, label, className) {
+    const { activeFile } = workspace.getState();
+    const row = document.createElement('div');
+    row.className = `${className} status-${node.status}${node.path === activeFile ? ' is-active' : ''}`;
+    row.title = node.path;
+    row.textContent = label;
+    row.addEventListener('click', () => workspace.selectFile(node.path));
+    return row;
+  }
+
+  function renderChangedFiles() {
+    const { fileTree } = workspace.getState();
+    const section = document.createElement('div');
+    section.className = 'changed-files';
+    const heading = document.createElement('div');
+    heading.className = 'changed-files__heading';
+    heading.textContent = 'Changed files';
+    const changed = changedFiles(fileTree);
+    section.append(heading);
+    if (changed.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'changed-files__empty';
+      empty.textContent = 'No changed files';
+      section.append(empty);
+    } else {
+      section.append(...changed.map((node) => renderFileRow(node, node.path, 'rail__file changed-files__file')));
+    }
+    return section;
+  }
+
+  // The changed-files list is always mounted below the tree, including when
+  // the tree is empty or failed to load.
   function renderRail() {
     const { fileTree, fileTreeError } = workspace.getState();
     if (fileTreeError || fileTree.length === 0) {
       const message = document.createElement('p');
       message.className = 'empty rail__message';
       message.textContent = fileTreeError ? `Failed to load files: ${fileTreeError.message}` : 'No files.';
-      railEl.replaceChildren(message);
+      const tree = document.createElement('div');
+      tree.className = 'rail__tree';
+      tree.append(message);
+      railEl.replaceChildren(tree, renderChangedFiles());
       return;
     }
-    railEl.replaceChildren(...fileTree.map((node) => renderNode(node, 0)));
+    const tree = document.createElement('div');
+    tree.className = 'rail__tree';
+    tree.append(...fileTree.map((node) => renderNode(node, 0)));
+    railEl.replaceChildren(tree, renderChangedFiles());
   }
 
   // Re-fetch the tree regardless of whether a file is open; the selected
