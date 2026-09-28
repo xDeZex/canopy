@@ -1,14 +1,11 @@
 import { createServer } from 'node:http';
-import { runGit } from './git.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseWorktreeList, selectedFirst } from './porcelain.js';
-import { getFileTree as getFileTreeReal } from './status.js';
-import { readFileContent } from './file-content.js';
-import { listCommits as listCommitsReal } from './commits.js';
-import { watchWorktree as watchWorktreeReal } from './watcher.js';
+import { createListWorktrees, defaultDeps } from './default-deps.js';
 import { pollWorktrees } from './worktree-watch.js';
+import { createFanOut } from './fan-out.js';
+import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from './route-logic.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -30,15 +27,10 @@ export function createApp({
   getFileTree,
   getFileContent,
   listCommits,
-  watchWorktree = watchWorktreeReal,
+  watchWorktree = defaultDeps.watchWorktree,
   watchWorktreeList,
 } = {}) {
-  const getWorktrees =
-    listWorktrees ??
-    (async () => {
-      const stdout = await runGit(['worktree', 'list', '--porcelain'], repoRoot);
-      return selectedFirst(parseWorktreeList(stdout), repoRoot);
-    });
+  const getWorktrees = listWorktrees ?? createListWorktrees(repoRoot);
 
   // Defaults to polling `getWorktrees` itself (see worktree-watch.js for why
   // polling rather than a filesystem watch), so an injected `listWorktrees`
@@ -46,45 +38,12 @@ export function createApp({
   const watchWorktrees =
     watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, options));
 
-  // Fans one underlying poll out to every open `/api/watch-worktrees`
-  // connection instead of starting a new `watchWorktrees` (and, by default,
-  // a new `git worktree list` poll loop) per connection: without this, each
-  // open browser tab — or each EventSource auto-reconnect — would multiply
-  // the poll's process-spawn cost indefinitely. The poll starts on the first
-  // subscriber and stops when the last one disconnects.
-  let worktreesFanOut = null;
+  // Shares one poll across every open `/api/watch-worktrees` connection.
+  const subscribeToWorktreeChanges = createFanOut(watchWorktrees);
 
-  function subscribeToWorktreeChanges({ onChange, onError }) {
-    if (!worktreesFanOut) {
-      const subscribers = new Set();
-      const poll = watchWorktrees(
-        (worktreeList) => {
-          for (const subscriber of subscribers) subscriber.onChange(worktreeList);
-        },
-        {
-          onError: (err) => {
-            for (const subscriber of subscribers) subscriber.onError?.(err);
-          },
-        }
-      );
-      worktreesFanOut = { poll, subscribers };
-    }
-
-    const subscriber = { onChange, onError };
-    worktreesFanOut.subscribers.add(subscriber);
-
-    return () => {
-      worktreesFanOut.subscribers.delete(subscriber);
-      if (worktreesFanOut.subscribers.size === 0) {
-        worktreesFanOut.poll.close();
-        worktreesFanOut = null;
-      }
-    };
-  }
-
-  const getTree = getFileTree ?? getFileTreeReal;
-  const getContent = getFileContent ?? readFileContent;
-  const getCommits = listCommits ?? listCommitsReal;
+  const getTree = getFileTree ?? defaultDeps.getFileTree;
+  const getContent = getFileContent ?? defaultDeps.getFileContent;
+  const getCommits = listCommits ?? defaultDeps.listCommits;
 
   return createServer(async (req, res) => {
     try {
@@ -134,7 +93,7 @@ export function createApp({
         res.flushHeaders();
 
         const watcher = watchWorktree(worktreePath, (paths) => {
-          res.write(`data: ${JSON.stringify({ paths })}\n\n`);
+          res.write(formatChangeEvent(paths));
         });
 
         // One watcher per connection, scoped to that connection's worktree:
@@ -167,10 +126,10 @@ export function createApp({
 
         const unsubscribe = subscribeToWorktreeChanges({
           onChange: (worktreeList) => {
-            res.write(`data: ${JSON.stringify(worktreeList)}\n\n`);
+            res.write(formatWorktreeListEvent(worktreeList));
           },
           onError: (err) => {
-            res.write(`event: worktree-poll-error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+            res.write(formatPollErrorEvent(err));
           },
         });
 
@@ -195,9 +154,7 @@ export function createApp({
 
         // Defense in depth: keep the resolved path inside the worktree even
         // though callers are expected to pass paths from /api/files.
-        const worktreeRoot = path.resolve(worktreePath);
-        const resolvedPath = path.resolve(worktreeRoot, filePath);
-        if (resolvedPath !== worktreeRoot && !resolvedPath.startsWith(worktreeRoot + path.sep)) {
+        if (!isInsideWorktree(worktreePath, filePath)) {
           respondJson(res, 403, { error: 'Forbidden' }, { includeBody });
           return;
         }
