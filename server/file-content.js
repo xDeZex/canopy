@@ -26,6 +26,19 @@ export async function readFileContent(worktreePath, filePath, ref = 'HEAD') {
   return { head, working };
 }
 
+// `git show` exits 128 both when the path has no version at `ref` (new/untracked
+// file, or a ref that predates the file) and when `ref` itself doesn't resolve
+// (e.g. HEAD in a repo with no commits yet). Either way, there's no content to
+// show for that side. Anything else (git missing, output too large) is real.
+export function isMissingRefSide(err) {
+  return err?.code === 128;
+}
+
+// A former directory can now be a file, blocking access to its deleted children.
+export function isMissingWorkingSide(err) {
+  return err?.code === 'ENOENT' || err?.code === 'ENOTDIR';
+}
+
 async function readRefContent(worktreePath, filePath, ref) {
   try {
     const { stdout } = await execFileAsync('git', ['show', `${ref}:${filePath}`], {
@@ -33,12 +46,9 @@ async function readRefContent(worktreePath, filePath, ref) {
       maxBuffer: 1024 * 1024 * 32,
     });
     return stdout;
-  } catch {
-    // `git show` exits non-zero both when the path has no version at `ref`
-    // (new/untracked file, or a ref that predates the file) and when `ref`
-    // itself doesn't resolve (e.g. HEAD in a repo with no commits yet).
-    // Either way, there's no content to show for that side.
-    return null;
+  } catch (err) {
+    if (isMissingRefSide(err)) return null;
+    throw err;
   }
 }
 
@@ -46,8 +56,7 @@ async function readWorkingContent(worktreePath, filePath) {
   try {
     return await readFile(path.join(worktreePath, filePath), 'utf8');
   } catch (err) {
-    // A former directory can now be a file, blocking access to its deleted children.
-    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
+    if (isMissingWorkingSide(err)) return null;
     throw err;
   }
 }
