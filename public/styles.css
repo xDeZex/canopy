@@ -230,13 +230,39 @@ body {
 }
 
 .viewer__toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.viewer__toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.view-toggle--diff {
+  justify-self: end;
+}
+
+@media (max-width: 900px) {
+  .viewer__toolbar-left {
+    grid-column: 1 / -1;
+  }
+
+  .view-toggle--mode {
+    grid-column: 2;
+  }
+
+  .view-toggle--diff {
+    grid-column: 1 / -1;
+    justify-self: center;
+  }
 }
 
 .viewer__toolbar[hidden],

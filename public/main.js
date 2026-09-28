@@ -317,12 +317,15 @@ function createToolbar() {
   const toolbar = document.createDocumentFragment();
   const pathLabel = document.createElement('span');
   pathLabel.className = 'viewer__path';
+  const left = document.createElement('div');
+  left.className = 'viewer__toolbar-left';
+  left.append(pathLabel, renderCommitPicker());
 
   const toggle = document.createElement('div');
   toggle.className = 'view-toggle view-toggle--mode';
   toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
 
-  toolbar.append(pathLabel, renderCommitPicker(), toggle, renderDiffModeToggle());
+  toolbar.append(left, toggle, renderDiffModeToggle());
   return toolbar;
 }
 
