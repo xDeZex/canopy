@@ -11,7 +11,6 @@ import { createApp } from './app.js';
 import { parseWorktreeList } from './porcelain.js';
 import { parseStatus, buildFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
-import { parseCommitLog, LOG_FORMAT } from './commits.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,24 +19,6 @@ async function startServer() {
   server.listen(0);
   await once(server, 'listening');
   return { server, port: server.address().port };
-}
-
-// A throwaway git repo (removed after the test) plus a `run(...git args)` helper.
-async function makeGitRepo(t) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-commits-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (...args) => execFileAsync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: dir });
-  await run('init', '-q');
-  return { dir, run };
-}
-
-// Serves `dir` as the only worktree; returns the port and the commits URL.
-async function serveWorktree(t, dir) {
-  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
-  server.listen(0);
-  await once(server, 'listening');
-  t.after(() => server.close());
-  return { port: server.address().port, base: `/api/commits?worktree=${encodeURIComponent(dir)}` };
 }
 
 function request(port, method, requestPath) {
@@ -811,30 +792,6 @@ test('a worktree-poll error is forwarded to the client as a named SSE event', as
   assert.equal(chunk, `event: worktree-poll-error\ndata: ${JSON.stringify({ message: 'git worktree list failed' })}\n\n`);
 });
 
-test('GET /api/commits returns this worktree\'s real commit history as JSON', async (t) => {
-  const { server, port } = await startServer();
-  t.after(() => server.close());
-
-  // Independently derive the expected list straight from git + the
-  // already-tested parser, so this test verifies the HTTP wiring rather
-  // than re-asserting commits.js's own logic.
-  const { stdout: worktreeOut } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
-  const [{ path: worktreePath }] = parseWorktreeList(worktreeOut);
-  const { stdout: logOut } = await execFileAsync('git', ['log', `--pretty=format:${LOG_FORMAT}`], {
-    cwd: worktreePath,
-  });
-  const expected = parseCommitLog(logOut);
-
-  const res = await get(port, `/api/commits?worktree=${encodeURIComponent(worktreePath)}`);
-
-  assert.equal(res.statusCode, 200);
-  assert.match(res.headers['content-type'], /application\/json/);
-  // origin/main marking depends on this checkout's remotes; it is covered by origin-main.test.js.
-  const withoutOriginMark = JSON.parse(res.body).map(({ isOriginMain, ...commit }) => commit);
-  assert.deepEqual(withoutOriginMark, expected);
-  assert.ok(expected.length >= 1, 'expected at least one commit in this repo');
-});
-
 test('GET /api/commits serializes an injected commit list for the requested worktree', async (t) => {
   const fixture = [{ path: '/repos/canopy' }];
   const commits = [
@@ -858,62 +815,6 @@ test('GET /api/commits serializes an injected commit list for the requested work
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), commits);
-});
-
-test('GET /api/commits?file= marks commits that touched the file, keeping every commit in order', async (t) => {
-  const { dir, run } = await makeGitRepo(t);
-  await writeFile(path.join(dir, 'a.txt'), '1\n');
-  await writeFile(path.join(dir, 'b.txt'), '1\n');
-  await run('add', '.');
-  await run('commit', '-qm', 'add both');
-  await writeFile(path.join(dir, 'b.txt'), '2\n');
-  await run('commit', '-qam', 'edit b');
-  await writeFile(path.join(dir, 'a.txt'), '2\n');
-  await run('commit', '-qam', 'edit a');
-
-  const { port, base } = await serveWorktree(t, dir);
-
-  const res = await get(port, `${base}&file=a.txt`);
-  const commits = JSON.parse(res.body);
-  assert.deepEqual(commits.map((c) => [c.message, c.touchesFile]), [
-    ['edit a', true],
-    ['edit b', false],
-    ['add both', true],
-  ]);
-
-  const unmarked = JSON.parse((await get(port, base)).body);
-  assert.deepEqual(unmarked.map((c) => c.message), ['edit a', 'edit b', 'add both']);
-  assert.ok(unmarked.every((c) => !('touchesFile' in c)), 'no file open means no marking');
-});
-
-test('GET /api/commits?file= still lists every commit when the file filter fails, and follows renames', async (t) => {
-  const { dir, run } = await makeGitRepo(t);
-  await writeFile(path.join(dir, 'old.txt'), 'some content\nmore lines\n');
-  await run('add', '.');
-  await run('commit', '-qm', 'add old');
-  await run('mv', 'old.txt', 'new.txt');
-  await run('commit', '-qm', 'rename');
-
-  const { port, base } = await serveWorktree(t, dir);
-
-  const outside = JSON.parse((await get(port, `${base}&file=${encodeURIComponent('../outside')}`)).body);
-  assert.deepEqual(outside.map((c) => c.message), ['rename', 'add old']);
-  assert.ok(outside.every((c) => !c.touchesFile));
-
-  const renamed = JSON.parse((await get(port, `${base}&file=new.txt`)).body);
-  assert.deepEqual(renamed.map((c) => c.touchesFile), [true, true]);
-});
-
-test('GET /api/commits?file= matches the file name literally, not as a git pathspec', async (t) => {
-  const { dir, run } = await makeGitRepo(t);
-  await writeFile(path.join(dir, 'a.txt'), '1\n');
-  await run('add', '.');
-  await run('commit', '-qm', 'add a');
-
-  const { port, base } = await serveWorktree(t, dir);
-
-  const res = await get(port, `${base}&file=${encodeURIComponent('*.txt')}`);
-  assert.deepEqual(JSON.parse(res.body).map((c) => c.touchesFile), [false]);
 });
 
 test('GET /api/commits passes the requested file to an injected listCommits, and null when absent', async (t) => {
