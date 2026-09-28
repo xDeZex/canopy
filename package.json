@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "description": "A live view over git worktrees and diffs for reviewing an AI agent's work.",
+  "bin": {
+    "canopy": "./server/index.js"
+  },
+  "files": [
+    "server/",
+    "public/"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "node server/index.js",
     "test": "node --test"

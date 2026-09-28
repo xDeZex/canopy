@@ -65,6 +65,8 @@ test('GET /api/worktrees returns this repo\'s real worktrees as JSON', async (t)
   // than re-asserting the parser's own logic.
   const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
   const expected = parseWorktreeList(stdout);
+  const selected = expected.findIndex((worktree) => worktree.path === process.cwd());
+  if (selected > 0) expected.unshift(expected.splice(selected, 1)[0]);
 
   const res = await get(port, '/api/worktrees');
 
@@ -72,6 +74,21 @@ test('GET /api/worktrees returns this repo\'s real worktrees as JSON', async (t)
   assert.match(res.headers['content-type'], /application\/json/);
   assert.deepEqual(JSON.parse(res.body), expected);
   assert.ok(expected.length >= 1, 'expected at least this worktree to be listed');
+});
+
+test('GET /api/worktrees puts the selected linked worktree first', async (t) => {
+  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain']);
+  const worktrees = parseWorktreeList(stdout);
+  if (worktrees.length < 2) return t.skip('requires a linked worktree');
+
+  const repoRoot = worktrees[1].path;
+  const server = createApp({ repoRoot });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+
+  const res = await get(server.address().port, '/api/worktrees');
+  assert.equal(JSON.parse(res.body)[0].path, repoRoot);
 });
 
 test('GET / serves the page shell', async (t) => {

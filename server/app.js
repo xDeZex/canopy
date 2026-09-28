@@ -40,7 +40,11 @@ export function createApp({
       const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
         cwd: repoRoot,
       });
-      return parseWorktreeList(stdout);
+      const worktrees = parseWorktreeList(stdout);
+      // Start on the folder passed to the CLI, even when it is a linked worktree.
+      const selected = worktrees.findIndex((worktree) => worktree.path === repoRoot);
+      if (selected > 0) worktrees.unshift(worktrees.splice(selected, 1)[0]);
+      return worktrees;
     });
 
   // Defaults to polling `getWorktrees` itself (see worktree-watch.js for why

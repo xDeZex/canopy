@@ -2,6 +2,27 @@
 
 A live view over what an AI coding agent is doing across many branches and worktrees at once — so you can read and give feedback on generated docs, code, and tests as they land, or while they're still being written.
 
+## Run it
+
+Requires Node.js 20.19+ and Git. Install directly from GitHub (no npm publishing required):
+
+```sh
+npm install -g github:xDeZex/canopy
+canopy .
+# or: canopy projects/canopy
+```
+
+Open http://localhost:4173 in your browser. The folder is resolved relative to your current directory; it can be a Git worktree or a folder inside one. Canopy shows all the worktrees belonging to that repository. Use `PORT=4174 canopy .` to choose another port. To update, run `npm install -g github:xDeZex/canopy` again.
+
+To run from a clone instead:
+
+```sh
+git clone https://github.com/xDeZex/canopy.git
+cd canopy
+npm ci
+npm run dev -- .
+```
+
 ## Motivation
 
 When an agent works across several branches/worktrees in parallel, reviewing its output means constantly switching directories and re-running `git diff`/`git status` by hand. Existing tools solve pieces of this (`lazygit` for branch/worktree switching and diffs, `bat`/`glow` for reading files, VS Code for a full GUI) but nothing combines exactly this shape:
@@ -26,7 +47,3 @@ Explicitly out of scope for now: commenting/annotation, multi-repo dashboards, r
 - **Backend**: a small local Node process. Git state comes from shelling out to `git status --porcelain`, `git worktree list --porcelain`, `git branch` — read-only, no git library needed. A file watcher (`chokidar`) watches the active worktree and pushes change events to the frontend over a WebSocket/SSE connection.
 - **Frontend**: a single page, no build step to start. The full-file-with-inline-highlights view is the one piece that looks hard but isn't — it's a direct embed of **Monaco's diff editor** (the same component VS Code uses): feed it the file's HEAD content and its on-disk content, it renders the rest.
 - **Shape**: a local web app (browser tab), not Electron — a desktop window wrapper (Electron/Tauri) is a trivial follow-up if wanted later, not a prerequisite.
-
-## Status
-
-Not yet built. This README is the spec from the planning conversation; implementation hasn't started.
