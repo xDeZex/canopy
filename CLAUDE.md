@@ -1,6 +1,7 @@
 ## Workflow
 
 Always commit and push after making changes.
+Use Conventional Commits for commits pushed to `main`.
 
 ## Agent skills
 
