@@ -238,6 +238,15 @@ export function createWorkspaceUI({
     const menu = document.createElement('div');
     menu.className = 'commit-picker__menu';
     trigger.addEventListener('click', () => menu.classList.toggle('is-open'));
+    // The toolbar is replaced on worktree change, so drop the listener once detached.
+    const closeOnOutsideClick = (event) => {
+      if (!wrapper.isConnected) {
+        document.removeEventListener('click', closeOnOutsideClick);
+      } else if (!wrapper.contains(event.target)) {
+        menu.classList.remove('is-open');
+      }
+    };
+    document.addEventListener('click', closeOnOutsideClick);
     wrapper.append(trigger, menu);
     return wrapper;
   }

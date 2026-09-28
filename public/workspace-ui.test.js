@@ -41,8 +41,17 @@ class Element {
   }
 
   replaceChildren(...children) {
+    this.children.forEach((child) => { child.parentElement = null; });
     this.children = [];
     this.append(...children);
+  }
+
+  contains(node) {
+    return node === this || this.children.some((child) => child.contains(node));
+  }
+
+  get isConnected() {
+    return this.isRoot || Boolean(this.parentElement?.isConnected);
   }
 
   querySelectorAll(selector) {
@@ -59,15 +68,20 @@ class Element {
 }
 
 function fixture() {
+  const documentListeners = new Set();
   const document = {
     createElement: (tag) => new Element(tag),
     createDocumentFragment: () => new Element('fragment'),
+    addEventListener: (event, listener) => documentListeners.add(listener),
+    removeEventListener: (event, listener) => documentListeners.delete(listener),
   };
+  const clickOn = (target) => [...documentListeners].forEach((listener) => listener({ target }));
   const window = { addEventListener() {} };
   const tabsWrapperEl = new Element('div');
   const tabsEl = new Element('div');
   const railEl = new Element('div');
   const toolbarEl = new Element('div');
+  toolbarEl.isRoot = true;
   const commitLock = createCommitLockStore();
   const viewModeStore = createViewModeStore({ getItem: () => null, setItem() {} });
   const autoScrollStore = createAutoScrollStore({ getItem: () => null, setItem() {} });
@@ -107,8 +121,23 @@ function fixture() {
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ui, workspace, commitLock, viewModeStore, autoScrollStore, navCalls, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, reply };
+  return { ui, workspace, commitLock, viewModeStore, autoScrollStore, navCalls, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, reply, clickOn, documentListeners };
 }
+
+test('commit dropdown closes on an outside click, stays open on inside clicks, and drops its listener when replaced', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }, { path: '/b' }]);
+  const picker = f.toolbarEl.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  picker.querySelector('.commit-picker__trigger').click();
+  f.clickOn(menu);
+  assert.equal(menu.classList.contains('is-open'), true);
+  f.clickOn(f.railEl);
+  assert.equal(menu.classList.contains('is-open'), false);
+  f.tabsEl.children[1].click();
+  f.clickOn(f.railEl);
+  assert.equal(f.documentListeners.size, 1, 'the replaced picker removed its document listener');
+});
 
 test('commit picker locks base, reloads tree and open file, then displays lock and Auto', async () => {
   const f = fixture();
