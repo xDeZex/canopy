@@ -111,11 +111,18 @@ export function createApp({
         });
         const commits = parseCommitLog(stdout);
         if (!file) return commits;
-        const { stdout: touching } = await execFileAsync(
-          'git',
-          ['log', '--pretty=format:%H', '--', file],
-          { cwd: worktreePath },
-        );
+        // A failed filter (e.g. a path outside the worktree) must only cost
+        // the marking, never the commit list itself.
+        let touching = '';
+        try {
+          ({ stdout: touching } = await execFileAsync(
+            'git',
+            ['log', '--follow', '--pretty=format:%H', '--', file],
+            { cwd: worktreePath },
+          ));
+        } catch {
+          return commits;
+        }
         const touched = new Set(touching.split('\n').filter(Boolean));
         return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
       } catch {

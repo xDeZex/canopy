@@ -872,3 +872,28 @@ test('GET /api/commits?file= marks commits that touched the file, keeping every 
   assert.deepEqual(unmarked.map((c) => c.message), ['edit a', 'edit b', 'add both']);
   assert.ok(unmarked.every((c) => !('touchesFile' in c)), 'no file open means no marking');
 });
+
+test('GET /api/commits?file= still lists every commit when the file filter fails, and follows renames', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'canopy-commits-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileAsync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: dir });
+  await run('init', '-q');
+  await writeFile(path.join(dir, 'old.txt'), 'some content\nmore lines\n');
+  await run('add', '.');
+  await run('commit', '-qm', 'add old');
+  await run('mv', 'old.txt', 'new.txt');
+  await run('commit', '-qm', 'rename');
+
+  const server = createApp({ listWorktrees: async () => [{ path: dir }] });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const base = `/api/commits?worktree=${encodeURIComponent(dir)}`;
+
+  const outside = JSON.parse((await get(server.address().port, `${base}&file=${encodeURIComponent('../outside')}`)).body);
+  assert.deepEqual(outside.map((c) => c.message), ['rename', 'add old']);
+  assert.ok(outside.every((c) => !c.touchesFile));
+
+  const renamed = JSON.parse((await get(server.address().port, `${base}&file=new.txt`)).body);
+  assert.deepEqual(renamed.map((c) => c.touchesFile), [true, true]);
+});
