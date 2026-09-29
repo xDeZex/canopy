@@ -46,7 +46,7 @@ const DIFF_MODE_OPTIONS = {
 // `autoScroll`, the viewport moves to the first change once Monaco has
 // computed the diff (#24).
 // Returns a controller with `dispose()`, `nextChange()` and `prevChange()`.
-export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false }) {
+export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
@@ -57,6 +57,7 @@ export async function mountDiffEditor(container, { original, modified, language,
     domReadOnly: true,
     originalEditable: false,
     theme: 'vs-dark',
+    diffWordWrap: wrap ? 'on' : 'off',
     // Detects relocated blocks and draws a connecting arrow between the old
     // and new spot instead of an unrelated delete+add pair. Cheap (a native
     // option) and orthogonal to `mode`, so it's always on rather than a
@@ -114,7 +115,7 @@ export async function mountDiffEditor(container, { original, modified, language,
 
 // Mounts a plain read-only full-file view (File mode). Returns a
 // controller with `dispose()` only; File mode has no hunks to navigate.
-export async function mountEditor(container, { content, language }) {
+export async function mountEditor(container, { content, language, wrap = false }) {
   await ensureLoader();
 
   const editor = monaco.editor.create(container, {
@@ -124,6 +125,7 @@ export async function mountEditor(container, { content, language }) {
     readOnly: true,
     domReadOnly: true,
     theme: 'vs-dark',
+    wordWrap: wrap ? 'on' : 'off',
   });
 
   return {

@@ -43,6 +43,7 @@ function fixture() {
     getViewMode: () => mode,
     getDiffRenderMode: () => diffMode,
     getAutoScroll: () => autoScroll,
+    getWrap: () => false,
     languageForPath: (path) => path.endsWith('.js') ? 'javascript' : 'plaintext',
     mountEditor: (container, options) => {
       const pending = deferred();

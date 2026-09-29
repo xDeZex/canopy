@@ -339,6 +339,11 @@ body {
   color: #fff;
 }
 
+.viewer__wrap {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 /* ---------- Commit picker (variant D shape, #5) ---------- */
 
 .commit-picker {

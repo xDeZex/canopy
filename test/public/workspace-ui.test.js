@@ -25,6 +25,7 @@ function fixture() {
   const commitLock = createCommitLockStore();
   const viewModeStore = createViewModeStore({ getItem: () => null, setItem() {} });
   const autoScrollStore = createAutoScrollStore({ getItem: () => null, setItem() {} });
+  let wrap = true;
   const navCalls = [];
   const requests = [];
   // File-scoped commit refetches (issued on file selection) are tracked apart
@@ -56,6 +57,8 @@ function fixture() {
     onNextChange: () => navCalls.push('next'), onPrevChange: () => navCalls.push('prev'),
     onToggleHelp: () => navCalls.push('help'),
     onAutoScrollChanged: (enabled) => { autoScrollStore.setEnabled(enabled); ui.renderToolbar(); },
+    getWrap: () => wrap,
+    onWrapChanged: () => { wrap = !wrap; ui.renderToolbar(); },
     document, window,
   });
   const reply = async (request, body) => {
@@ -64,6 +67,19 @@ function fixture() {
   };
   return { ui, workspace, commitLock, viewModeStore, autoScrollStore, navCalls, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, reply, clickOn, documentListeners };
 }
+
+test('Wrap button toggles the file viewer setting in both Diff and File modes', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }]);
+  const button = f.toolbarEl.querySelector('.viewer__wrap');
+  assert.equal(button['aria-pressed'], 'true');
+  button.click();
+  assert.equal(button['aria-pressed'], 'false');
+  f.viewModeStore.setMode('file');
+  f.ui.renderToolbar();
+  button.click();
+  assert.equal(button['aria-pressed'], 'true');
+});
 
 test('commit dropdown closes on an outside click, stays open on inside clicks, and drops its listener when replaced', () => {
   const f = fixture();

@@ -1,5 +1,5 @@
 // Owns #main's visible state and the lifecycle of its Monaco controller.
-export function createViewer({ mainEl, document, getState, getViewMode, getDiffRenderMode, mountEditor, mountDiffEditor, languageForPath, getAutoScroll }) {
+export function createViewer({ mainEl, document, getState, getViewMode, getDiffRenderMode, mountEditor, mountDiffEditor, languageForPath, getAutoScroll, getWrap }) {
   let currentView = null;
   let generation = 0;
 
@@ -51,13 +51,14 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
       try {
         const language = languageForPath(activeFile);
         const view = mode === 'file'
-          ? await mountEditor(container, { content: fileContent.working, language })
+          ? await mountEditor(container, { content: fileContent.working, language, wrap: getWrap() })
           : await mountDiffEditor(container, {
               original: fileContent.head ?? '',
               modified: fileContent.working ?? '',
               language,
               mode: getDiffRenderMode(),
               autoScroll: getAutoScroll(),
+              wrap: getWrap(),
             });
         if (thisRender !== generation) view.dispose();
         else currentView = view;

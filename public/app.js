@@ -33,6 +33,7 @@ export async function startApp({
   const helpEl = doc.getElementById('shortcut-help');
 
   let diffRenderMode = 'inline';
+  let wrap = null;
   // Defer access to localStorage: even reading the property may throw when
   // storage is blocked. The store already handles failed reads and writes.
   const storage = {
@@ -40,6 +41,7 @@ export async function startApp({
     setItem: (key, value) => browserWindow.localStorage.setItem(key, value),
   };
   const viewModeStore = createViewModeStore(storage);
+  const getWrap = () => wrap ?? (viewModeStore.getMode() === 'file' || diffRenderMode !== 'side-by-side');
   const autoScrollStore = createAutoScrollStore(storage);
   const commitLock = createCommitLockStore();
   const treeExpansion = createTreeExpansionStore();
@@ -74,6 +76,7 @@ export async function startApp({
     mountDiffEditor: mountDiff,
     languageForPath: language,
     getAutoScroll: () => autoScrollStore.isEnabled(),
+    getWrap,
   });
 
   function onViewModeChanged(mode) {
@@ -95,6 +98,12 @@ export async function startApp({
     ui.renderToolbar();
   }
 
+  function onWrapChanged() {
+    wrap = !getWrap();
+    ui.renderToolbar();
+    if (workspace.getState().activeFile) viewer.render();
+  }
+
   function toggleHelp() {
     helpEl.hidden = !helpEl.hidden;
   }
@@ -104,6 +113,7 @@ export async function startApp({
     viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
     DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged,
     onAutoScrollChanged, onNextChange: () => viewer.nextChange(), onPrevChange: () => viewer.prevChange(),
+    getWrap, onWrapChanged,
     onToggleHelp: toggleHelp,
     getDiffRenderMode: () => diffRenderMode,
     document: doc, window: browserWindow,

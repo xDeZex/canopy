@@ -74,6 +74,39 @@ test('File mode controller does not expose change navigation', async () => {
   view.dispose();
 });
 
+test('diff viewer uses Monaco diff word wrap when requested', async () => {
+  let options;
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    editor: {
+      createDiffEditor(_container, settings) {
+        options = settings;
+        return { setModel() {}, dispose() {} };
+      },
+      createModel() { return { dispose() {} }; },
+    },
+  };
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new', wrap: true });
+  assert.equal(options.diffWordWrap, 'on');
+  view.dispose();
+});
+
+test('file viewer uses Monaco word wrap when requested', async () => {
+  let options;
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    editor: {
+      create(_container, settings) {
+        options = settings;
+        return { dispose() {} };
+      },
+    },
+  };
+  const view = await mountEditor({}, { content: 'long line', wrap: true });
+  assert.equal(options.wordWrap, 'on');
+  view.dispose();
+});
+
 test('auto-scroll reveals the first change once the diff is computed, and only once', async () => {
   const revealed = [];
   let diffUpdated;

@@ -141,6 +141,33 @@ test('j and l step the mounted diff to the previous and next change', async () =
   assert.deepEqual(navigated, ['prev', 'next'], 'modifiers and typing leave the keys alone');
 });
 
+test('Wrap button updates the open diff and file viewer setting', async () => {
+  const { document, window, elements } = browserStub();
+  const wraps = [];
+  await startApp({
+    document, window, EventSource: EventSourceStub, fetch: fakeFetch(),
+    mountDiffEditor: async (_container, options) => {
+      wraps.push(['diff', options.wrap]);
+      return { dispose() {} };
+    },
+    mountEditor: async (_container, options) => {
+      wraps.push(['file', options.wrap]);
+      return { dispose() {} };
+    },
+  });
+  await settle();
+  elements.rail.querySelector('.rail__file').click();
+  await settle();
+  const wrap = elements.toolbar.querySelector('.viewer__wrap');
+  wrap.click();
+  await settle();
+  elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn')[1].click();
+  await settle();
+  wrap.click();
+  await settle();
+  assert.deepEqual(wraps, [['diff', true], ['diff', false], ['file', false], ['file', true]]);
+});
+
 test('digit keys switch to the worktree tab at that position and ignore missing ones', async () => {
   const { document, window, elements, pressKey } = browserStub();
   const urls = [];

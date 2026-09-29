@@ -9,6 +9,7 @@ export function createWorkspaceUI({
   viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
   DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged, getDiffRenderMode,
   onAutoScrollChanged, onNextChange, onPrevChange, onToggleHelp,
+  getWrap, onWrapChanged,
   document, window,
 }) {
   let toolbarPath = null;
@@ -319,6 +320,17 @@ export function createWorkspaceUI({
     return button;
   }
 
+  function renderWrapButton() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'view-toggle__btn viewer__wrap';
+    button.textContent = 'Wrap';
+    button.title = 'Wrap long lines';
+    button.setAttribute('aria-pressed', String(getWrap()));
+    button.addEventListener('click', onWrapChanged);
+    return button;
+  }
+
   function createToolbar() {
     const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
@@ -331,7 +343,7 @@ export function createWorkspaceUI({
     toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
     const right = document.createElement('div');
     right.className = 'viewer__toolbar-right';
-    right.append(renderChangeNav(), renderDiffModeToggle(), renderHelpButton());
+    right.append(renderChangeNav(), renderDiffModeToggle(), renderWrapButton(), renderHelpButton());
     toolbar.append(left, toggle, right);
     return toolbar;
   }
@@ -372,6 +384,9 @@ export function createWorkspaceUI({
     const auto = toolbarEl.querySelector('.change-nav__auto');
     auto.classList.toggle('is-on', autoScrollStore.isEnabled());
     auto.setAttribute('aria-pressed', String(autoScrollStore.isEnabled()));
+    const wrapButton = toolbarEl.querySelector('.viewer__wrap');
+    wrapButton.classList.toggle('is-active', getWrap());
+    wrapButton.setAttribute('aria-pressed', String(getWrap()));
   }
 
   function renderError(_err) {
