@@ -9,6 +9,13 @@ test('j and l step back and forward through changes', () => {
   assert.deepEqual(press('l'), { type: 'next-change' });
 });
 
+test('s and f step back and forward through changed files', () => {
+  assert.deepEqual(press('s'), { type: 'prev-file' });
+  assert.deepEqual(press('f'), { type: 'next-file' });
+  assert.equal(press('s', { ctrlKey: true }), null);
+  assert.equal(press('f', { target: { tagName: 'INPUT', readOnly: false } }), null);
+});
+
 test('digits 1-9 select the worktree at that position', () => {
   assert.deepEqual(press('1'), { type: 'select-worktree', index: 0 });
   assert.deepEqual(press('9'), { type: 'select-worktree', index: 8 });

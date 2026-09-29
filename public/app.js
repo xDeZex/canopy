@@ -15,6 +15,7 @@ import { createTreeExpansionStore } from './tree-state.js';
 import { computeTabScrollAffordance } from './tab-scroll.js';
 import { createWorkspaceStore } from './workspace-state.js';
 import { shortcutAction } from './keyboard-shortcuts.js';
+import { changedFiles } from './changed-files.js';
 
 export async function startApp({
   document: doc = globalThis.document,
@@ -120,10 +121,22 @@ export async function startApp({
   });
   liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: EventSourceClass });
 
+  function stepFile(direction) {
+    const { fileTree, activeFile } = workspace.getState();
+    const files = changedFiles(fileTree);
+    if (!files.length) return;
+    const current = files.findIndex((file) => file.path === activeFile);
+    const next = current === -1 ? (direction === 1 ? 0 : files.length - 1)
+      : (current + direction + files.length) % files.length;
+    workspace.selectFile(files[next].path);
+  }
+
   function onShortcut(action) {
     switch (action.type) {
       case 'next-change': return viewer.nextChange();
       case 'prev-change': return viewer.prevChange();
+      case 'next-file': return stepFile(1);
+      case 'prev-file': return stepFile(-1);
       case 'select-worktree': {
         const worktree = workspace.getState().worktrees[action.index];
         return worktree && workspace.selectWorktree(worktree.path);

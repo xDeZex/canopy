@@ -105,13 +105,13 @@ test('out-of-order mounts dispose stale controllers without replacing the latest
   f.setState({ activeFile: 'first.js', fileContent: { head: 'before', working: 'after' } });
   f.viewer.render();
   assert.equal(f.calls[0].kind, 'diff');
-  assert.deepEqual(f.calls[0].options, { original: 'before', modified: 'after', language: 'javascript', mode: 'inline', autoScroll: false });
+  assert.deepEqual(f.calls[0].options, { original: 'before', modified: 'after', language: 'javascript', mode: 'inline', autoScroll: false, wrap: false });
 
   f.setMode('file');
   f.setState({ activeFile: 'second.txt', fileContent: { head: null, working: 'second' } });
   f.viewer.render();
   assert.notEqual(f.calls[0].container, f.calls[1].container);
-  assert.deepEqual(f.calls[1].options, { content: 'second', language: 'plaintext' });
+  assert.deepEqual(f.calls[1].options, { content: 'second', language: 'plaintext', wrap: false });
   f.calls[1].resolve(controller('second'));
   await f.calls[1].promise;
   f.calls[0].resolve(controller('first'));
@@ -123,7 +123,7 @@ test('out-of-order mounts dispose stale controllers without replacing the latest
   f.setDiffMode('collapsed');
   f.viewer.render();
   assert.deepEqual(disposed, ['first', 'second']);
-  assert.deepEqual(f.calls[2].options, { original: '', modified: 'second', language: 'plaintext', mode: 'collapsed', autoScroll: false });
+  assert.deepEqual(f.calls[2].options, { original: '', modified: 'second', language: 'plaintext', mode: 'collapsed', autoScroll: false, wrap: false });
   f.calls[2].resolve(controller('third'));
   await f.calls[2].promise;
   f.setState({ activeFile: null });

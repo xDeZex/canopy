@@ -141,6 +141,64 @@ test('j and l step the mounted diff to the previous and next change', async () =
   assert.deepEqual(navigated, ['prev', 'next'], 'modifiers and typing leave the keys alone');
 });
 
+test('f opens changed files in path order and wraps to the first', async () => {
+  const { document, window, elements, pressKey } = browserStub();
+  const tree = [
+    { type: 'file', name: 'z.txt', path: 'z.txt', status: 'modified' },
+    { type: 'file', name: 'clean.txt', path: 'clean.txt', status: 'clean' },
+    { type: 'dir', name: 'src', path: 'src', children: [
+      { type: 'file', name: 'a.js', path: 'src/a.js', status: 'added' },
+    ] },
+  ];
+  const fetch = async (url) => ({
+    ok: true,
+    json: async () => url.startsWith('/api/files') ? tree
+      : url === '/api/worktrees' ? [{ path: '/a', branch: 'a' }]
+        : url.startsWith('/api/commits') ? [] : { head: 'old', working: 'new' },
+  });
+  await startApp({ document, window, EventSource: EventSourceStub, fetch,
+    mountDiffEditor: async () => ({ dispose() {} }),
+  });
+  await settle();
+  const selected = () => elements.rail.querySelectorAll('.changed-files__file')
+    .find((row) => row.classList.contains('is-active'))?.textContent;
+  pressKey('f');
+  assert.equal(selected(), 'src/a.js');
+  pressKey('f');
+  assert.equal(selected(), 'z.txt');
+  pressKey('f');
+  assert.equal(selected(), 'src/a.js');
+});
+
+test('s opens the last changed file from no selection and skips clean files', async () => {
+  const { document, window, elements, pressKey } = browserStub();
+  const fetch = async (url) => ({ ok: true, json: async () => {
+    if (url === '/api/worktrees') return [{ path: '/a', branch: 'a' }];
+    if (url.startsWith('/api/files')) return [
+      { type: 'file', name: 'z.txt', path: 'z.txt', status: 'modified' },
+      { type: 'file', name: 'clean.txt', path: 'clean.txt', status: 'clean' },
+      { type: 'file', name: 'a.txt', path: 'a.txt', status: 'added' },
+    ];
+    if (url.startsWith('/api/commits')) return [];
+    return { head: 'old', working: 'new' };
+  } });
+  await startApp({ document, window, EventSource: EventSourceStub, fetch,
+    mountDiffEditor: async () => ({ dispose() {} }),
+  });
+  await settle();
+  const selected = () => elements.rail.querySelectorAll('.changed-files__file')
+    .find((row) => row.classList.contains('is-active'))?.textContent;
+  pressKey('s');
+  assert.equal(selected(), 'z.txt');
+  pressKey('s');
+  assert.equal(selected(), 'a.txt');
+  pressKey('s');
+  assert.equal(selected(), 'z.txt');
+  pressKey('f', { ctrlKey: true });
+  pressKey('s', { target: { tagName: 'INPUT', readOnly: false } });
+  assert.equal(selected(), 'z.txt');
+});
+
 test('Wrap button updates the open diff and file viewer setting', async () => {
   const { document, window, elements } = browserStub();
   const wraps = [];
