@@ -335,6 +335,11 @@ export function createWorkspaceUI({
     const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
     pathLabel.className = 'viewer__path';
+    const directory = document.createElement('span');
+    directory.className = 'viewer__directory';
+    const filename = document.createElement('span');
+    filename.className = 'viewer__filename';
+    pathLabel.append(directory, filename);
     const left = document.createElement('div');
     left.className = 'viewer__toolbar-left';
     left.append(pathLabel, renderCommitPicker());
@@ -366,7 +371,10 @@ export function createWorkspaceUI({
     }
     const pathLabel = toolbarEl.querySelector('.viewer__path');
     // Always mounted (never hidden) so selecting a file moves nothing.
-    pathLabel.textContent = activeFile ?? '';
+    const path = activeFile ?? '';
+    const separator = path.lastIndexOf('/');
+    pathLabel.querySelector('.viewer__directory').textContent = path.slice(0, separator + 1);
+    pathLabel.querySelector('.viewer__filename').textContent = path.slice(separator + 1);
     pathLabel.title = activeFile ?? '';
 
     updateCommitPicker(activePath, commits, commitsError);

@@ -9,6 +9,9 @@
   --fg-dim: #8a8a8a;
   --accent: #4fa3ff;
   --border: #3a3a3a;
+  --scrollbar-track: #252526;
+  --scrollbar-thumb: #555558;
+  --scrollbar-thumb-hover: #747478;
   --modified: #e2c08d;
   --added: #6cc47c;
   --deleted: #e06c75;
@@ -32,6 +35,62 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+}
+
+/* Native scrolling surfaces, including the tab strip and popup menus. */
+.tabs,
+.rail__tree,
+.changed-files,
+.main,
+.commit-picker__menu {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+.tabs::-webkit-scrollbar,
+.rail__tree::-webkit-scrollbar,
+.changed-files::-webkit-scrollbar,
+.main::-webkit-scrollbar,
+.commit-picker__menu::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.tabs::-webkit-scrollbar-track,
+.rail__tree::-webkit-scrollbar-track,
+.changed-files::-webkit-scrollbar-track,
+.main::-webkit-scrollbar-track,
+.commit-picker__menu::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.tabs::-webkit-scrollbar-thumb,
+.rail__tree::-webkit-scrollbar-thumb,
+.changed-files::-webkit-scrollbar-thumb,
+.main::-webkit-scrollbar-thumb,
+.commit-picker__menu::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid var(--scrollbar-track);
+  border-radius: 8px;
+}
+
+.tabs::-webkit-scrollbar-thumb:hover,
+.rail__tree::-webkit-scrollbar-thumb:hover,
+.changed-files::-webkit-scrollbar-thumb:hover,
+.main::-webkit-scrollbar-thumb:hover,
+.commit-picker__menu::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Monaco draws its own scrollbars rather than using the browser's. */
+.viewer__editor .monaco-scrollable-element > .scrollbar > .slider {
+  background: var(--scrollbar-thumb);
+  border-radius: 8px;
+}
+
+.viewer__editor .monaco-scrollable-element > .scrollbar > .slider:hover,
+.viewer__editor .monaco-scrollable-element > .scrollbar > .slider.active {
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* ---------- Tab bar (variant D shape) ---------- */
@@ -298,12 +357,28 @@ body {
 }
 
 .viewer__path {
+  display: flex;
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.viewer__directory {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-dim);
+}
+
+.viewer__filename {
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+  font-weight: 600;
 }
 
 .viewer__editor {

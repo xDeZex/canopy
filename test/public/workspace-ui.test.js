@@ -81,6 +81,22 @@ test('Wrap button toggles the file viewer setting in both Diff and File modes', 
   assert.equal(button['aria-pressed'], 'true');
 });
 
+test('toolbar keeps the filename separate from the dimmed directory and preserves the full path', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[0], [{
+    type: 'dir', name: 'src', path: 'src', children: [
+      { type: 'file', name: 'readme.md', path: 'src/readme.md', status: 'modified' },
+    ],
+  }]);
+  f.railEl.querySelector('.rail__dir').click();
+  f.railEl.querySelector('.rail__file').click();
+  const path = f.toolbarEl.querySelector('.viewer__path');
+  assert.equal(path.querySelector('.viewer__directory').textContent, 'src/');
+  assert.equal(path.querySelector('.viewer__filename').textContent, 'readme.md');
+  assert.equal(path.title, 'src/readme.md');
+});
+
 test('commit dropdown closes on an outside click, stays open on inside clicks, and drops its listener when replaced', () => {
   const f = fixture();
   f.workspace.updateWorktrees([{ path: '/a' }, { path: '/b' }]);
@@ -323,7 +339,7 @@ test('selecting a file or switching mode moves no toolbar element: nothing is hi
   await openFile(f);
   assert.equal(f.toolbarEl.querySelector('.viewer__path'), pathLabel);
   assert.notEqual(pathLabel.hidden, true);
-  assert.equal(pathLabel.textContent, 'a.txt');
+  assert.equal(pathLabel.querySelector('.viewer__filename').textContent, 'a.txt');
 
   f.viewModeStore.setMode('file');
   f.ui.renderToolbar();
