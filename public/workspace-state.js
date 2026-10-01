@@ -148,11 +148,20 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
         fileContentError, commits, commitsError };
     },
     updateWorktrees(nextWorktrees) {
+      const previousHead = worktrees.find((worktree) => worktree.path === activePath)?.head;
       worktrees = nextWorktrees;
       const knownPaths = worktrees.map((worktree) => worktree.path);
       commitLock.pruneToKnownWorktrees(knownPaths);
       const nextPath = pickActiveWorktree(worktrees, activePath);
-      if (!switchWorktree(nextPath)) onChange('render');
+      if (!switchWorktree(nextPath)) {
+        onChange('render');
+        const nextHead = worktrees.find((worktree) => worktree.path === activePath)?.head;
+        if (previousHead !== nextHead) {
+          loadFileTree();
+          loadCommits();
+          loadFileContent();
+        }
+      }
       return knownPaths;
     },
     selectWorktree: switchWorktree,
