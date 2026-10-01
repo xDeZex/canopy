@@ -5,9 +5,10 @@ import { createWorkspaceStore } from '../../public/workspace-state.js';
 import { createCommitLockStore } from '../../public/commit-lock.js';
 import { createViewModeStore } from '../../public/view-mode.js';
 import { createAutoScrollStore } from '../../public/auto-scroll.js';
+import { formatRelativeTime } from '../../public/relative-time.js';
 import { Element } from './fake-dom.js';
 
-function fixture() {
+function fixture({ now = () => 1000, relativeTime = () => 'recently' } = {}) {
   const documentListeners = new Set();
   const document = {
     createElement: (tag) => new Element(tag),
@@ -52,9 +53,9 @@ function fixture() {
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, commitLock, viewModeStore, autoScrollStore,
     treeExpansion: { isExpanded: () => false, toggle() {} },
     computeTabScrollAffordance: () => ({ showLeft: false, showRight: false }),
-    formatRelativeTime: () => 'recently', DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
+    formatRelativeTime: relativeTime, DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
     formatEditTime: (timestamp, now) => timestamp == null ? 'No edit time' : `${now - timestamp}ms ago`,
-    now: () => 1000,
+    now,
     onViewModeChanged() {}, onDiffRenderModeChanged() {}, getDiffRenderMode: () => 'inline',
     onNextChange: () => navCalls.push('next'), onPrevChange: () => navCalls.push('prev'),
     onToggleHelp: () => navCalls.push('help'),
@@ -139,6 +140,88 @@ test('closeMenus closes an open commit dropdown and is safe with no toolbar', ()
   assert.equal(menu.classList.contains('is-open'), true);
   f.ui.closeMenus();
   assert.equal(menu.classList.contains('is-open'), false);
+});
+
+test('commit ages use the injected clock and shared edit-time ticks preserve the open picker, lock and file', async () => {
+  const date = '2026-09-27T12:00:00Z';
+  const timestamp = Date.parse(date);
+  let currentTime = timestamp + 30_000;
+  const f = fixture({ now: () => currentTime, relativeTime: formatRelativeTime });
+  const sha = 'abcdef123456';
+  f.commitLock.lockCommit('/repo', sha);
+  await openFile(f);
+  await f.reply(f.fileCommitRequests[0], [
+    { sha, message: 'Base', date, touchesFile: true, isOriginMain: true },
+    { sha: 'older', message: 'Older', date: '2026-09-27T11:00:00Z' },
+  ]);
+  const picker = f.toolbarEl.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  const children = [...menu.children];
+  const labels = menu.querySelectorAll('.commit-picker__item-time');
+  assert.deepEqual(labels.map((label) => label.textContent), ['just now', '1 hour ago']);
+  picker.querySelector('.commit-picker__trigger').click();
+  const state = f.workspace.getState();
+  const requests = f.requests.length;
+  const fileCommitRequests = f.fileCommitRequests.length;
+  for (const [elapsed, expected] of [
+    [60_000, '1 minute ago'], [120_000, '2 minutes ago'],
+    [3_600_000, '1 hour ago'], [7_200_000, '2 hours ago'], [86_400_000, '1 day ago'],
+  ]) {
+    currentTime = timestamp + elapsed;
+    f.ui.updateEditTimes();
+    assert.equal(labels[0].textContent, expected);
+    assert.equal(f.toolbarEl.querySelector('.commit-picker'), picker);
+    assert.equal(picker.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.children.length, children.length);
+    children.forEach((child, index) => assert.equal(menu.children[index], child));
+    labels.forEach((label, index) => assert.equal(menu.querySelectorAll('.commit-picker__item-time')[index], label));
+    assert.equal(menu.classList.contains('is-open'), true);
+    assert.equal(labels[0].parentElement.classList.contains('is-selected'), true);
+    assert.equal(labels[0].parentElement.classList.contains('commit-picker__item--touches-file'), true);
+    assert.equal(f.commitLock.getLockedCommit('/repo'), sha);
+    assert.deepEqual(f.workspace.getState(), state);
+    assert.equal(f.workspace.getState().activeFile, 'a.txt');
+    assert.equal(f.requests.length, requests);
+    assert.equal(f.fileCommitRequests.length, fileCommitRequests);
+  }
+});
+
+test('opening and reopening the commit menu refreshes existing ages without a tick or requests', async () => {
+  const date = '2026-09-27T12:00:00Z';
+  const timestamp = Date.parse(date);
+  let currentTime = timestamp + 30_000;
+  const f = fixture({ now: () => currentTime, relativeTime: formatRelativeTime });
+  const sha = 'abcdef123456';
+  f.commitLock.lockCommit('/repo', sha);
+  await openFile(f);
+  await f.reply(f.fileCommitRequests[0], [{ sha, message: 'Base', date }]);
+  const picker = f.toolbarEl.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  const children = [...menu.children];
+  const label = menu.querySelector('.commit-picker__item-time');
+  const state = f.workspace.getState();
+  const requests = f.requests.length;
+  const fileCommitRequests = f.fileCommitRequests.length;
+  assert.equal(label.textContent, 'just now');
+  for (const [elapsed, expected] of [[60_000, '1 minute ago'], [3_600_000, '1 hour ago']]) {
+    currentTime = timestamp + elapsed;
+    picker.querySelector('.commit-picker__trigger').click();
+    assert.equal(label.textContent, expected);
+    assert.equal(menu.classList.contains('is-open'), true);
+    assert.equal(f.toolbarEl.querySelector('.commit-picker'), picker);
+    assert.equal(picker.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.querySelector('.commit-picker__item-time'), label);
+    assert.equal(menu.children.length, children.length);
+    children.forEach((child, index) => assert.equal(menu.children[index], child));
+    assert.equal(label.parentElement.classList.contains('is-selected'), true);
+    assert.equal(f.commitLock.getLockedCommit('/repo'), sha);
+    assert.deepEqual(f.workspace.getState(), state);
+    assert.equal(f.workspace.getState().activeFile, 'a.txt');
+    assert.equal(f.requests.length, requests);
+    assert.equal(f.fileCommitRequests.length, fileCommitRequests);
+    f.ui.closeMenus();
+    assert.equal(menu.classList.contains('is-open'), false);
+  }
 });
 
 test('commit picker locks base, reloads tree and open file, then displays lock and Auto', async () => {

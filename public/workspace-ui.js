@@ -19,6 +19,13 @@ export function createWorkspaceUI({
   let toolbarLockedSha = null;
   let editTimes = {};
 
+  function updateCommitTimes(currentTime = now()) {
+    const currentDate = new Date(currentTime);
+    toolbarEl.querySelectorAll('.commit-picker__item-time').forEach((label) => {
+      label.textContent = formatRelativeTime(label.dataset.date, currentDate);
+    });
+  }
+
   function updateEditTimes(currentTime = now()) {
     const { worktrees } = workspace.getState();
     tabsEl.querySelectorAll('.tabs__tab').forEach((tab, index) => {
@@ -30,6 +37,7 @@ export function createWorkspaceUI({
     railEl.querySelectorAll('.changed-files__age').forEach((label) => {
       label.textContent = formatEditTime(Number(label.dataset.mtimeMs), currentTime);
     });
+    updateCommitTimes(currentTime);
   }
 
   function setEditTimes(timestamps) {
@@ -216,7 +224,8 @@ export function createWorkspaceUI({
 
     const timeEl = document.createElement('span');
     timeEl.className = 'commit-picker__item-time';
-    timeEl.textContent = formatRelativeTime(commit.date);
+    timeEl.dataset.date = commit.date;
+    timeEl.textContent = formatRelativeTime(commit.date, new Date(now()));
 
     item.append(shaEl, messageEl, timeEl);
     item.addEventListener('click', () => {
@@ -276,7 +285,10 @@ export function createWorkspaceUI({
     trigger.append(shaEl, labelEl);
     const menu = document.createElement('div');
     menu.className = 'commit-picker__menu';
-    trigger.addEventListener('click', () => menu.classList.toggle('is-open'));
+    trigger.addEventListener('click', () => {
+      menu.classList.toggle('is-open');
+      if (menu.classList.contains('is-open')) updateCommitTimes();
+    });
     // The toolbar is replaced on worktree change, so drop the listener once detached.
     const closeOnOutsideClick = (event) => {
       if (!wrapper.isConnected) {

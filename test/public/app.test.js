@@ -262,6 +262,83 @@ test('activity stream updates inactive tabs and elapsed labels tick without repl
   assert.ok(sources.every((source) => source.closed));
 });
 
+test('commit ages share the single app interval across repeated menu opens and dispose cancels it', async () => {
+  const { document, window, elements } = browserStub();
+  const date = '2026-09-27T12:00:00Z';
+  const timestamp = Date.parse(date);
+  let currentTime = timestamp + 30_000;
+  const timers = new Map();
+  const cancelled = [];
+  const sources = [];
+  const urls = [];
+  let subscriptions = 0;
+  class EventSource {
+    constructor(url) { this.url = url; sources.push(this); }
+    addEventListener() {}
+    close() { this.closed = true; }
+  }
+  const request = fakeFetch(urls);
+  const app = await startApp({
+    document, window, EventSource, now: () => currentTime,
+    fetch: (url) => {
+      if (url.startsWith('/api/commits')) {
+        urls.push(url);
+        return Promise.resolve({ ok: true, json: async () => [{ sha: 'abcdef123', message: 'Base', date }] });
+      }
+      return request(url);
+    },
+    setInterval: (fn, ms) => {
+      assert.equal(ms, 30_000);
+      timers.set(++subscriptions, fn);
+      return subscriptions;
+    },
+    clearInterval: (id) => { cancelled.push(id); timers.delete(id); },
+  });
+  try {
+    await settle();
+    const picker = elements.toolbar.querySelector('.commit-picker');
+    const trigger = picker.querySelector('.commit-picker__trigger');
+    const menu = picker.querySelector('.commit-picker__menu');
+    const children = [...menu.children];
+    const label = menu.querySelector('.commit-picker__item-time');
+    const tab = elements.tabs.children[0];
+    sources.find((source) => source.url === '/api/watch-activity').onmessage({ data: JSON.stringify({ '/a': timestamp }) });
+    assert.equal(label.textContent, 'just now');
+    trigger.click();
+    const requests = urls.length;
+    const streams = sources.length;
+    currentTime = timestamp + 60_000;
+    assert.equal(timers.size, 1);
+    timers.get(1)();
+    assert.equal(label.textContent, '1 minute ago');
+    assert.equal(tab.querySelector('.tabs__edit-time').textContent, '1m ago');
+    assert.equal(elements.tabs.children[0], tab);
+    assert.equal(menu.classList.contains('is-open'), true);
+    trigger.click();
+    currentTime = timestamp + 3_600_000;
+    for (let i = 0; i < 3; i++) {
+      trigger.click();
+      assert.equal(label.textContent, '1 hour ago', 'opening refreshes without an interval tick');
+      assert.equal(menu.classList.contains('is-open'), true);
+      trigger.click();
+    }
+    assert.equal(elements.toolbar.querySelector('.commit-picker'), picker);
+    assert.equal(picker.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.querySelector('.commit-picker__item-time'), label);
+    assert.equal(menu.children.length, children.length);
+    children.forEach((child, index) => assert.equal(menu.children[index], child));
+    assert.equal(urls.length, requests);
+    assert.equal(sources.length, streams);
+    assert.equal(subscriptions, 1);
+    assert.equal(timers.size, 1);
+  } finally {
+    app.dispose();
+  }
+  assert.equal(timers.size, 0);
+  assert.deepEqual(cancelled, [1]);
+  assert.ok(sources.every((source) => source.closed));
+});
+
 test('origin/main SSE refresh moves and removes the open dropdown divider without disturbing the locked viewer', async (t) => {
   const { document, window, elements } = browserStub();
   const urls = [];
