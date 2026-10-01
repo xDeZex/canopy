@@ -8,6 +8,10 @@ Name worktree directories in lowercase kebab-case as `issue-<number>-<short-purp
 You are allowed to install existing locked dependencies in worktrees.
 Review changes against the commit the worktree started from.
 
+## User comments
+
+Read `.canopy/comments.yaml` to find the user's comments on code.
+
 ## Coding standards
 
 Read `CODING_STANDARDS.md` before making changes.
