@@ -751,3 +751,64 @@ test('the add-comment shortcut reads KeyMod and KeyCode from the top-level monac
   assert.deepEqual(actions.map((action) => [action.id, action.keybindings]), [['canopy.addComment', [7]]]);
   view.dispose();
 });
+
+// Mounts an editor with a Monaco stub and returns what the composer glue did.
+async function mountWithComposer({ selection, lineCount = 10 }) {
+  const actions = [];
+  const mouseDown = [];
+  const zones = [];
+  const noop = () => ({ dispose() {} });
+  const element = () => ({ children: [], setAttribute() {}, addEventListener() {}, replaceChildren() {},
+    getBoundingClientRect: () => ({ height: 0 }) });
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    KeyMod: { CtrlCmd: 1, Alt: 2 },
+    KeyCode: { KeyM: 4 },
+    editor: {
+      MouseTargetType: { GUTTER_GLYPH_MARGIN: 'glyph', GUTTER_LINE_NUMBERS: 'numbers' },
+      create: () => ({
+        updateOptions() {},
+        onMouseMove: noop,
+        onMouseLeave: noop,
+        onMouseDown: (listener) => { mouseDown.push(listener); return { dispose() {} }; },
+        addAction: (action) => { actions.push(action); return { dispose() {} }; },
+        getModel: () => ({ getLineCount: () => lineCount }),
+        getSelection: () => selection,
+        getPosition: () => ({ lineNumber: selection.startLineNumber }),
+        changeViewZones: (callback) => callback({ addZone: (zone) => zones.push(zone), removeZone() {}, layoutZone() {} }),
+        dispose() {},
+      }),
+    },
+  };
+  const changes = [];
+  const composer = { draft: null, onChange: (draft) => changes.push(draft), save: async () => {} };
+  const view = await mountEditor({}, { content: 'plain', composer, document: { createElement: element } });
+  return { view, actions, mouseDown, zones, changes };
+}
+const sel = (startLineNumber, startColumn, endLineNumber, endColumn) => ({ startLineNumber, startColumn, endLineNumber, endColumn });
+
+test('the add-comment action opens the composer after the last line of the selected range', async () => {
+  const { view, actions, zones } = await mountWithComposer({ selection: sel(3, 2, 5, 4) });
+  actions[0].run({ getSelection: () => sel(3, 2, 5, 4), getModel: () => ({ getLineCount: () => 10 }) });
+  assert.equal(zones.length, 1);
+  assert.equal(zones[0].afterLineNumber, 5);
+  view.dispose();
+});
+
+test('a gutter click inside the selected range comments on the whole range, outside it on that line', async () => {
+  const selection = sel(3, 2, 5, 4);
+  const { view, mouseDown, zones } = await mountWithComposer({ selection });
+  const click = (lineNumber) => mouseDown[0]({ target: { type: 'glyph', position: { lineNumber } } });
+  click(4);
+  assert.equal(zones.at(-1).afterLineNumber, 5);
+  click(8);
+  assert.equal(zones.at(-1).afterLineNumber, 8);
+  view.dispose();
+});
+
+test('an invalid selection opens no composer', async () => {
+  const { view, actions, zones } = await mountWithComposer({ selection: sel(9, 1, 11, 2) });
+  actions[0].run({ getSelection: () => sel(9, 1, 11, 2), getModel: () => ({ getLineCount: () => 10 }) });
+  assert.deepEqual(zones, []);
+  view.dispose();
+});

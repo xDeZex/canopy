@@ -100,3 +100,10 @@ test('composer restores a retained error with its draft', () => {
   const { view } = composer({ text: 'kept', error: 'Disk full' });
   assert.equal(find(view.node, 'p')[0].textContent, 'Disk full');
 });
+
+test('composer labels a range by its inclusive lines and a single line by its line', () => {
+  const label = (options) => find(composer(options).view.node, 'textarea')[0]['aria-label'];
+  assert.equal(label({ line: 7 }), 'New comment on line 7');
+  assert.equal(label({ line: 7, endLine: 7 }), 'New comment on line 7');
+  assert.equal(label({ line: 3, endLine: 5 }), 'New comment on lines 3-5');
+});

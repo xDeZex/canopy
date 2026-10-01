@@ -459,17 +459,29 @@ test('editors only receive a composer when saving is available, and it saves for
   f.viewer.render();
   const { composer } = f.calls[0].options;
   assert.equal(composer.draft, null);
-  await composer.save({ line: 2, text: 'Why?' });
-  assert.deepEqual(saved, [{ file: 'a.js', line: 2, text: 'Why?' }]);
+  await composer.save({ line: 2, endLine: 2, text: 'Why?' });
+  assert.deepEqual(saved, [{ file: 'a.js', line: 2, endLine: 2, text: 'Why?' }]);
+});
+
+test('a range draft keeps its end line across remounts and is saved with it', async () => {
+  const saved = [];
+  const f = fixture({ addComment: async (comment) => { saved.push(comment); } });
+  f.setState(composerState);
+  f.viewer.render();
+  f.calls[0].options.composer.onChange({ line: 2, endLine: 4, text: 'half', error: null });
+  f.viewer.render();
+  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, endLine: 4, text: 'half', error: null });
+  await f.calls[1].options.composer.save({ line: 2, endLine: 4, text: 'half' });
+  assert.deepEqual(saved, [{ file: 'a.js', line: 2, endLine: 4, text: 'half' }]);
 });
 
 test('an open draft survives remounting the same file and is dropped for another file or worktree', () => {
   const f = fixture({ addComment: async () => {} });
   f.setState(composerState);
   f.viewer.render();
-  f.calls[0].options.composer.onChange({ line: 2, text: 'half typed', error: 'Comments changed' });
+  f.calls[0].options.composer.onChange({ line: 2, endLine: 2, text: 'half typed', error: 'Comments changed' });
   f.viewer.render();
-  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, text: 'half typed', error: 'Comments changed' });
+  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, endLine: 2, text: 'half typed', error: 'Comments changed' });
   f.setState({ fileContent: { head: 'old', working: 'one\ntwo\nthree' } });
   f.viewer.render();
   assert.equal(f.calls[2].options.composer.draft.text, 'half typed');
@@ -500,8 +512,8 @@ test('a failed save is recorded on the draft so a remounted composer still shows
   f.setState(composerState);
   f.viewer.render();
   const { composer } = f.calls[0].options;
-  composer.onChange({ line: 2, text: 'mine', error: null });
-  await assert.rejects(composer.save({ line: 2, text: 'mine' }), /Comments changed/);
+  composer.onChange({ line: 2, endLine: 2, text: 'mine', error: null });
+  await assert.rejects(composer.save({ line: 2, endLine: 2, text: 'mine' }), /Comments changed/);
   f.viewer.render();
-  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, text: 'mine', error: 'Comments changed' });
+  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, endLine: 2, text: 'mine', error: 'Comments changed' });
 });

@@ -4,6 +4,7 @@
 // throwaway UI (variant D). The mounted controller is tested with a Monaco
 // stub; Monaco's rendering itself is left to manual/visual verification.
 import { renderConversation, renderComposer } from './comments-view.js';
+import { composerTarget } from './comment-range.js';
 
 let loaderReady = null;
 
@@ -37,6 +38,8 @@ const DIFF_MODE_OPTIONS = {
   'side-by-side': { renderSideBySide: true, hideUnchangedRegions: { enabled: false } },
 };
 
+const lineCount = (editor) => editor.getModel().getLineCount();
+
 // Shared public code-editor seam for File and the modified pane of Diff.
 function createThreadZones(getEditor, { contentAvailable = true, document, ResizeObserver, composer = null }) {
   let zones = [];
@@ -55,21 +58,22 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
     getEditor().changeViewZones((accessor) => accessor.removeZone(id));
   }
   // The gutter target and keyboard action both open the same composer: a
-  // native form in a view zone after the chosen modified-side line. The draft
-  // lives with the caller so remounts can restore it.
-  function openComposer(line, text = '', error = null) {
+  // native form in a view zone after the last chosen modified-side line. The
+  // draft lives with the caller so remounts can restore it.
+  function openComposer(line, endLine = line, text = '', error = null) {
     if (disposed) return;
     const editor = getEditor();
-    if (!Number.isSafeInteger(line) || line < 1 || line > editor.getModel().getLineCount()) return;
+    if (!Number.isSafeInteger(line) || !Number.isSafeInteger(endLine) || line < 1 || endLine < line ||
+        endLine > lineCount(editor)) return;
     closeComposer();
-    const view = renderComposer(document, { line, text, error,
-      onInput: (next) => composer.onChange({ line, text: next, error: null }),
+    const view = renderComposer(document, { line, endLine, text, error,
+      onInput: (next) => composer.onChange({ line, endLine, text: next, error: null }),
       onCancel: () => { closeComposer(); composer.onChange(null); },
       onSave: async (next) => {
         try {
-          await composer.save({ line, text: next });
+          await composer.save({ line, endLine, text: next });
         } catch (err) {
-          composer.onChange({ line, text: next, error: err.message });
+          composer.onChange({ line, endLine, text: next, error: err.message });
           throw err;
         }
         closeComposer();
@@ -82,7 +86,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
     node.addEventListener('mousedown', (event) => event.stopPropagation());
     node.addEventListener('keydown', (event) => event.stopPropagation());
     const entry = { id: null, observer: null };
-    const zone = { afterLineNumber: line, ordinal: 0, domNode: node, heightInPx: 150, suppressMouseDown: false };
+    const zone = { afterLineNumber: endLine, ordinal: 0, domNode: node, heightInPx: 150, suppressMouseDown: false };
     editor.changeViewZones((accessor) => { entry.id = accessor.addZone(zone); });
     const resize = () => {
       if (disposed || composerEntry !== entry) return;
@@ -116,14 +120,20 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
       editor.onMouseLeave(() => showHover(null)),
       editor.onMouseDown((event) => {
         if (event.target.type === MouseTargetType.GUTTER_GLYPH_MARGIN && event.target.position) {
-          openComposer(event.target.position.lineNumber);
+          // Only a click on a selected line adopts the selection, so another
+          // line never silently becomes part of an unrelated range.
+          const { line, endLine } = composerTarget(editor.getSelection(), lineCount(editor), event.target.position.lineNumber);
+          openComposer(line, endLine);
         }
       }),
       editor.addAction({ id: 'canopy.addComment', label: 'Add Comment on Line',
         keybindings: [KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyM],
-        run: (ed) => openComposer(ed.getPosition()?.lineNumber) }),
+        run: (ed) => {
+          const target = composerTarget(ed.getSelection(), lineCount(ed));
+          if (target) openComposer(target.line, target.endLine);
+        } }),
     );
-    if (composer.draft) openComposer(composer.draft.line, composer.draft.text, composer.draft.error);
+    if (composer.draft) openComposer(composer.draft.line, composer.draft.endLine, composer.draft.text, composer.draft.error);
   }
   function clearZones(accessor) {
     for (const zone of zones) {

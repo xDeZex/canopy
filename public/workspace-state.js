@@ -194,10 +194,10 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     onChange('comments');
   }
 
-  // Saves one new single-line thread against the revision this client has
-  // seen. Rejections carry the server's message; the latest comments are
-  // reloaded either way so a conflict shows what changed.
-  async function addComment({ file, line, text }) {
+  // Saves one new thread (a single line, or through `endLine`) against the
+  // revision this client has seen. Rejections carry the server's message; the
+  // latest comments are reloaded either way so a conflict shows what changed.
+  async function addComment({ file, line, endLine, text }) {
     const path = activePath;
     const revision = comments?.revision;
     if (comments?.warning) throw new Error(`Cannot save while comments cannot be read: ${comments.warning}`);
@@ -206,7 +206,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     try {
       res = await request(`/api/comments?worktree=${encodeURIComponent(path)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file, line, text, revision }),
+        body: JSON.stringify({ file, line, endLine, text, revision }),
       });
     } catch (err) {
       throw new Error(`Could not save comment: ${err.message}`);

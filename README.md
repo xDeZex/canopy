@@ -59,8 +59,9 @@ The sidebar's **Comments without a file** button replaces the editor with all
 genuinely general conversations (or an empty explanation). Selecting a file
 returns to the editor without changing the Diff/File preference. Version 1 accepts
 both existing anchored threads and general threads with no anchor fields. Canopy
-only writes the sidecar to save a new single-line comment: use the modified-side
-gutter `+` or Ctrl/Cmd+Alt+M, then Save. Saves are checked against the revision
+only writes the sidecar to save a new comment on a line or a selected range of
+modified-side lines: use the gutter `+` (on a selected line it takes the whole
+selection) or Ctrl/Cmd+Alt+M, then Save. Saves are checked against the revision
 you loaded and rejected visibly if the file changed. See
 [review comments](docs/review-comments.md) for the YAML contract, how to point an
 agent at a worktree, and the external-writer rules, and the

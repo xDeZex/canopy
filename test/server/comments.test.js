@@ -107,3 +107,18 @@ test('serialized timestamps are quoted so external YAML readers keep them as str
   const { source } = appendThread(null, request, ids);
   assert.match(source, /created_at: "2026-10-02T09:00:00\.000Z"/);
 });
+
+test('a range request creates a thread with the inclusive 1-based line_range', () => {
+  const { thread: created, source } = appendThread(null, { ...request, line: 3, endLine: 5 }, ids);
+  assert.deepEqual(created.line_range, { start: 3, end: 5 });
+  assert.deepEqual(parseComments(source).threads[0].line_range, { start: 3, end: 5 });
+  assert.deepEqual(appendThread(null, { ...request, line: 4, endLine: 4 }, ids).thread.line_range, { start: 4, end: 4 });
+});
+
+test('range requests validate their end line against the start', () => {
+  assert.equal(validateNewThread({ ...request, line: 1, endLine: 1 }), null);
+  assert.equal(validateNewThread({ ...request, line: 1, endLine: 2 }), null);
+  for (const bad of [{ endLine: 6 }, { endLine: 0 }, { endLine: 7.5 }, { endLine: '9' }, { endLine: null }, { endLine: Infinity }]) {
+    assert.ok(validateNewThread({ ...request, line: 7, ...bad }), JSON.stringify(bad));
+  }
+});

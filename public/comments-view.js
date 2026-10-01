@@ -92,18 +92,19 @@ export function renderConversationView(document, { threads = [], warning = null 
   return panel;
 }
 
-// A native form for a new single-line comment. The caller owns the draft:
-// `onInput` reports edits, and a rejected `onSave` shows its message as text
-// while the typed text stays so it can be retried.
-export function renderComposer(document, { line, text = '', error = null, onInput, onSave, onCancel }) {
+// A native form for a new comment on `line`, through `endLine` for a range.
+// The caller owns the draft: `onInput` reports edits, and a rejected `onSave`
+// shows its message as text while the typed text stays so it can be retried.
+export function renderComposer(document, { line, endLine = line, text = '', error = null, onInput, onSave, onCancel }) {
   const form = document.createElement('form');
   form.className = 'review-composer';
-  const label = textNode(document, 'label', `New comment on line ${line}`, 'review-composer__label');
+  const target = endLine > line ? `lines ${line}-${endLine}` : `line ${line}`;
+  const label = textNode(document, 'label', `New comment on ${target}`, 'review-composer__label');
   const textarea = document.createElement('textarea');
   textarea.className = 'review-composer__text';
   textarea.rows = 3;
   textarea.value = text;
-  textarea.setAttribute('aria-label', `New comment on line ${line}`);
+  textarea.setAttribute('aria-label', `New comment on ${target}`);
   textarea.addEventListener('input', () => onInput?.(textarea.value));
   const status = textNode(document, 'p', error ?? '', 'review-comments__warning');
   status.setAttribute('role', 'alert');

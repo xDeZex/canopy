@@ -70,10 +70,12 @@ export const commentsRevision = (source) =>
 
 export const MAX_COMMENT_LENGTH = 20000;
 
-// Pure validation of a client's request for a new single-line thread.
-export function validateNewThread({ file, line, text } = {}) {
+// Pure validation of a client's request for a new thread. `endLine` is the
+// inclusive last line of a range and defaults to `line`.
+export function validateNewThread({ file, line, endLine = line, text } = {}) {
   if (!validAnchorPath(file)) return 'Invalid file path';
   if (!Number.isSafeInteger(line) || line < 1) return 'Invalid line number';
+  if (!Number.isSafeInteger(endLine) || endLine < line) return 'Invalid end line number';
   if (typeof text !== 'string' || text.trim() === '') return 'Comment text is required';
   if (text.length > MAX_COMMENT_LENGTH) return `Comment text is limited to ${MAX_COMMENT_LENGTH} characters`;
   return null;
@@ -92,10 +94,10 @@ function serialize(data) {
 // text plus the thread. Every existing thread and message is kept as stored.
 // Throws when the existing text is not a valid version-1 document, so the
 // caller refuses rather than replacing data it does not understand.
-export function appendThread(source, { file, line, text }, { threadId, messageId, createdAt }) {
+export function appendThread(source, { file, line, endLine = line, text }, { threadId, messageId, createdAt }) {
   const data = source === null ? { version: 1, threads: [] } : parseSidecar(source);
   const thread = {
-    id: threadId, file, side: 'modified', line_range: { start: line, end: line },
+    id: threadId, file, side: 'modified', line_range: { start: line, end: endLine },
     created_at: createdAt, resolved: false,
     messages: [{ id: messageId, author: 'user', text, created_at: createdAt }],
   };

@@ -47,13 +47,13 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
     const { activeFile, worktrees, activePath, fileContent, fileContentError } = getState();
     if (draft && (draft.worktree !== activePath || draft.file !== activeFile)) draft = null;
     const composer = addComment && {
-      draft: draft && { line: draft.line, text: draft.text, error: draft.error },
+      draft: draft && { line: draft.line, endLine: draft.endLine, text: draft.text, error: draft.error },
       onChange: (next) => { draft = next && { ...next, worktree: getState().activePath, file: getState().activeFile }; },
       // Record a failure on the draft too: a remount may already have replaced
       // the composer that would otherwise show it.
-      save: async ({ line, text }) => {
+      save: async ({ line, endLine, text }) => {
         try {
-          await addComment({ file: getState().activeFile, line, text });
+          await addComment({ file: getState().activeFile, line, endLine, text });
         } catch (err) {
           if (draft) draft = { ...draft, error: err.message };
           throw err;

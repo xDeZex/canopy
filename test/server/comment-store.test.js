@@ -138,3 +138,21 @@ test('worktrees are isolated: a save only touches the selected worktree sidecar'
   assert.equal(fs.has('/repo/.canopy/comments.yaml'), false);
   assert.ok(fs.has('/other/.canopy/comments.yaml'));
 });
+
+test('a range thread is saved and reloaded with its inclusive range', async () => {
+  const { store, fs } = fixture();
+  const result = await store.create('/repo', request('absent', { line: 1, endLine: 2 }));
+  assert.deepEqual(result.thread.line_range, { start: 1, end: 2 });
+  assert.deepEqual(parseComments(fs.get(SIDECAR)).threads[0].line_range, { start: 1, end: 2 });
+});
+
+test('an invalid range, or a range on a stale revision, writes nothing and keeps unseen messages', async () => {
+  const { store, fs, log } = fixture();
+  const first = await store.create('/repo', request('absent', { text: 'seen elsewhere' }));
+  const before = fs.get(SIDECAR);
+  log.length = 0;
+  await assert.rejects(store.create('/repo', request(first.revision, { line: 2, endLine: 1 })), { status: 400 });
+  await assert.rejects(store.create('/repo', request('absent', { line: 1, endLine: 2 })), { status: 409, conflict: true });
+  assert.equal(fs.get(SIDECAR), before);
+  assert.deepEqual(log.filter(([step]) => ['write', 'rename', 'mkdir'].includes(step)), []);
+});

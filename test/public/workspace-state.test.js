@@ -826,6 +826,16 @@ test('adding a comment posts the loaded revision to the active worktree and relo
   assert.deepEqual(f.store.getState().comments.threads, [{ id: 'new' }]);
 });
 
+test('a range save sends its end line with the revision it was composed against', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.commentRequests[0], { threads: [], warning: null, revision: 'r1' });
+  const saved = f.store.addComment({ file: 'one', line: 3, endLine: 5, text: 'Why?' });
+  assert.deepEqual(JSON.parse(f.postRequests[0].options.body), { file: 'one', line: 3, endLine: 5, text: 'Why?', revision: 'r1' });
+  f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
+  await assert.rejects(saved, /Comments changed/);
+});
+
 test('a stale or failed save rejects with the server message and reloads the latest comments', async () => {
   const f = fixture('file');
   f.store.updateWorktrees(list(['/a']));
