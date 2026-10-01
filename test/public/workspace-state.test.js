@@ -105,6 +105,92 @@ test('status responses stay stale across worktree switches, even after returning
   assert.deepEqual(f.changes, []);
 });
 
+test('origin/main-only changes refresh file-scoped commits without reloading or disturbing the workspace', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees([{ path: '/a', head: 'bbb', originMainSha: 'aaa' }]);
+  await f.reply(f.requests[0], tree('open'));
+  f.store.selectFile('open');
+  await f.reply(f.requests[2], { working: 'unchanged', head: 'locked base' });
+  await f.reply(f.fileCommitRequests[0], [{ sha: 'bbb' }, { sha: 'aaa', isOriginMain: true }]);
+  f.commitLock.lockCommit('/a', 'aaa');
+  const before = f.store.getState();
+  f.changes.length = 0;
+
+  f.store.updateWorktrees([{ path: '/a', head: 'bbb', originMainSha: 'bbb' }]);
+  assert.equal(f.fileCommitRequests.length, 2, 'ref movement refreshes commits');
+  assert.equal(f.fileCommitRequests[1].url, '/api/commits?worktree=%2Fa&file=open');
+  assert.deepEqual(f.changes, [], 'ref-only notification must not remount the viewer or redraw tabs');
+  await f.reply(f.fileCommitRequests[1], [{ sha: 'bbb', isOriginMain: true }, { sha: 'aaa', isOriginMain: false }]);
+  const after = f.store.getState();
+  assert.equal(after.activePath, '/a');
+  assert.equal(after.activeFile, 'open');
+  assert.equal(after.fileTree, before.fileTree);
+  assert.equal(after.fileContent, before.fileContent);
+  assert.equal(f.commitLock.getLockedCommit('/a'), 'aaa');
+  assert.equal(f.viewModeStore.getMode(), 'file');
+  assert.deepEqual(f.watches, ['/a']);
+  assert.equal(f.requests.length, 3, 'no tree or content request');
+  assert.deepEqual(f.changes, ['toolbar']);
+  f.store.updateWorktrees([{ path: '/a', head: 'bbb', originMainSha: 'bbb' }]);
+  assert.equal(f.fileCommitRequests.length, 2, 'unchanged ref does not refresh again');
+});
+
+test('origin/main refresh with no open file is unmarked and a simultaneous HEAD change reloads resources only once', async () => {
+  const f = fixture();
+  f.store.updateWorktrees([{ path: '/a', head: 'old', originMainSha: null }]);
+  f.changes.length = 0;
+  f.store.updateWorktrees([{ path: '/a', head: 'old', originMainSha: 'aaa' }]);
+  assert.deepEqual(f.requests.slice(2).map(({ url }) => url), ['/api/commits?worktree=%2Fa']);
+  await f.reply(f.requests[2], [{ sha: 'aaa', isOriginMain: true }]);
+  assert.deepEqual(f.changes, ['toolbar']);
+  assert.equal(f.commitLock.getLockedCommit('/a'), null);
+  f.store.updateWorktrees([{ path: '/a', head: 'new', originMainSha: 'new' }]);
+  assert.deepEqual(f.requests.slice(3).map(({ url }) => url), [
+    '/api/files?worktree=%2Fa', '/api/commits?worktree=%2Fa',
+  ]);
+  assert.equal(f.fileCommitRequests.length, 0);
+  assert.equal(f.store.getState().activeFile, null);
+});
+
+test('stale origin/main refresh successes and errors cannot overwrite a newer refresh, file, worktree or removal', async () => {
+  for (const transition of ['refresh', 'file', 'worktree', 'removal']) {
+    for (const staleResult of ['success', 'error']) {
+      const f = fixture();
+      const snapshot = (originMainSha) => ['/a', '/b'].map((path) => ({ path, head: 'bbb', originMainSha }));
+      f.store.updateWorktrees(snapshot('aaa'));
+      f.store.selectFile('one');
+      f.store.updateWorktrees(snapshot('bbb'));
+      const stale = [f.requests[1], ...f.fileCommitRequests];
+      let current;
+      if (transition === 'refresh') {
+        f.store.updateWorktrees(snapshot(null));
+        current = f.fileCommitRequests.at(-1);
+      } else if (transition === 'file') {
+        f.store.selectFile('two');
+        current = f.fileCommitRequests.at(-1);
+      } else if (transition === 'worktree') {
+        f.store.selectWorktree('/b');
+        current = f.requests.at(-1);
+      } else {
+        f.store.updateWorktrees([]);
+      }
+      const expected = current ? [{ sha: 'latest', isOriginMain: true }] : [];
+      if (current) await f.reply(current, expected);
+      f.changes.length = 0;
+      for (const request of stale) {
+        if (staleResult === 'success') await f.reply(request, [{ sha: 'stale', isOriginMain: true, touchesFile: true }]);
+        else request.reject(new Error('stale ref failure'));
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(f.store.getState().commits, expected, `${transition}: ${staleResult}`);
+      assert.equal(f.store.getState().commitsError, null);
+      assert.deepEqual(f.changes, [], 'stale commits never notify the toolbar');
+      assert.equal(f.store.getState().activePath, transition === 'removal' ? null : transition === 'worktree' ? '/b' : '/a');
+      assert.equal(f.store.getState().activeFile, transition === 'file' ? 'two' : ['removal', 'worktree'].includes(transition) ? null : 'one');
+    }
+  }
+});
+
 test('active HEAD change in Auto reloads commits, tree and open content without changing selection', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees([{ path: '/a', head: 'old' }]);

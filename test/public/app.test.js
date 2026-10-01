@@ -262,6 +262,83 @@ test('activity stream updates inactive tabs and elapsed labels tick without repl
   assert.ok(sources.every((source) => source.closed));
 });
 
+test('origin/main SSE refresh moves and removes the open dropdown divider without disturbing the locked viewer', async (t) => {
+  const { document, window, elements } = browserStub();
+  const urls = [];
+  const sources = [];
+  let origin = 'aaa';
+  let mounts = 0;
+  let disposals = 0;
+  const worktrees = () => [
+    { path: '/a', branch: 'main', head: 'bbb', originMainSha: origin },
+    { path: '/b', branch: 'topic', head: 'bbb', originMainSha: origin },
+  ];
+  const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+  class EventSource {
+    constructor(url) { this.url = url; sources.push(this); }
+    addEventListener() {}
+    close() { this.closed = true; }
+  }
+  const app = await startApp({
+    document, window, EventSource, now: () => 1000,
+    setInterval: () => 17, clearInterval() {},
+    mountDiffEditor: () => { mounts++; return { dispose() { disposals++; } }; },
+    fetch: async (url) => {
+      urls.push(url);
+      const parsed = new URL(url, 'http://localhost');
+      const responses = {
+        '/api/worktrees': worktrees(),
+        '/api/files': [{ type: 'file', name: 'f.js', path: 'f.js', status: 'modified' }],
+        '/api/file-content': { head: 'locked base', working: 'unchanged working' },
+        '/api/commits': [
+          { sha: 'bbb', message: 'local', isOriginMain: origin === 'bbb', touchesFile: false },
+          { sha: 'aaa', message: 'pushed', isOriginMain: origin === 'aaa', touchesFile: parsed.searchParams.has('file') },
+        ],
+      };
+      return { ok: true, json: async () => responses[parsed.pathname] };
+    },
+  });
+  t.after(() => app.dispose());
+  await flush();
+  elements.rail.querySelector('.rail__file').click();
+  await flush();
+  const picker = elements.toolbar.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  menu.querySelectorAll('.commit-picker__item').at(-1).click();
+  await flush();
+  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  picker.querySelector('.commit-picker__trigger').click();
+  const tab = elements.tabs.children[0];
+  const rail = elements.rail.children[0];
+  const editor = elements.main.children[0];
+  const counts = { mounts, disposals };
+  const stream = sources.find((source) => source.url === '/api/watch-worktrees');
+  for (const sha of ['bbb', null, 'outside-history', 'aaa']) {
+    origin = sha;
+    const before = urls.length;
+    stream.onmessage({ data: JSON.stringify(worktrees()) });
+    await flush();
+    assert.deepEqual(urls.slice(before), ['/api/commits?worktree=%2Fa&file=f.js']);
+    assert.equal(elements.toolbar.querySelector('.commit-picker'), picker);
+    assert.equal(picker.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.classList.contains('is-open'), true);
+    assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+    assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+    assert.equal(elements.tabs.children[0], tab);
+    assert.equal(tab['aria-selected'], 'true');
+    assert.equal(elements.rail.children[0], rail);
+    assert.equal(elements.rail.querySelector('.rail__file').classList.contains('is-active'), true);
+    assert.equal(elements.main.children[0], editor);
+    assert.deepEqual({ mounts, disposals }, counts, 'commit refresh does not remount or dispose the editor');
+    const rows = menu.children.slice(1).map((row) => row.classList.contains('commit-picker__divider')
+      ? 'divider' : row.querySelector('.commit-picker__item-sha').textContent);
+    assert.deepEqual(rows, sha === 'bbb' ? ['divider', 'bbb', 'aaa']
+      : sha === 'aaa' ? ['bbb', 'divider', 'aaa'] : ['bbb', 'aaa']);
+    assert.equal(menu.querySelectorAll('.commit-picker__item').at(-1).classList.contains('commit-picker__item--touches-file'), true);
+  }
+  assert.equal(sources.filter((source) => source.url.startsWith('/api/watch?')).length, 1, 'no worktree stream reconnect');
+});
+
 test('initial request failure shows the original error without opening a stream', async () => {
   const { document, window, elements } = browserStub();
   let streams = 0;

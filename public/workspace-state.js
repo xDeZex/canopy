@@ -1,6 +1,16 @@
 import { collectFiles } from './collect-files.js';
 import { pickActiveWorktree } from './worktree-select.js';
 
+// Ref metadata belongs to the commit picker, not the tabs or mounted viewer.
+function worktreeDetailsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((worktree, i) => {
+    const keys = Object.keys(worktree).filter((key) => key !== 'originMainSha');
+    const nextKeys = Object.keys(b[i]).filter((key) => key !== 'originMainSha');
+    return keys.length === nextKeys.length && keys.every((key) => worktree[key] === b[i][key]);
+  });
+}
+
 // Owns workspace transitions and accepts only the latest response for each
 // resource. EventSource and DOM rendering remain the caller's responsibility.
 export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request, onChange, onActivePathChanged }) {
@@ -148,18 +158,25 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
         fileContentError, commits, commitsError };
     },
     updateWorktrees(nextWorktrees) {
-      const previousHead = worktrees.find((worktree) => worktree.path === activePath)?.head;
+      const previousActive = worktrees.find((worktree) => worktree.path === activePath);
+      const previousHead = previousActive?.head;
+      const previousOrigin = previousActive?.originMainSha;
+      const detailsChanged = !worktreeDetailsEqual(worktrees, nextWorktrees);
       worktrees = nextWorktrees;
       const knownPaths = worktrees.map((worktree) => worktree.path);
       commitLock.pruneToKnownWorktrees(knownPaths);
       const nextPath = pickActiveWorktree(worktrees, activePath);
       if (!switchWorktree(nextPath)) {
-        onChange('render');
-        const nextHead = worktrees.find((worktree) => worktree.path === activePath)?.head;
+        const nextActive = worktrees.find((worktree) => worktree.path === activePath);
+        const nextHead = nextActive?.head;
+        const originChanged = previousOrigin !== nextActive?.originMainSha;
+        if (detailsChanged || !originChanged) onChange('render');
         if (previousHead !== nextHead) {
           loadFileTree();
           loadCommits();
           loadFileContent();
+        } else if (originChanged) {
+          loadCommits();
         }
       }
       return knownPaths;

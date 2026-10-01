@@ -6,14 +6,21 @@ import { runGit } from './git.js';
 import { parseWorktreeList, selectedFirst } from './porcelain.js';
 import { getFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
-import { listCommits } from './commits.js';
+import { listCommits, originMainSha } from './commits.js';
 import { watchWorktree } from './watcher.js';
 
-// Lists the repo's worktrees with the one containing `repoRoot` first.
-export function createListWorktrees(repoRoot) {
+// Lists the repo's worktrees with the one containing `repoRoot` first. The
+// local remote-tracking ref is shared by linked worktrees; Git resolves it
+// from repoRoot without inspecting .git paths or contacting the remote.
+// Including it in each snapshot lets the existing poll observe ref-only changes.
+export function createListWorktrees(repoRoot, git = runGit) {
   return async () => {
-    const stdout = await runGit(['worktree', 'list', '--porcelain'], repoRoot);
-    return selectedFirst(parseWorktreeList(stdout), repoRoot);
+    const [stdout, originSha] = await Promise.all([
+      git(['worktree', 'list', '--porcelain'], repoRoot),
+      originMainSha(repoRoot, git),
+    ]);
+    return selectedFirst(parseWorktreeList(stdout), repoRoot)
+      .map((worktree) => ({ ...worktree, originMainSha: originSha }));
   };
 }
 

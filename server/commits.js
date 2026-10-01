@@ -51,9 +51,9 @@ async function shasTouching(worktreePath, file, runGit) {
 }
 
 // Sha `origin/main` points at, or null when there is no such remote branch.
-async function originMainSha(worktreePath, runGit) {
+export async function originMainSha(worktreePath, runGit = defaultRunGit) {
   try {
-    const stdout = await runGit(['rev-parse', '--verify', '-q', 'origin/main^{commit}'], worktreePath);
+    const stdout = await runGit(['rev-parse', '--verify', '-q', 'refs/remotes/origin/main^{commit}'], worktreePath);
     return stdout.trim() || null;
   } catch {
     return null;
