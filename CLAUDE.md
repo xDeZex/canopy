@@ -10,7 +10,7 @@ Review changes against the commit the worktree started from.
 
 ## User comments
 
-Read `.canopy/comments.yaml` to find the user's comments on code.
+Read `.canopy/comments.yaml`, if it exists, to find the user's comments on code.
 
 ## Coding standards
 
