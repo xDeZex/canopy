@@ -140,6 +140,10 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
         `/api/file-content?worktree=${encodeURIComponent(path)}${param('file', file)}${param('ref', lockedSha)}`
       );
       if (generation !== contentRequest) return;
+      // Both API sides are strings or null. Identical content must not
+      // remount the viewer and lose its scroll position or diff navigation.
+      if (!fileContentError && fileContent &&
+          fileContent.head === content.head && fileContent.working === content.working) return;
       fileContent = content;
       fileContentError = null;
     } catch (err) {
@@ -198,9 +202,10 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       loadCommits();
       return loadFileContent();
     },
-    remoteChange(paths) {
+    // A reconnect has no paths: reconcile the tree and any selected content.
+    remoteChange(paths = null) {
       loadFileTree();
-      if (activeFile && paths.includes(activeFile)) loadFileContent();
+      if (activeFile && (paths === null || paths.includes(activeFile))) loadFileContent();
     },
     // Index changes affect API statuses, not the selected comparison or its
     // controls. Reuse the tree request guard without seeding/remounting it.

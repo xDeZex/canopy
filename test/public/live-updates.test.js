@@ -23,6 +23,7 @@ function fixture() {
       this.onClose?.();
     }
     addEventListener(name, handler) { this.listeners.set(name, handler); }
+    open() { this.onopen?.(); }
     message(body) { this.onmessage?.({ data: JSON.stringify(body) }); }
     event(name, body) { this.listeners.get(name)?.({ data: JSON.stringify(body) }); }
   }
@@ -44,6 +45,52 @@ function fixture() {
   const list = (...paths) => paths.map((path) => ({ path }));
   return { sources, requests, activity, workspace, treeExpansion, liveUpdates, list };
 }
+
+test('file stream reconnect refreshes tree and selected content without paths or worktree replay', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a', head: 'unchanged' }]);
+  f.workspace.selectFile('open');
+  const source = f.sources[0];
+  const before = f.requests.length;
+  source.open();
+  assert.equal(f.requests.length, before, 'initial open uses the already requested workspace');
+  source.open();
+  assert.deepEqual(f.requests.slice(before), [
+    '/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=open',
+  ]);
+  source.open();
+  assert.deepEqual(f.requests.slice(before + 2), f.requests.slice(before, before + 2));
+  assert.equal(f.sources.length, 1, 'EventSource owns reconnection, with no replacement stream');
+});
+
+test('reconnect without selection fetches only tree and old opens stay stale through close, return and disposal', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees(f.list('/a', '/b'));
+  const old = f.sources[0];
+  old.open();
+  const before = f.requests.length;
+  old.open();
+  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa']);
+  old.onClose = () => old.open();
+  f.workspace.selectWorktree('/b');
+  const current = f.sources[1];
+  current.open();
+  const switched = f.requests.length;
+  old.open();
+  assert.equal(f.requests.length, switched, 'closing and old streams cannot reconcile the new worktree');
+  current.open();
+  assert.deepEqual(f.requests.slice(switched), ['/api/files?worktree=%2Fb']);
+  f.workspace.selectWorktree('/a');
+  const returned = f.requests.length;
+  old.open();
+  f.sources[2].open();
+  assert.equal(f.requests.length, returned, 'returned path has a fresh initial open');
+  f.sources[2].onClose = () => f.sources[2].open();
+  f.liveUpdates.dispose();
+  f.sources[2].open();
+  assert.equal(f.requests.length, returned);
+  assert.ok(f.sources.every((source) => source.closeCount === 1));
+});
 
 test('activity stream opens once, forwards snapshots and ignores delivery during close or after disposal', () => {
   const f = fixture();

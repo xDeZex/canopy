@@ -41,6 +41,70 @@ function fixture(savedMode = null) {
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
 const list = (paths) => paths.map((path) => ({ path }));
 
+test('identical refreshed content preserves its identity and does not notify the mounted viewer', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('open');
+  await f.reply(f.requests[2], { head: 'base', working: 'disk' });
+  const content = f.store.getState().fileContent;
+  f.changes.length = 0;
+  f.store.remoteChange();
+  await f.reply(f.requests[4], { working: 'disk', head: 'base' });
+  assert.equal(f.store.getState().fileContent, content);
+  assert.deepEqual(f.changes, []);
+
+  f.store.remoteChange();
+  await f.reply(f.requests[6], { head: 'different base', working: 'disk' });
+  assert.deepEqual(f.changes, ['main'], 'either comparison side changing refreshes the viewer');
+  f.changes.length = 0;
+  f.store.remoteChange();
+  f.requests[8].resolve({ ok: false, status: 503 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.changes, ['main']);
+  f.changes.length = 0;
+  f.store.remoteChange();
+  await f.reply(f.requests[10], { head: 'different base', working: 'disk' });
+  assert.equal(f.store.getState().fileContentError, null);
+  assert.deepEqual(f.changes, ['main'], 'success following an error restores the viewer');
+});
+
+test('no-path reconciliation rejects older successes and errors after reconnect, file events and selection transitions', async () => {
+  for (const transition of ['reconnect', 'event', 'file', 'worktree', 'return', 'removal']) {
+    for (const staleResult of ['success', 'error']) {
+      const f = fixture('diff');
+      f.store.updateWorktrees(list(['/a', '/b']));
+      f.store.selectFile('one');
+      f.store.remoteChange(); // 3 tree, 4 content
+      const stale = [f.requests[0], f.requests[2], f.requests[3], f.requests[4]];
+      if (transition === 'removal') {
+        f.store.updateWorktrees([]);
+      } else {
+        if (transition === 'file') f.store.selectFile('two');
+        if (['worktree', 'return'].includes(transition)) {
+          f.store.selectWorktree('/b');
+          if (transition === 'return') f.store.selectWorktree('/a');
+          f.store.selectFile('two');
+        }
+        if (transition === 'event') f.store.remoteChange(['one']);
+        else f.store.remoteChange();
+        await f.reply(f.requests.at(-2), tree('latest', 'added'));
+        await f.reply(f.requests.at(-1), { head: 'latest base', working: 'latest disk' });
+      }
+      const expected = f.store.getState();
+      f.changes.length = 0;
+      for (const request of stale) {
+        if (staleResult === 'success') {
+          await f.reply(request, request.url.startsWith('/api/files')
+            ? tree('stale', 'deleted') : { head: 'stale base', working: 'stale disk' });
+        } else request.reject(new Error('stale reconnect failure'));
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(f.store.getState(), expected, `${transition}: ${staleResult}`);
+      assert.deepEqual(f.changes, [], 'stale responses never notify the viewer or rail');
+    }
+  }
+});
+
 test('status invalidation reconciles the API tree only, preserving content, selection, commits and lock', async () => {
   const f = fixture('diff');
   f.commitLock.lockCommit('/a', 'locked');

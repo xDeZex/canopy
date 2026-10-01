@@ -18,6 +18,14 @@ export function createLiveUpdates({ workspace, treeExpansion, EventSource, onAct
 
     const source = new EventSource(`/api/watch?worktree=${encodeURIComponent(worktreePath)}`);
     activeSource = source;
+    let opened = false;
+    source.onopen = () => {
+      if (disposed || source !== activeSource) return;
+      // Initial selection already fetches these resources. Later opens may
+      // follow missed file events, even when HEAD and selection are unchanged.
+      if (opened) workspace.remoteChange();
+      opened = true;
+    };
     source.onmessage = (event) => {
       if (disposed || source !== activeSource) return;
       workspace.remoteChange(JSON.parse(event.data).paths);
