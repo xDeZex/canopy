@@ -1,7 +1,7 @@
 ## Workflow
 
 Use Conventional Commits for commits pushed to `main`.
-Before changing files for a task, create a dedicated Git worktree and move the OpenCode session into it.
+Before starting a task or exploration, create a dedicated Git worktree from origin/main and move the OpenCode session into it.
 
 ## Coding standards
 
