@@ -1,12 +1,11 @@
-// Owns the two SSE connections: one repo-wide worktree list (#12, opened once
-// for the app's lifetime because the list is not scoped to a worktree) and one
-// scoped to the active worktree (closed and reopened when the active path
-// changes, matching the server's one-watcher-per-connection model). The
-// workspace store owns selection and fetching.
-export function createLiveUpdates({ workspace, treeExpansion, EventSource }) {
+// Owns the SSE connections: repo-wide worktree list and edit activity streams,
+// plus a file stream scoped to the active worktree. The workspace store owns
+// selection and fetching.
+export function createLiveUpdates({ workspace, treeExpansion, EventSource, onActivity }) {
   let activeSource = null;
   let activePath = null;
   let worktreesSource = null;
+  let activitySource = null;
   let disposed = false;
 
   function connectActive(worktreePath) {
@@ -40,14 +39,26 @@ export function createLiveUpdates({ workspace, treeExpansion, EventSource }) {
     });
   }
 
+  function connectActivity() {
+    if (disposed || activitySource) return;
+    const source = new EventSource('/api/watch-activity');
+    activitySource = source;
+    source.onmessage = (event) => {
+      if (disposed || source !== activitySource) return;
+      onActivity(JSON.parse(event.data));
+    };
+  }
+
   function dispose() {
     if (disposed) return;
     disposed = true;
     activeSource?.close();
     worktreesSource?.close();
+    activitySource?.close();
     activeSource = null;
     worktreesSource = null;
+    activitySource = null;
   }
 
-  return { connectActive, connectWorktrees, dispose };
+  return { connectActive, connectWorktrees, connectActivity, dispose };
 }

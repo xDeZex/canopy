@@ -7,6 +7,7 @@ import { changedFiles } from './changed-files.js';
 export function createWorkspaceUI({
   tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
   viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
+  formatEditTime, now = Date.now,
   DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged, getDiffRenderMode,
   onAutoScrollChanged, onNextChange, onPrevChange, onToggleHelp,
   getWrap, onWrapChanged,
@@ -16,6 +17,22 @@ export function createWorkspaceUI({
   let toolbarCommits = null;
   let toolbarCommitsError = null;
   let toolbarLockedSha = null;
+  let editTimes = {};
+
+  function updateEditTimes(currentTime = now()) {
+    const { worktrees } = workspace.getState();
+    tabsEl.querySelectorAll('.tabs__tab').forEach((tab, index) => {
+      const timestamp = editTimes[worktrees[index]?.path];
+      const label = tab.querySelector('.tabs__edit-time');
+      label.textContent = formatEditTime(timestamp, currentTime);
+      label.title = timestamp == null ? 'Last saved edit unknown' : `Last saved edit: ${new Date(timestamp).toLocaleString()}`;
+    });
+  }
+
+  function setEditTimes(timestamps) {
+    editTimes = timestamps;
+    updateEditTimes();
+  }
 
   function updateTabScrollAffordance() {
     if (!tabsWrapperEl) return;
@@ -51,16 +68,20 @@ export function createWorkspaceUI({
         pathLabel.className = 'tabs__path';
         pathLabel.textContent = worktree.path;
 
+        const editTime = document.createElement('span');
+        editTime.className = 'tabs__edit-time';
+
         const tab = document.createElement('button');
         tab.type = 'button';
         tab.className = `tabs__tab${isActive ? ' is-active' : ''}`;
         tab.setAttribute('role', 'tab');
         tab.setAttribute('aria-selected', String(isActive));
-        tab.append(branch, pathLabel);
+        tab.append(branch, pathLabel, editTime);
         tab.addEventListener('click', () => workspace.selectWorktree(worktree.path));
         return tab;
       })
     );
+    updateEditTimes();
     updateTabScrollAffordance();
   }
 
@@ -412,5 +433,5 @@ export function createWorkspaceUI({
     toolbarEl.querySelector('.commit-picker__menu')?.classList.remove('is-open');
   }
 
-  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus };
+  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus, setEditTimes, updateEditTimes };
 }

@@ -11,6 +11,7 @@ import { createViewModeStore } from './view-mode.js';
 import { createAutoScrollStore } from './auto-scroll.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
+import { formatEditTime } from './edit-time.js';
 import { createTreeExpansionStore } from './tree-state.js';
 import { computeTabScrollAffordance } from './tab-scroll.js';
 import { createWorkspaceStore } from './workspace-state.js';
@@ -25,6 +26,9 @@ export async function startApp({
   mountEditor: mountFileEditor = mountEditor,
   mountDiffEditor: mountDiff = mountDiffEditor,
   languageForPath: language = languageForPath,
+  now = Date.now,
+  setInterval: schedule = globalThis.setInterval,
+  clearInterval: cancel = globalThis.clearInterval,
 } = {}) {
   const tabsWrapperEl = doc.getElementById('tabs-wrapper');
   const tabsEl = doc.getElementById('tabs');
@@ -111,7 +115,7 @@ export async function startApp({
 
   ui = createWorkspaceUI({
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
-    viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
+    viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime, formatEditTime, now,
     DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged,
     onAutoScrollChanged, onNextChange: () => viewer.nextChange(), onPrevChange: () => viewer.prevChange(),
     getWrap, onWrapChanged,
@@ -119,7 +123,9 @@ export async function startApp({
     getDiffRenderMode: () => diffRenderMode,
     document: doc, window: browserWindow,
   });
-  liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: EventSourceClass });
+  liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: EventSourceClass,
+    onActivity: (timestamps) => ui.setEditTimes(timestamps) });
+  let editTimer = null;
 
   function stepFile(direction) {
     const { fileTree, activeFile } = workspace.getState();
@@ -156,6 +162,7 @@ export async function startApp({
   const dispose = () => {
     doc.removeEventListener('keydown', onKeyDown);
     liveUpdates.dispose();
+    cancel(editTimer);
   };
 
   let worktrees;
@@ -174,5 +181,8 @@ export async function startApp({
 
   treeExpansion.pruneToKnownWorktrees(workspace.updateWorktrees(worktrees));
   liveUpdates.connectWorktrees();
+  liveUpdates.connectActivity();
+  editTimer = schedule(() => ui.updateEditTimes(), 30_000);
+  editTimer?.unref?.();
   return { dispose };
 }

@@ -62,16 +62,42 @@ test('startup renders an empty workspace and opens the repo-wide stream after lo
       },
     });
     assert.deepEqual(urls, ['/api/worktrees']);
-    assert.deepEqual(sources.map((source) => source.url), ['/api/watch-worktrees']);
+    assert.deepEqual(sources.map((source) => source.url), ['/api/watch-worktrees', '/api/watch-activity']);
     assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
     assert.equal(elements.toolbar.hidden, true);
     sources[0].onmessage({ data: '[]' });
     assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
     app.dispose();
     assert.equal(sources[0].closed, true);
+    assert.equal(sources[1].closed, true);
   } finally {
     // No browser globals are stubbed: every module takes its own dependencies.
   }
+});
+
+test('activity stream updates inactive tabs and elapsed labels tick without replacing tabs; dispose clears timer', async () => {
+  const { document, window, elements } = browserStub();
+  const sources = [];
+  let tick;
+  let cleared;
+  class EventSource {
+    constructor(url) { this.url = url; sources.push(this); }
+    addEventListener() {}
+    close() { this.closed = true; }
+  }
+  const app = await startApp({ document, window, EventSource, fetch: fakeFetch(),
+    now: () => 1_000_000,
+    setInterval: (fn, ms) => { tick = fn; assert.equal(ms, 30_000); return 17; },
+    clearInterval: (id) => { cleared = id; },
+  });
+  const tab = elements.tabs.children[1];
+  sources.find((source) => source.url === '/api/watch-activity').onmessage({ data: JSON.stringify({ '/a': null, '/b': 940_000 }) });
+  assert.equal(tab.querySelector('.tabs__edit-time').textContent, '1m ago');
+  tick();
+  assert.equal(elements.tabs.children[1], tab);
+  app.dispose();
+  assert.equal(cleared, 17);
+  assert.ok(sources.every((source) => source.closed));
 });
 
 test('initial request failure shows the original error without opening a stream', async () => {

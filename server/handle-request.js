@@ -34,6 +34,7 @@ export function createRequestHandler({
   getCommits,
   watchWorktree,
   subscribeToWorktreeChanges,
+  subscribeToActivity,
   readStatic,
   publicDir,
 }) {
@@ -99,6 +100,12 @@ export function createRequestHandler({
           onError: (err) => write(formatPollErrorEvent(err)),
         })
       );
+    }
+
+    if (pathname === '/api/watch-activity') {
+      return sseResponse(includeBody, (write) => subscribeToActivity(
+        (timestamps) => write(`data: ${JSON.stringify(timestamps)}\n\n`)
+      ));
     }
 
     if (pathname === '/api/file-content') {

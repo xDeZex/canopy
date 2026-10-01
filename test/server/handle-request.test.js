@@ -34,6 +34,24 @@ test('/api/worktrees responds with the listed worktrees as JSON', async () => {
   assert.deepEqual(JSON.parse(res.body), worktrees);
 });
 
+test('/api/watch-activity streams timestamp snapshots and cleans up; HEAD starts no watcher', async () => {
+  const calls = [];
+  const overrides = { subscribeToActivity: (notify) => {
+    calls.push('subscribe');
+    notify({ '/main': 123, '/linked': null });
+    return () => calls.push('close');
+  } };
+  const head = await run('/api/watch-activity', 'HEAD', overrides);
+  assert.equal(head.stream, undefined);
+  assert.deepEqual(calls, []);
+  const response = await run('/api/watch-activity', 'GET', overrides);
+  const frames = [];
+  const close = response.stream.subscribe((frame) => frames.push(frame));
+  assert.deepEqual(frames, ['data: {"/main":123,"/linked":null}\n\n']);
+  close();
+  assert.deepEqual(calls, ['subscribe', 'close']);
+});
+
 test('HEAD keeps status and headers but drops the body', async () => {
   const get = await run('/api/worktrees');
   const head = await run('/api/worktrees', 'HEAD');

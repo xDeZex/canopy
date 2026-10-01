@@ -9,6 +9,7 @@ import { createViewModeStore } from '../../public/view-mode.js';
 function fixture() {
   const sources = [];
   const requests = [];
+  const activity = [];
   class FakeEventSource {
     constructor(url) {
       this.url = url;
@@ -38,10 +39,29 @@ function fixture() {
     onActivePathChanged: (path) => liveUpdates.connectActive(path),
   });
   const treeExpansion = createTreeExpansionStore();
-  liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: FakeEventSource });
+  liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: FakeEventSource,
+    onActivity: (snapshot) => activity.push(snapshot) });
   const list = (...paths) => paths.map((path) => ({ path }));
-  return { sources, requests, workspace, treeExpansion, liveUpdates, list };
+  return { sources, requests, activity, workspace, treeExpansion, liveUpdates, list };
 }
+
+test('activity stream opens once, forwards snapshots and ignores delivery during close or after disposal', () => {
+  const f = fixture();
+  f.liveUpdates.connectActivity();
+  const activitySource = f.sources[0];
+  assert.equal(activitySource.url, '/api/watch-activity');
+  f.liveUpdates.connectActivity();
+  assert.equal(f.sources.length, 1);
+  activitySource.message({ '/a': 123, '/b': null });
+  assert.deepEqual(f.activity, [{ '/a': 123, '/b': null }]);
+  activitySource.onClose = () => activitySource.message({ '/a': 456 });
+  f.liveUpdates.dispose();
+  activitySource.message({ '/a': 789 });
+  f.liveUpdates.connectActivity();
+  assert.equal(activitySource.closeCount, 1);
+  assert.deepEqual(f.activity, [{ '/a': 123, '/b': null }]);
+  assert.equal(f.sources.length, 1);
+});
 
 test('removed active worktree falls back and re-scopes the file watch; expansion is pruned', () => {
   const f = fixture();

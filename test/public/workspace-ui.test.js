@@ -53,6 +53,8 @@ function fixture() {
     treeExpansion: { isExpanded: () => false, toggle() {} },
     computeTabScrollAffordance: () => ({ showLeft: false, showRight: false }),
     formatRelativeTime: () => 'recently', DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
+    formatEditTime: (timestamp, now) => timestamp == null ? 'No edit time' : `${now - timestamp}ms ago`,
+    now: () => 1000,
     onViewModeChanged() {}, onDiffRenderModeChanged() {}, getDiffRenderMode: () => 'inline',
     onNextChange: () => navCalls.push('next'), onPrevChange: () => navCalls.push('prev'),
     onToggleHelp: () => navCalls.push('help'),
@@ -79,6 +81,22 @@ test('Wrap button toggles the file viewer setting in both Diff and File modes', 
   f.ui.renderToolbar();
   button.click();
   assert.equal(button['aria-pressed'], 'true');
+});
+
+test('each worktree tab has a bottom-right edit time; updates and clock ticks preserve tab nodes and selection', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a', branch: 'main' }, { path: '/b', branch: 'feature' }]);
+  const [a, b] = f.tabsEl.children;
+  assert.equal(a.querySelector('.tabs__edit-time').textContent, 'No edit time');
+  assert.equal(b.querySelector('.tabs__edit-time').textContent, 'No edit time');
+  f.ui.setEditTimes({ '/a': 500, '/b': 800 });
+  assert.equal(a.querySelector('.tabs__edit-time').textContent, '500ms ago');
+  assert.equal(b.querySelector('.tabs__edit-time').textContent, '200ms ago');
+  f.ui.updateEditTimes(2000);
+  assert.equal(f.tabsEl.children[1], b);
+  assert.equal(b.querySelector('.tabs__edit-time').textContent, '1200ms ago');
+  assert.equal(a['aria-selected'], 'true');
+  assert.equal(b.querySelector('.tabs__branch').textContent, 'feature');
 });
 
 test('toolbar keeps the filename separate from the dimmed directory and preserves the full path', async () => {

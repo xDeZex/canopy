@@ -6,6 +6,7 @@ import { createListWorktrees, defaultDeps } from './default-deps.js';
 import { pollWorktrees } from './worktree-watch.js';
 import { createFanOut } from './fan-out.js';
 import { createRequestHandler } from './handle-request.js';
+import { createActivityFeed } from './worktree-activity.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -23,6 +24,7 @@ export function createApp({
   listCommits,
   watchWorktree = defaultDeps.watchWorktree,
   watchWorktreeList,
+  activityFeed,
 } = {}) {
   const getWorktrees = listWorktrees ?? createListWorktrees(repoRoot);
 
@@ -34,6 +36,7 @@ export function createApp({
 
   // Shares one poll across every open `/api/watch-worktrees` connection.
   const subscribeToWorktreeChanges = createFanOut(watchWorktrees);
+  const activity = activityFeed ?? createActivityFeed(getWorktrees);
 
   const getTree = getFileTree ?? defaultDeps.getFileTree;
   const getContent = getFileContent ?? defaultDeps.getFileContent;
@@ -46,6 +49,7 @@ export function createApp({
     getCommits,
     watchWorktree,
     subscribeToWorktreeChanges,
+    subscribeToActivity: (callback) => activity.subscribe(callback),
     readStatic: readFile,
     publicDir: PUBLIC_DIR,
   });

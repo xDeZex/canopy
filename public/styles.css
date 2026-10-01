@@ -180,6 +180,14 @@ body {
   color: var(--fg-dim);
 }
 
+.tabs__edit-time {
+  align-self: flex-end;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
 /* ---------- Body: file rail + main content ---------- */
 
 .body {
