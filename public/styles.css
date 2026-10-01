@@ -303,7 +303,8 @@ body {
   font-weight: 600;
 }
 
-.rail__file.status-modified {
+.rail__file.status-modified,
+.rail__file.status-renamed {
   color: var(--modified);
 }
 

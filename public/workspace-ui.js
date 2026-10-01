@@ -133,14 +133,18 @@ export function createWorkspaceUI({
     return file;
   }
 
+  function fileLabel(node, fallback) {
+    return node.status === 'renamed' ? `${node.oldPath} → ${node.path}` : fallback;
+  }
+
   // A clickable file row, shared by the tree and the changed-files list so
   // status colors, the active highlight and click-to-open stay identical.
   function renderFileRow(node, label, className) {
     const { activeFile } = workspace.getState();
     const row = document.createElement('div');
     row.className = `${className} status-${node.status}${node.path === activeFile ? ' is-active' : ''}`;
-    row.title = node.path;
-    row.textContent = label;
+    row.title = fileLabel(node, node.path);
+    row.textContent = fileLabel(node, label);
     row.addEventListener('click', () => workspace.selectFile(node.path));
     return row;
   }
@@ -164,7 +168,7 @@ export function createWorkspaceUI({
         const row = renderFileRow(node, node.path, 'rail__file changed-files__file');
         const path = document.createElement('span');
         path.className = 'changed-files__path';
-        path.textContent = node.path;
+        path.textContent = fileLabel(node, node.path);
         row.replaceChildren(path);
         if (node.status !== 'deleted' && Number.isFinite(node.mtimeMs)) {
           const age = document.createElement('span');

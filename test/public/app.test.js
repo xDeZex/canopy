@@ -101,10 +101,10 @@ test('index startup reconciliation and later operations update both rails withou
   // tracked.txt stays on disk; gone.txt is a staged addition already absent
   // from disk. Resetting staged.txt keeps it on disk and normalized as added.
   const snapshots = {
-    staged: { tracked: 'tracked.txt\0staged.txt\0gone.txt\0', status: 'A  staged.txt\nAD gone.txt\n' },
-    cachedRemoval: { tracked: 'staged.txt\0gone.txt\0', status: 'D  tracked.txt\n?? tracked.txt\nA  staged.txt\nAD gone.txt\n' },
-    resetGone: { tracked: 'staged.txt\0', status: 'D  tracked.txt\n?? tracked.txt\nA  staged.txt\n' },
-    resetPresent: { tracked: '', status: 'D  tracked.txt\n?? tracked.txt\n?? staged.txt\n' },
+    staged: { tracked: 'tracked.txt\0staged.txt\0gone.txt\0', status: 'A  staged.txt\0AD gone.txt\0' },
+    cachedRemoval: { tracked: 'staged.txt\0gone.txt\0', status: 'D  tracked.txt\0?? tracked.txt\0A  staged.txt\0AD gone.txt\0' },
+    resetGone: { tracked: 'staged.txt\0', status: 'D  tracked.txt\0?? tracked.txt\0A  staged.txt\0' },
+    resetPresent: { tracked: '', status: 'D  tracked.txt\0?? tracked.txt\0?? staged.txt\0' },
   };
   const runGit = async (args, cwd) => {
     assert.equal(cwd, '/linked');

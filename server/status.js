@@ -1,8 +1,9 @@
 // Acquires changed paths from porcelain (HEAD) or a ref diff, then merges
 // them with `git ls-files` for flat and nested views.
 //
-// Porcelain v1 short format: each line is a two-character XY status code, a
-// space, then the path (`old -> new` for renames). `--untracked-files=all`
+// Porcelain v1 -z format: each NUL record is a two-character XY status code,
+// a space, then the path. Renames/copies add a source record after the destination.
+// `--untracked-files=all`
 // makes untracked directories expand to their individual files, so no
 // separate directory walk is needed. See `git status --help`.
 
@@ -12,7 +13,7 @@ import { join } from 'node:path';
 
 export async function getChangedPaths(worktreePath, ref = 'HEAD', runGit = defaultRunGit) {
   if (ref === 'HEAD') {
-    return parseStatus(await runGit(['status', '--porcelain', '--untracked-files=all'], worktreePath));
+    return parseStatus(await runGit(['status', '--porcelain', '-z', '--untracked-files=all'], worktreePath));
   }
 
   // Resolve before using the ref as a diff argument: even a caller-supplied
@@ -65,21 +66,25 @@ export function parseNameStatus(output) {
     const code = fields[i++];
     const firstPath = fields[i++];
     const path = /^[RC]/.test(code) ? fields[i++] : firstPath;
-    entries.push({ path, status: normalizeStatus(code) });
+    entries.push(code.startsWith('R')
+      ? { path, status: 'renamed', oldPath: firstPath }
+      : { path, status: normalizeStatus(code) });
   }
   return entries;
 }
 
 export function parseStatus(output) {
-  const trimmed = output.replace(/\r?\n$/, '');
-  if (!trimmed) return [];
-
-  return trimmed.split('\n').map((line) => {
-    const code = line.slice(0, 2);
-    const rest = line.slice(3);
-    const path = rest.includes(' -> ') ? rest.split(' -> ')[1] : rest;
-    return { path, status: normalizeStatus(code) };
-  });
+  const records = output.split('\0');
+  const entries = [];
+  for (let i = 0; i < records.length - 1;) {
+    const record = records[i++];
+    const code = record.slice(0, 2);
+    const path = record.slice(3);
+    const oldPath = /[RC]/.test(code) ? records[i++] : undefined;
+    const status = normalizeStatus(code);
+    entries.push({ path, status, ...(status === 'renamed' ? { oldPath } : {}) });
+  }
+  return entries;
 }
 
 function normalizeStatus(code) {
@@ -89,18 +94,19 @@ function normalizeStatus(code) {
   // file's actual state on disk right now.
   if (code.includes('D')) return 'deleted';
   if (code.includes('A')) return 'added';
+  if (code.includes('R')) return 'renamed';
   return 'modified';
 }
 
 // Tracked paths with no matching status entry are clean; status entries not
 // present in `trackedPaths` are included too (e.g. untracked additions).
 export function mergeFileStatuses(trackedPaths, statusEntries) {
-  const statusByPath = new Map(statusEntries.map((entry) => [entry.path, entry.status]));
+  const statusByPath = new Map(statusEntries.map((entry) => [entry.path, entry]));
   const allPaths = new Set([...trackedPaths, ...statusByPath.keys()]);
 
   return [...allPaths]
     .sort((a, b) => a.localeCompare(b))
-    .map((path) => ({ path, status: statusByPath.get(path) ?? 'clean' }));
+    .map((path) => ({ ...(statusByPath.get(path) ?? { path, status: 'clean' }) }));
 }
 
 // The merged entries are already sorted by full path.
@@ -112,7 +118,7 @@ export function listChangedFiles(mergedEntries) {
 export function nestIntoTree(mergedEntries) {
   const root = new Map();
 
-  for (const { path, status, mtimeMs } of mergedEntries) {
+  for (const { path, status, oldPath, mtimeMs } of mergedEntries) {
     const segments = path.split('/');
     let level = root;
     let prefix = '';
@@ -129,7 +135,9 @@ export function nestIntoTree(mergedEntries) {
         level.set(
           key,
           isFile
-            ? { name: segment, type: 'file', path: prefix, status, ...(mtimeMs != null ? { mtimeMs } : {}) }
+            ? { name: segment, type: 'file', path: prefix, status,
+                ...(status === 'renamed' ? { oldPath } : {}),
+                ...(mtimeMs != null ? { mtimeMs } : {}) }
             : { name: segment, type: 'dir', path: prefix, childMap: new Map() }
         );
       }

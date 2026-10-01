@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getChangedPaths, getFileTree, parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from '../../server/status.js';
 
-test('parses NUL-delimited diff names including a rename and deletion', () => {
-  assert.deepEqual(parseNameStatus('R100\0old name\0new name\0D\0gone\0A\0new\0M\0changed\0'), [
-    { path: 'new name', status: 'modified' },
+test('parses NUL-delimited diff names including a rename, copy and deletion', () => {
+  assert.deepEqual(parseNameStatus('R100\0old name -> original\nfile\0new name -> destination\nfile\0C100\0source\0copy\0D\0gone\0A\0new\0M\0changed\0'), [
+    { path: 'new name -> destination\nfile', status: 'renamed', oldPath: 'old name -> original\nfile' },
+    { path: 'copy', status: 'modified' },
     { path: 'gone', status: 'deleted' },
     { path: 'new', status: 'added' },
     { path: 'changed', status: 'modified' },
@@ -29,7 +30,7 @@ test('parses NUL-delimited untracked paths as added, spaces included', () => {
 
 test('combineRefDiff lists diff entries followed by untracked additions', () => {
   assert.deepEqual(combineRefDiff('R100\0old.txt\0new.txt\0D\0gone.txt\0M\0changed.txt\0', 'untracked.txt\0'), [
-    { path: 'new.txt', status: 'modified' },
+    { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
     { path: 'gone.txt', status: 'deleted' },
     { path: 'changed.txt', status: 'modified' },
     { path: 'untracked.txt', status: 'added' },
@@ -38,37 +39,38 @@ test('combineRefDiff lists diff entries followed by untracked additions', () => 
 });
 
 test('parses a modified tracked file', () => {
-  assert.deepEqual(parseStatus(' M server/app.js\n'), [
+  assert.deepEqual(parseStatus(' M server/app.js\0'), [
     { path: 'server/app.js', status: 'modified' },
   ]);
 });
 
 test('parses an untracked file as added', () => {
-  assert.deepEqual(parseStatus('?? server/status.js\n'), [
+  assert.deepEqual(parseStatus('?? server/status.js\0'), [
     { path: 'server/status.js', status: 'added' },
   ]);
 });
 
 test('parses a staged new file as added', () => {
-  assert.deepEqual(parseStatus('A  server/status.js\n'), [
+  assert.deepEqual(parseStatus('A  server/status.js\0'), [
     { path: 'server/status.js', status: 'added' },
   ]);
 });
 
 test('parses a deleted file', () => {
-  assert.deepEqual(parseStatus(' D server/old.js\n'), [
+  assert.deepEqual(parseStatus(' D server/old.js\0'), [
     { path: 'server/old.js', status: 'deleted' },
   ]);
 });
 
-test('parses a renamed file using its new path', () => {
-  assert.deepEqual(parseStatus('R  server/old.js -> server/new.js\n'), [
-    { path: 'server/new.js', status: 'modified' },
+test('parses a NUL-delimited rename destination first without interpreting path characters', () => {
+  assert.deepEqual(parseStatus('R  new dir/new -> name\n.js\0old dir/old -> name\n.js\0 M next.js\0'), [
+    { path: 'new dir/new -> name\n.js', status: 'renamed', oldPath: 'old dir/old -> name\n.js' },
+    { path: 'next.js', status: 'modified' },
   ]);
 });
 
-test('parses multiple lines', () => {
-  const output = [' M server/app.js', '?? server/status.js', ''].join('\n');
+test('parses multiple NUL records', () => {
+  const output = [' M server/app.js', '?? server/status.js', ''].join('\0');
 
   assert.deepEqual(parseStatus(output), [
     { path: 'server/app.js', status: 'modified' },
@@ -76,9 +78,18 @@ test('parses multiple lines', () => {
   ]);
 });
 
+test('porcelain copies and deleted rename destinations keep ordinary statuses and consume their source records', () => {
+  assert.deepEqual(parseStatus('C  copy name.js\0source.js\0RD removed.js\0old.js\0AD added then deleted.js\0?? literal -> name\n.js\0RM edited rename.js\0original.js\0'), [
+    { path: 'copy name.js', status: 'modified' },
+    { path: 'removed.js', status: 'deleted' },
+    { path: 'added then deleted.js', status: 'deleted' },
+    { path: 'literal -> name\n.js', status: 'added' },
+    { path: 'edited rename.js', status: 'renamed', oldPath: 'original.js' },
+  ]);
+});
+
 test('returns an empty array for empty output', () => {
   assert.deepEqual(parseStatus(''), []);
-  assert.deepEqual(parseStatus('\n'), []);
 });
 
 test('mergeFileStatuses deduplicates paths, prefers status entries, defaults tracked paths to clean, and sorts by full path', () => {
@@ -95,16 +106,27 @@ test('mergeFileStatuses deduplicates paths, prefers status entries, defaults tra
   ]);
 });
 
-test('mergeFileStatuses uses the new path for a rename parsed from git status', () => {
+test('rename metadata reaches the changed list and tree without removing a current source file', () => {
   const merged = mergeFileStatuses(
-    ['server/new.js', 'server/other.js'],
-    parseStatus('R  server/old.js -> server/new.js\n')
+    ['server/new.js', 'server/old.js', 'server/other.js'],
+    [{ ...parseStatus('R  server/new.js\0server/old.js\0')[0], mtimeMs: 1234 }]
   );
 
   assert.deepEqual(merged, [
-    { path: 'server/new.js', status: 'modified' },
+    { path: 'server/new.js', status: 'renamed', oldPath: 'server/old.js', mtimeMs: 1234 },
+    { path: 'server/old.js', status: 'clean' },
     { path: 'server/other.js', status: 'clean' },
   ]);
+  assert.deepEqual(listChangedFiles(merged), [
+    { path: 'server/new.js', status: 'renamed', oldPath: 'server/old.js', mtimeMs: 1234 },
+  ]);
+  assert.deepEqual(nestIntoTree(merged), [{
+    name: 'server', type: 'dir', path: 'server', children: [
+      { name: 'new.js', type: 'file', path: 'server/new.js', status: 'renamed', oldPath: 'server/old.js', mtimeMs: 1234 },
+      { name: 'old.js', type: 'file', path: 'server/old.js', status: 'clean' },
+      { name: 'other.js', type: 'file', path: 'server/other.js', status: 'clean' },
+    ],
+  }]);
 });
 
 test('listChangedFiles keeps only changed entries in full-path order', () => {
@@ -255,14 +277,14 @@ function fakeGit(responses) {
   return { runGit, calls };
 }
 
-test('getChangedPaths on HEAD parses `git status --porcelain` in the worktree', async () => {
-  const { runGit, calls } = fakeGit({ status: ' M modified.txt\n?? new.txt\n' });
+test('getChangedPaths on HEAD parses `git status --porcelain -z` in the worktree', async () => {
+  const { runGit, calls } = fakeGit({ status: ' M modified.txt\0?? new.txt\0' });
 
   assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit), [
     { path: 'modified.txt', status: 'modified' },
     { path: 'new.txt', status: 'added' },
   ]);
-  assert.deepEqual(calls, [{ args: ['status', '--porcelain', '--untracked-files=all'], cwd: '/wt' }]);
+  assert.deepEqual(calls, [{ args: ['status', '--porcelain', '-z', '--untracked-files=all'], cwd: '/wt' }]);
 });
 
 test('getChangedPaths against a ref diffs the resolved sha and appends untracked files', async () => {
@@ -291,7 +313,7 @@ test('getChangedPaths rejects, without diffing, when the ref does not resolve', 
 
 test('getFileTree merges tracked files with changed-path statuses', async () => {
   const { runGit } = fakeGit({
-    status: ' M src/a.js\n',
+    status: ' M src/a.js\0',
     'ls-files': 'README.md\0src/a.js\0',
   });
 
@@ -305,7 +327,7 @@ test('getFileTree merges tracked files with changed-path statuses', async () => 
 
 test('getFileTree adds saved edit times only to changed files present on disk', async () => {
   const { runGit } = fakeGit({
-    status: ' M src/edit.js\n?? new.txt\n D old.txt\n',
+    status: ' M src/edit.js\0?? new.txt\0 D old.txt\0',
     'ls-files': 'clean.txt\0src/edit.js\0old.txt\0',
   });
   const checked = [];
@@ -326,7 +348,7 @@ test('getFileTree adds saved edit times only to changed files present on disk', 
 });
 
 test('getFileTree keeps changed files when their edit time cannot be read', async () => {
-  const { runGit } = fakeGit({ status: ' M missing.txt\n?? present.txt\n', 'ls-files': 'missing.txt\0' });
+  const { runGit } = fakeGit({ status: ' M missing.txt\0?? present.txt\0', 'ls-files': 'missing.txt\0' });
   const stat = async (path) => {
     if (path.endsWith('missing.txt')) throw new Error('ENOENT');
     return { mtimeMs: 900 };

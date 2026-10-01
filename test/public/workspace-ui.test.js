@@ -8,7 +8,7 @@ import { createAutoScrollStore } from '../../public/auto-scroll.js';
 import { formatRelativeTime } from '../../public/relative-time.js';
 import { Element } from './fake-dom.js';
 
-function fixture({ now = () => 1000, relativeTime = () => 'recently' } = {}) {
+function fixture({ now = () => 1000, relativeTime = () => 'recently', treeExpanded = false } = {}) {
   const documentListeners = new Set();
   const document = {
     createElement: (tag) => new Element(tag),
@@ -51,7 +51,7 @@ function fixture({ now = () => 1000, relativeTime = () => 'recently' } = {}) {
   });
   ui = createWorkspaceUI({
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, commitLock, viewModeStore, autoScrollStore,
-    treeExpansion: { isExpanded: () => false, toggle() {} },
+    treeExpansion: { isExpanded: () => treeExpanded, toggle() {} },
     computeTabScrollAffordance: () => ({ showLeft: false, showRight: false }),
     formatRelativeTime: relativeTime, DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
     formatEditTime: (timestamp, now) => timestamp == null ? 'No edit time' : `${now - timestamp}ms ago`,
@@ -409,6 +409,34 @@ test('changed-files list shows full paths sorted, status-colored, and opens a fi
 
   rows[1].click();
   assert.equal(f.workspace.getState().activeFile, 'src/b.js');
+});
+
+test('renamed files show full old → new labels and titles in both rail views and open the destination', async () => {
+  const f = fixture({ treeExpanded: true });
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[0], [{
+    type: 'dir', name: 'new dir', path: 'new dir', children: [
+      { type: 'file', name: 'new -> name.js', path: 'new dir/new -> name.js', status: 'renamed', oldPath: 'old dir/old -> name.js', mtimeMs: 500 },
+      { type: 'file', name: 'ordinary.js', path: 'new dir/ordinary.js', status: 'modified' },
+    ],
+  }]);
+  const treeRows = f.railEl.querySelector('.rail__tree').querySelectorAll('.rail__file');
+  const changedRows = f.railEl.querySelectorAll('.changed-files__file');
+  const label = 'old dir/old -> name.js → new dir/new -> name.js';
+  assert.equal(treeRows[0].textContent, label);
+  assert.equal(changedRows[0].querySelector('.changed-files__path').textContent, label);
+  assert.equal(changedRows[0].querySelector('.changed-files__age').textContent, '500ms ago');
+  for (const row of [treeRows[0], changedRows[0]]) {
+    assert.equal(row.title, label);
+    assert.equal(row.classList.contains('status-renamed'), true);
+    row.click();
+    assert.equal(f.workspace.getState().activeFile, 'new dir/new -> name.js');
+  }
+  assert.equal(f.requests[2].url, '/api/file-content?worktree=%2Frepo&file=new%20dir%2Fnew%20-%3E%20name.js');
+  assert.equal(treeRows[1].textContent, 'ordinary.js');
+  assert.equal(treeRows[1].title, 'new dir/ordinary.js');
+  assert.equal(changedRows[1].querySelector('.changed-files__path').textContent, 'new dir/ordinary.js');
+  assert.equal(changedRows[1].classList.contains('status-modified'), true);
 });
 
 test('changed-file ages appear beside saved files, not deleted or unknown files, and refresh without replacing rows', async () => {
