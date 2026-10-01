@@ -8,6 +8,7 @@ import { getFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
 import { listCommits, originMainSha } from './commits.js';
 import { watchWorktree } from './watcher.js';
+import { worktreeDeletionReason } from './worktree-delete.js';
 
 // Lists the repo's worktrees with the one containing `repoRoot` first. The
 // local remote-tracking ref is shared by linked worktrees; Git resolves it
@@ -19,7 +20,9 @@ export function createListWorktrees(repoRoot, git = runGit) {
       git(['worktree', 'list', '--porcelain'], repoRoot),
       originMainSha(repoRoot, git),
     ]);
-    return selectedFirst(parseWorktreeList(stdout), repoRoot)
+    const worktrees = parseWorktreeList(stdout);
+    return selectedFirst(worktrees.map((worktree) => ({ ...worktree,
+      deletionReason: worktreeDeletionReason(worktree, worktrees, repoRoot) })), repoRoot)
       .map((worktree) => ({ ...worktree, originMainSha: originSha }));
   };
 }

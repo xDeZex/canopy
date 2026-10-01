@@ -7,6 +7,7 @@ import { pollWorktrees } from './worktree-watch.js';
 import { createFanOut } from './fan-out.js';
 import { createRequestHandler } from './handle-request.js';
 import { createActivityFeed } from './worktree-activity.js';
+import { createWorktreeDeletion } from './worktree-delete.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -25,6 +26,7 @@ export function createApp({
   watchWorktree = defaultDeps.watchWorktree,
   watchWorktreeList,
   activityFeed,
+  worktreeDeletion,
 } = {}) {
   const getWorktrees = listWorktrees ?? createListWorktrees(repoRoot);
 
@@ -52,13 +54,15 @@ export function createApp({
     subscribeToActivity: (callback) => activity.subscribe(callback),
     readStatic: readFile,
     publicDir: PUBLIC_DIR,
+    worktreeDeletion: worktreeDeletion ?? createWorktreeDeletion(repoRoot),
   });
 
   // Translates between Node's `req`/`res` and the pure request handler.
   return createServer(async (req, res) => {
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://localhost');
-      const response = await handleRequest({ method: req.method, pathname, searchParams });
+      const response = await handleRequest({ method: req.method, pathname, searchParams, headers: req.headers,
+        protocol: req.socket.encrypted ? 'https:' : 'http:' });
 
       res.writeHead(response.status, response.headers);
 
