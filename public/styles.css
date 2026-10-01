@@ -814,3 +814,37 @@ body {
   font-family: inherit;
   font-size: 12px;
 }
+
+.review-composer {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border-left: 3px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+}
+.review-composer__label { font-size: 12px; color: #a8a8a8; }
+.review-composer__text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
+.review-composer__text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.review-composer__actions { display: flex; gap: 8px; }
+.review-composer .review-comments__warning { margin: 0; }
+.review-composer .review-comments__warning:empty { display: none; }
+
+.monaco-editor .review-add-glyph::before {
+  content: '+';
+  display: block;
+  text-align: center;
+  font-weight: bold;
+  color: var(--accent);
+  cursor: pointer;
+}

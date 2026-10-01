@@ -17,14 +17,19 @@ function fixture(savedMode = null) {
   // so tree/content tests can keep addressing `requests` by position.
   const fileCommitRequests = [];
   const commentRequests = [];
+  const postRequests = [];
   const changes = [];
   const watches = [];
   const commitLock = createCommitLockStore();
   const viewModeStore = createViewModeStore({ getItem: () => savedMode, setItem: () => {} });
   const store = createWorkspaceStore({
     commitLock, viewModeStore,
-    fetch(url) {
+    fetch(url, options) {
       const pending = deferred();
+      if (options?.method === 'POST') {
+        postRequests.push({ url, options, ...pending });
+        return pending.promise;
+      }
       if (url.startsWith('/api/comments')) {
         commentRequests.push({ url, ...pending });
         return pending.promise;
@@ -40,7 +45,7 @@ function fixture(savedMode = null) {
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { store, requests, fileCommitRequests, commentRequests, changes, watches, commitLock, viewModeStore, reply };
+  return { store, requests, fileCommitRequests, commentRequests, postRequests, changes, watches, commitLock, viewModeStore, reply };
 }
 
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
@@ -802,4 +807,49 @@ test('a renamed file loads its content with the old path, and a pairing found la
   g.store.remoteChange();
   await g.reply(g.requests[3], [{ type: 'file', path: 'moved.js', name: 'moved.js', status: 'renamed', oldPath: 'gone.js' }]);
   assert.ok(g.requests.some((request) => request.url === '/api/file-content?worktree=%2Fa&file=moved.js&oldFile=gone.js'));
+});
+
+test('adding a comment posts the loaded revision to the active worktree and reloads comments on success', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.commentRequests[0], { threads: [], warning: null, revision: 'absent' });
+  const saved = f.store.addComment({ file: 'one', line: 3, text: 'Why?' });
+  const [post] = f.postRequests;
+  assert.equal(post.url, '/api/comments?worktree=%2Fa');
+  assert.equal(post.options.method, 'POST');
+  assert.equal(post.options.headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(post.options.body), { file: 'one', line: 3, text: 'Why?', revision: 'absent' });
+  post.resolve({ ok: true, json: async () => ({ revision: 'r2' }) });
+  await saved;
+  assert.equal(f.commentRequests.length, 2);
+  await f.reply(f.commentRequests[1], { threads: [{ id: 'new' }], warning: null, revision: 'r2' });
+  assert.deepEqual(f.store.getState().comments.threads, [{ id: 'new' }]);
+});
+
+test('a stale or failed save rejects with the server message and reloads the latest comments', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.commentRequests[0], { threads: [], warning: null, revision: 'absent' });
+  const saved = f.store.addComment({ file: 'one', line: 3, text: 'Why?' });
+  f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true, revision: 'r9' }) });
+  await assert.rejects(saved, /Comments changed/);
+  assert.equal(f.commentRequests.length, 2, 'latest comments are reloaded');
+  const failed = f.store.addComment({ file: 'one', line: 3, text: 'Why?' });
+  f.postRequests[1].resolve({ ok: false, status: 500, json: async () => { throw new Error('not json'); } });
+  await assert.rejects(failed, /status 500/);
+});
+
+test('saving is refused before comments have loaded, without a request', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees(list(['/a']));
+  await assert.rejects(f.store.addComment({ file: 'one', line: 3, text: 'Why?' }), /still loading/);
+  assert.deepEqual(f.postRequests, []);
+});
+
+test('saving explains an unreadable sidecar instead of claiming comments are loading', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.commentRequests[0], { threads: [], warning: 'Cannot load comments: Symlink', revision: null });
+  await assert.rejects(f.store.addComment({ file: 'one', line: 3, text: 'Why?' }), /Symlink/);
+  assert.deepEqual(f.postRequests, []);
 });

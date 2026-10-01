@@ -46,7 +46,7 @@ to reload them for every connected browser and activity watcher.
 Unreadable rule files are logged once per watcher and treated as having no rules
 until restart; other available rules still apply and edits remain observable.
 
-## Read-only review threads
+## Review threads
 
 Canopy reads `.canopy/comments.yaml` from the active registered worktree. The left
 sidebar indexes file-attached threads by file and line/range only. Selecting one
@@ -59,6 +59,10 @@ The sidebar's **Comments without a file** button replaces the editor with all
 genuinely general conversations (or an empty explanation). Selecting a file
 returns to the editor without changing the Diff/File preference. Version 1 accepts
 both existing anchored threads and general threads with no anchor fields. Canopy
-never writes the sidecar or supplies mutation controls. See the
+only writes the sidecar to save a new single-line comment: use the modified-side
+gutter `+` or Ctrl/Cmd+Alt+M, then Save. Saves are checked against the revision
+you loaded and rejected visibly if the file changed. See
+[review comments](docs/review-comments.md) for the YAML contract, how to point an
+agent at a worktree, and the external-writer rules, and the
 [manual fixture and user visual/accessibility evaluation](docs/inline-review-demo.md)
 for the schema, safe-path rules, supported modes and reload expectations.

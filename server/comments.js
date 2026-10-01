@@ -1,4 +1,5 @@
-import { parseDocument, visit } from 'yaml';
+import { createHash } from 'node:crypto';
+import { Document, parseDocument, visit } from 'yaml';
 
 const CORE_TAGS = new Set(['str', 'int', 'float', 'bool', 'null', 'map', 'seq']
   .map((name) => `tag:yaml.org,2002:${name}`));
@@ -37,20 +38,67 @@ function validThread(thread) {
       typeof message.text === 'string' && timestamp(message.created_at)) && uniqueIds(thread.messages);
 }
 
+// Validated version-1 document exactly as stored (no reordering), or a throw.
+function parseSidecar(source) {
+  const doc = parseDocument(source, { schema: 'core', resolveKnownTags: false });
+  if (doc.errors.length || doc.warnings.length) throw new Error('Malformed YAML or unsupported tag');
+  visit(doc, (_key, node) => {
+    if (node?.tag && !CORE_TAGS.has(node.tag)) throw new Error('Unsupported YAML tag');
+  });
+  const data = doc.toJS({ maxAliasCount: 100 });
+  if (!hasExactKeys(data, ['version', 'threads']) || data.version !== 1 || !Array.isArray(data.threads) ||
+      !data.threads.every(validThread) || !uniqueIds(data.threads)) throw new Error('Invalid version 1 schema');
+  return data;
+}
+
 export function parseComments(source) {
   try {
-    const doc = parseDocument(source, { schema: 'core', resolveKnownTags: false });
-    if (doc.errors.length || doc.warnings.length) throw new Error('Malformed YAML or unsupported tag');
-    visit(doc, (_key, node) => {
-      if (node?.tag && !CORE_TAGS.has(node.tag)) throw new Error('Unsupported YAML tag');
-    });
-    const data = doc.toJS({ maxAliasCount: 100 });
-    if (!hasExactKeys(data, ['version', 'threads']) || data.version !== 1 || !Array.isArray(data.threads) ||
-        !data.threads.every(validThread) || !uniqueIds(data.threads)) throw new Error('Invalid version 1 schema');
+    const data = parseSidecar(source);
     return { warning: null, threads: data.threads.map((thread) => ({ ...thread,
       messages: [...thread.messages].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)),
     })).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)) };
   } catch (err) {
     return { threads: [], warning: `Cannot load comments: ${err.message}` };
   }
+}
+
+// The revision names the exact sidecar bytes a client has seen; an absent
+// sidecar has its own revision so first saves are checked too.
+export const ABSENT_REVISION = 'absent';
+export const commentsRevision = (source) =>
+  source === null ? ABSENT_REVISION : createHash('sha256').update(source).digest('hex');
+
+export const MAX_COMMENT_LENGTH = 20000;
+
+// Pure validation of a client's request for a new single-line thread.
+export function validateNewThread({ file, line, text } = {}) {
+  if (!validAnchorPath(file)) return 'Invalid file path';
+  if (!Number.isSafeInteger(line) || line < 1) return 'Invalid line number';
+  if (typeof text !== 'string' || text.trim() === '') return 'Comment text is required';
+  if (text.length > MAX_COMMENT_LENGTH) return `Comment text is limited to ${MAX_COMMENT_LENGTH} characters`;
+  return null;
+}
+
+// Timestamps are quoted so YAML 1.1 readers in external tools keep them strings.
+function serialize(data) {
+  const doc = new Document(data);
+  visit(doc, { Scalar(_key, node) {
+    if (typeof node.value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(node.value)) node.type = 'QUOTE_DOUBLE';
+  } });
+  return doc.toString();
+}
+
+// Appends a new user thread to the stored sidecar text and returns the new
+// text plus the thread. Every existing thread and message is kept as stored.
+// Throws when the existing text is not a valid version-1 document, so the
+// caller refuses rather than replacing data it does not understand.
+export function appendThread(source, { file, line, text }, { threadId, messageId, createdAt }) {
+  const data = source === null ? { version: 1, threads: [] } : parseSidecar(source);
+  const thread = {
+    id: threadId, file, side: 'modified', line_range: { start: line, end: line },
+    created_at: createdAt, resolved: false,
+    messages: [{ id: messageId, author: 'user', text, created_at: createdAt }],
+  };
+  if (data.threads.some((existing) => existing.id === threadId)) throw new Error('Duplicate thread id');
+  return { thread, source: serialize({ version: 1, threads: [...data.threads, thread] }) };
 }

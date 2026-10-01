@@ -29,7 +29,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function fixture() {
+function fixture({ addComment } = {}) {
   const document = { createElement: element };
   const mainEl = element('main');
   const calls = [];
@@ -45,6 +45,7 @@ function fixture() {
     getDiffRenderMode: () => diffMode,
     getAutoScroll: () => autoScroll,
     getWrap: () => false,
+    addComment,
     languageForPath: (path) => path.endsWith('.js') ? 'javascript' : 'plaintext',
     mountEditor: (container, options) => {
       const pending = deferred();
@@ -441,4 +442,66 @@ test('scrolling forwards to the current Diff or File view and is a no-op while u
   f.viewer.scrollUp();
   f.viewer.scrollDown();
   assert.deepEqual(scrolled, ['diff:up', 'diff:down', 'file:up', 'file:down', 'latest:down']);
+});
+
+const composerState = { activePath: '/repo', activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
+  fileContent: { head: 'old', working: 'one\ntwo' }, comments: { threads: [], warning: null, revision: 'absent' } };
+
+test('editors only receive a composer when saving is available, and it saves for the open file', async () => {
+  assert.equal(fixture().calls.length, 0);
+  const none = fixture();
+  none.setState(composerState);
+  none.viewer.render();
+  assert.equal(none.calls[0].options.composer, undefined);
+  const saved = [];
+  const f = fixture({ addComment: async (comment) => { saved.push(comment); } });
+  f.setState(composerState);
+  f.viewer.render();
+  const { composer } = f.calls[0].options;
+  assert.equal(composer.draft, null);
+  await composer.save({ line: 2, text: 'Why?' });
+  assert.deepEqual(saved, [{ file: 'a.js', line: 2, text: 'Why?' }]);
+});
+
+test('an open draft survives remounting the same file and is dropped for another file or worktree', () => {
+  const f = fixture({ addComment: async () => {} });
+  f.setState(composerState);
+  f.viewer.render();
+  f.calls[0].options.composer.onChange({ line: 2, text: 'half typed', error: 'Comments changed' });
+  f.viewer.render();
+  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, text: 'half typed', error: 'Comments changed' });
+  f.setState({ fileContent: { head: 'old', working: 'one\ntwo\nthree' } });
+  f.viewer.render();
+  assert.equal(f.calls[2].options.composer.draft.text, 'half typed');
+  f.setState({ activeFile: 'b.js', fileTree: [{ type: 'file', path: 'b.js' }] });
+  f.viewer.render();
+  assert.equal(f.calls[3].options.composer.draft, null);
+  f.setState({ activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }] });
+  f.viewer.render();
+  assert.equal(f.calls[4].options.composer.draft, null, 'leaving the file discards its draft');
+});
+
+test('cancelling or saving clears the draft; another worktree never inherits it', () => {
+  const f = fixture({ addComment: async () => {} });
+  f.setState(composerState);
+  f.viewer.render();
+  f.calls[0].options.composer.onChange({ line: 1, text: 'x', error: null });
+  f.calls[0].options.composer.onChange(null);
+  f.viewer.render();
+  assert.equal(f.calls[1].options.composer.draft, null);
+  f.calls[1].options.composer.onChange({ line: 1, text: 'y', error: null });
+  f.setState({ activePath: '/other' });
+  f.viewer.render();
+  assert.equal(f.calls[2].options.composer.draft, null);
+});
+
+test('a failed save is recorded on the draft so a remounted composer still shows the error', async () => {
+  const f = fixture({ addComment: async () => { throw new Error('Comments changed'); } });
+  f.setState(composerState);
+  f.viewer.render();
+  const { composer } = f.calls[0].options;
+  composer.onChange({ line: 2, text: 'mine', error: null });
+  await assert.rejects(composer.save({ line: 2, text: 'mine' }), /Comments changed/);
+  f.viewer.render();
+  assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, text: 'mine', error: 'Comments changed' });
 });

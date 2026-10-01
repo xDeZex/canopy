@@ -64,7 +64,7 @@ export async function startApp({
   const workspace = createWorkspaceStore({
     viewModeStore,
     commitLock,
-    fetch: (url) => request(url),
+    fetch: (url, options) => request(url, options),
     onActivePathChanged: (path) => liveUpdates.connectActive(path),
     onChange: (part) => {
       if (part === 'render' || part === 'metadata') {
@@ -90,6 +90,7 @@ export async function startApp({
     languageForPath: language,
     getAutoScroll: () => autoScrollStore.isEnabled(),
     getWrap,
+    addComment: (comment) => workspace.addComment(comment),
   });
 
   function onViewModeChanged(mode) {

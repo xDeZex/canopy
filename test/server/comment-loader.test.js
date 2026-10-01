@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCommentLoader } from '../../server/comment-loader.js';
+import { commentsRevision } from '../../server/comments.js';
 
 const conversation = {
   id: 't', file: 'src/app.js', side: 'modified', line_range: { start: 1, end: 2 },
@@ -36,7 +37,9 @@ test('general conversations never check an absent anchor path, alongside unavail
 
 test('reads only the fixed sidecar and checks anchor availability without reading anchor content', async () => {
   const f = fixture();
-  assert.deepEqual(await f.loader('/repo'), { warning: null, threads: [{ ...conversation, unavailable: null }] });
+  const source = JSON.stringify({ version: 1, threads: [conversation] });
+  assert.deepEqual(await f.loader('/repo'),
+    { warning: null, revision: commentsRevision(source), threads: [{ ...conversation, unavailable: null }] });
   assert.deepEqual(f.reads, ['/repo/.canopy/comments.yaml']);
   assert.ok(f.checked.includes('/repo/src/app.js'));
 });
@@ -44,7 +47,7 @@ test('reads only the fixed sidecar and checks anchor availability without readin
 test('missing sidecars are empty; unsafe/dangling symlinks and unavailable anchors are never followed', async () => {
   for (const target of ['/repo/.canopy', '/repo/.canopy/comments.yaml']) {
     const absent = fixture({ [target]: 'missing' });
-    assert.deepEqual(await absent.loader('/repo'), { threads: [], warning: null });
+    assert.deepEqual(await absent.loader('/repo'), { threads: [], warning: null, revision: 'absent' });
     assert.deepEqual(absent.reads, []);
     const symlink = fixture({ [target]: 'symlink' });
     const result = await symlink.loader('/repo');

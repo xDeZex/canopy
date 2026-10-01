@@ -31,7 +31,7 @@ test('comments route is read-only, membership-scoped and ignores arbitrary sidec
   const handler = makeHandler({ getComments: async (path) => { calls.push(path); return { threads: [], warning: 'Invalid YAML' }; } });
   for (const [url, method, status] of [
     ['/api/comments', 'GET', 400], ['/api/comments?worktree=/unknown', 'GET', 404],
-    ['/api/comments?worktree=/linked', 'POST', 404],
+    ['/api/comments?worktree=/linked', 'PUT', 404],
   ]) assert.equal((await handler(request(method, url))).status, status);
   assert.deepEqual(calls, []);
   const result = await handler(request('GET', '/api/comments?worktree=/linked&file=/etc/passwd&ref=other'));
@@ -330,4 +330,43 @@ test('/api/file-content passes the old path of a renamed file to getContent', as
 test('/api/file-content forbids an old path escaping the worktree', async () => {
   const res = await run('/api/file-content?worktree=/main&file=new.js&oldFile=../etc/passwd');
   assert.equal(res.status, 403);
+});
+
+const jsonHeaders = { host: 'localhost', 'content-type': 'application/json' };
+const post = (handler, url, headers, body = '{"file":"a.js","line":1,"text":"hi","revision":"absent"}') =>
+  handler({ ...request('POST', url), headers, body });
+
+test('comment creation requires a registered worktree, same-origin JSON and a valid body', async () => {
+  const calls = [];
+  const handler = makeHandler({ createComment: async (path, input) => { calls.push({ path, input }); return { revision: 'r2', thread: { id: 't' } }; } });
+  const url = '/api/comments?worktree=/linked';
+  for (const [target, headers, body, status] of [
+    ['/api/comments', jsonHeaders, undefined, 400],
+    ['/api/comments?worktree=/unknown', jsonHeaders, undefined, 404],
+    [url, { 'content-type': 'application/json' }, undefined, 403],
+    [url, { host: 'localhost' }, undefined, 403],
+    [url, { ...jsonHeaders, 'content-type': 'text/plain' }, undefined, 403],
+    [url, { ...jsonHeaders, origin: 'https://evil.example' }, undefined, 403],
+    [url, { ...jsonHeaders, 'sec-fetch-site': 'cross-site' }, undefined, 403],
+    [url, jsonHeaders, 'not json', 400],
+    [url, jsonHeaders, '[1]', 400],
+    [url, jsonHeaders, 'null', 400],
+  ]) assert.equal((await post(handler, target, headers, body)).status, status, `${target} ${JSON.stringify(headers)} ${body}`);
+  assert.deepEqual(calls, []);
+  const ok = await post(handler, url, { ...jsonHeaders, origin: 'http://localhost', 'sec-fetch-site': 'same-origin' });
+  assert.equal(ok.status, 201);
+  assert.deepEqual(JSON.parse(ok.body), { revision: 'r2', thread: { id: 't' } });
+  assert.equal(ok.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(calls, [{ path: '/linked', input: { file: 'a.js', line: 1, text: 'hi', revision: 'absent' } }]);
+});
+
+test('comment creation reports conflicts with the latest revision and hides unexpected error details', async () => {
+  const conflict = makeHandler({ createComment: async () => { throw Object.assign(new Error('Comments changed'), { status: 409, conflict: true, revision: 'r9' }); } });
+  const response = await post(conflict, '/api/comments?worktree=/linked', jsonHeaders);
+  assert.equal(response.status, 409);
+  assert.deepEqual(JSON.parse(response.body), { error: 'Comments changed', conflict: true, revision: 'r9' });
+  const broken = makeHandler({ createComment: async () => { throw new Error('EACCES /secret/path'); } });
+  const failure = await post(broken, '/api/comments?worktree=/linked', jsonHeaders);
+  assert.equal(failure.status, 500);
+  assert.doesNotMatch(failure.body, /secret/);
 });

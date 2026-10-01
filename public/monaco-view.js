@@ -3,7 +3,7 @@
 // no-build-step approach, same version validated in prototype/ui-layout's
 // throwaway UI (variant D). The mounted controller is tested with a Monaco
 // stub; Monaco's rendering itself is left to manual/visual verification.
-import { renderConversation } from './comments-view.js';
+import { renderConversation, renderComposer } from './comments-view.js';
 
 let loaderReady = null;
 
@@ -38,12 +38,92 @@ const DIFF_MODE_OPTIONS = {
 };
 
 // Shared public code-editor seam for File and the modified pane of Diff.
-function createThreadZones(getEditor, { contentAvailable = true, document, ResizeObserver }) {
+function createThreadZones(getEditor, { contentAvailable = true, document, ResizeObserver, composer = null }) {
   let zones = [];
   let disposed = false;
   let snapshot = null;
   const threadsById = new Map();
   let foldingDisabled = false;
+  let composerEntry = null;
+  let hoverDecorations = [];
+  const subscriptions = [];
+  function closeComposer() {
+    if (!composerEntry) return;
+    const { id, observer } = composerEntry;
+    composerEntry = null;
+    observer?.disconnect();
+    getEditor().changeViewZones((accessor) => accessor.removeZone(id));
+  }
+  // The gutter target and keyboard action both open the same composer: a
+  // native form in a view zone after the chosen modified-side line. The draft
+  // lives with the caller so remounts can restore it.
+  function openComposer(line, text = '', error = null) {
+    if (disposed) return;
+    const editor = getEditor();
+    if (!Number.isSafeInteger(line) || line < 1 || line > editor.getModel().getLineCount()) return;
+    closeComposer();
+    const view = renderComposer(document, { line, text, error,
+      onInput: (next) => composer.onChange({ line, text: next, error: null }),
+      onCancel: () => { closeComposer(); composer.onChange(null); },
+      onSave: async (next) => {
+        try {
+          await composer.save({ line, text: next });
+        } catch (err) {
+          composer.onChange({ line, text: next, error: err.message });
+          throw err;
+        }
+        closeComposer();
+        composer.onChange(null);
+      },
+    });
+    const node = document.createElement('div');
+    node.className = 'review-zone';
+    node.replaceChildren(view.node);
+    node.addEventListener('mousedown', (event) => event.stopPropagation());
+    node.addEventListener('keydown', (event) => event.stopPropagation());
+    const entry = { id: null, observer: null };
+    const zone = { afterLineNumber: line, ordinal: 0, domNode: node, heightInPx: 150, suppressMouseDown: false };
+    editor.changeViewZones((accessor) => { entry.id = accessor.addZone(zone); });
+    const resize = () => {
+      if (disposed || composerEntry !== entry) return;
+      const height = Math.ceil(view.node.getBoundingClientRect().height) + 16;
+      if (height <= 16 || height === zone.heightInPx) return;
+      zone.heightInPx = height;
+      editor.changeViewZones((accessor) => accessor.layoutZone(entry.id));
+    };
+    if (ResizeObserver) {
+      entry.observer = new ResizeObserver(resize);
+      entry.observer.observe(view.node);
+    }
+    composerEntry = entry;
+    setTimeout(() => { if (composerEntry === entry) view.focus(); }, 0);
+  }
+  if (composer && contentAvailable) {
+    const editor = getEditor();
+    const { MouseTargetType, KeyMod, KeyCode } = monaco.editor;
+    const gutterLine = (event) => [MouseTargetType.GUTTER_GLYPH_MARGIN, MouseTargetType.GUTTER_LINE_NUMBERS]
+      .includes(event.target.type) ? event.target.position?.lineNumber ?? null : null;
+    const showHover = (line) => {
+      hoverDecorations = editor.deltaDecorations(hoverDecorations, line === null ? [] : [{
+        range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+        options: { glyphMarginClassName: 'review-add-glyph', glyphMarginHoverMessage: { value: 'Add comment' } },
+      }]);
+    };
+    editor.updateOptions({ glyphMargin: true });
+    subscriptions.push(
+      editor.onMouseMove((event) => showHover(gutterLine(event))),
+      editor.onMouseLeave(() => showHover(null)),
+      editor.onMouseDown((event) => {
+        if (event.target.type === MouseTargetType.GUTTER_GLYPH_MARGIN && event.target.position) {
+          openComposer(event.target.position.lineNumber);
+        }
+      }),
+      editor.addAction({ id: 'canopy.addComment', label: 'Add Comment on Line',
+        keybindings: [KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyM],
+        run: (ed) => openComposer(ed.getPosition()?.lineNumber) }),
+    );
+    if (composer.draft) openComposer(composer.draft.line, composer.draft.text, composer.draft.error);
+  }
   function clearZones(accessor) {
     for (const zone of zones) {
       zone.observer?.disconnect();
@@ -148,7 +228,9 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
       return true;
     },
     dispose() {
+      closeComposer();
       disposed = true;
+      subscriptions.forEach((subscription) => subscription?.dispose?.());
       threadsById.clear();
       if (zones.length) getEditor().changeViewZones(clearZones);
     },
@@ -161,7 +243,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
 // Monaco has computed the diff (#24).
 // Returns a controller with disposal, hunk navigation, and viewport scrolling.
 export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false,
-  threads = [], document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
+  threads = [], composer = null, document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
@@ -186,7 +268,7 @@ export async function mountDiffEditor(container, { original, modified, language,
   editor.setModel({ original: originalModel, modified: modifiedModel });
   let disposed = false;
   const threadZones = createThreadZones(() => editor.getModifiedEditor(), {
-    contentAvailable: modified !== null, document, ResizeObserver,
+    contentAvailable: modified !== null, document, ResizeObserver, composer,
   });
   threadZones.updateThreads(threads);
 
@@ -286,7 +368,7 @@ function scroll(editor, direction) {
 
 // Mounts a plain read-only full-file view (File mode). Returns a
 // controller with `dispose()`, `scrollUp()` and `scrollDown()`; no hunks to navigate.
-export async function mountEditor(container, { content, language, wrap = false, threads = [],
+export async function mountEditor(container, { content, language, wrap = false, threads = [], composer = null,
   document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
   await ensureLoader();
 
@@ -300,7 +382,7 @@ export async function mountEditor(container, { content, language, wrap = false, 
     wordWrap: wrap ? 'on' : 'off',
   });
 
-  const threadZones = createThreadZones(() => editor, { contentAvailable: content !== null, document, ResizeObserver });
+  const threadZones = createThreadZones(() => editor, { contentAvailable: content !== null, document, ResizeObserver, composer });
   threadZones.updateThreads(threads);
   return {
     updateThreads: threadZones.updateThreads,

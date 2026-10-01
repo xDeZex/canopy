@@ -9,8 +9,22 @@ import { createRequestHandler } from './handle-request.js';
 import { createActivityFeed } from './worktree-activity.js';
 import { createWorktreeDeletion } from './worktree-delete.js';
 import { createCommentLoader } from './comment-loader.js';
+import { createCommentStore } from './comment-store.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+
+const MAX_BODY_BYTES = 256 * 1024;
+
+async function readBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) return undefined;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 // Creates the Canopy HTTP server. `repoRoot` is the git repo to inspect;
 // `listWorktrees`, `getFileTree`, `getFileContent`, `listCommits`, and
@@ -25,6 +39,7 @@ export function createApp({
   getFileContent,
   listCommits,
   getComments = createCommentLoader(),
+  createComment = createCommentStore().create,
   watchWorktree = defaultDeps.watchWorktree,
   watchWorktreeList,
   activityFeed,
@@ -52,6 +67,7 @@ export function createApp({
     getContent,
     getCommits,
     getComments,
+    createComment,
     watchWorktree,
     subscribeToWorktreeChanges,
     subscribeToActivity: (callback, options) => activity.subscribe(callback, options),
@@ -64,8 +80,9 @@ export function createApp({
   return createServer(async (req, res) => {
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+      const body = req.method === 'POST' ? await readBody(req) : undefined;
       const response = await handleRequest({ method: req.method, pathname, searchParams, headers: req.headers,
-        protocol: req.socket.encrypted ? 'https:' : 'http:' });
+        protocol: req.socket.encrypted ? 'https:' : 'http:', body });
 
       res.writeHead(response.status, response.headers);
 

@@ -194,6 +194,31 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     onChange('comments');
   }
 
+  // Saves one new single-line thread against the revision this client has
+  // seen. Rejections carry the server's message; the latest comments are
+  // reloaded either way so a conflict shows what changed.
+  async function addComment({ file, line, text }) {
+    const path = activePath;
+    const revision = comments?.revision;
+    if (comments?.warning) throw new Error(`Cannot save while comments cannot be read: ${comments.warning}`);
+    if (!path || typeof revision !== 'string') throw new Error('Comments are still loading; try again in a moment');
+    let res;
+    try {
+      res = await request(`/api/comments?worktree=${encodeURIComponent(path)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file, line, text, revision }),
+      });
+    } catch (err) {
+      throw new Error(`Could not save comment: ${err.message}`);
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (path === activePath) void loadComments();
+      throw new Error(body.error || `request failed with status ${res.status}`);
+    }
+    if (path === activePath) void loadComments();
+  }
+
   function showGeneralComments() {
     mainView = 'general';
     selectedThreadId = null;
@@ -263,6 +288,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       return selectFile(thread.file, id);
     },
     showGeneralComments,
+    addComment,
     // A reconnect has no paths: reconcile the tree and any selected content.
     remoteChange(paths = null) {
       loadFileTree();

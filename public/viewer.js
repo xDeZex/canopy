@@ -1,12 +1,15 @@
 // Owns #main's visible state and the lifecycle of its Monaco controller.
 import { commentsForView, renderConversationView } from './comments-view.js';
 
-export function createViewer({ mainEl, document, getState, getViewMode, getDiffRenderMode, mountEditor, mountDiffEditor, languageForPath, getAutoScroll, getWrap }) {
+export function createViewer({ mainEl, document, getState, getViewMode, getDiffRenderMode, mountEditor, mountDiffEditor, languageForPath, getAutoScroll, getWrap, addComment }) {
   let currentView = null;
   let generation = 0;
   let viewerError = null;
   let showingConversation = false;
   let disposed = false;
+  // An unsaved comment belongs to one file of one worktree. It outlives
+  // editor remounts (live file updates) but not a change of file or worktree.
+  let draft = null;
 
   function currentComments() {
     return commentsForView({ ...getState(), viewerError });
@@ -42,6 +45,21 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
     if (!preserveError) viewerError = null;
 
     const { activeFile, worktrees, activePath, fileContent, fileContentError } = getState();
+    if (draft && (draft.worktree !== activePath || draft.file !== activeFile)) draft = null;
+    const composer = addComment && {
+      draft: draft && { line: draft.line, text: draft.text, error: draft.error },
+      onChange: (next) => { draft = next && { ...next, worktree: getState().activePath, file: getState().activeFile }; },
+      // Record a failure on the draft too: a remount may already have replaced
+      // the composer that would otherwise show it.
+      save: async ({ line, text }) => {
+        try {
+          await addComment({ file: getState().activeFile, line, text });
+        } catch (err) {
+          if (draft) draft = { ...draft, error: err.message };
+          throw err;
+        }
+      },
+    };
     const comments = currentComments();
     const threads = inlineThreads(comments);
     showingConversation = needsConversation(comments);
@@ -98,7 +116,7 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
         const language = languageForPath(activeFile);
         const view = mode === 'file'
           ? await mountEditor(container, { content: fileContent.working, language, wrap: getWrap(), document,
-              ...(threads.length ? { threads } : {}), })
+              ...(threads.length ? { threads } : {}), ...(composer ? { composer } : {}) })
           : await mountDiffEditor(container, {
               original: fileContent.head ?? '',
               modified: fileContent.working ?? '',
@@ -108,6 +126,7 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
               wrap: getWrap(),
               document,
               ...(threads.length ? { threads } : {}),
+              ...(composer ? { composer } : {}),
             });
         if (thisRender !== generation) view.dispose();
         else {

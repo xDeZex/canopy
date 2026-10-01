@@ -13,6 +13,12 @@ const SSE_HEADERS = {
   Connection: 'keep-alive',
 };
 
+// A same-origin check for state-changing requests. No CORS opt-in: cross-site
+// HTML forms cannot set custom headers or a JSON content type. Fetch metadata
+// also excludes sibling origins, and Origin must match Host.
+const crossOrigin = (headers, protocol) => !headers.host || (headers['sec-fetch-site'] && headers['sec-fetch-site'] !== 'same-origin') ||
+  (headers.origin && headers.origin !== `${protocol}//${headers.host}`);
+
 // Request handling as a function from a request description to a response
 // description, with no `req`/`res`, server or port involved. The caller
 // (app.js) translates between Node's HTTP objects and these descriptions.
@@ -33,6 +39,7 @@ export function createRequestHandler({
   getContent,
   getCommits,
   getComments,
+  createComment,
   watchWorktree,
   subscribeToWorktreeChanges,
   subscribeToActivity,
@@ -40,7 +47,7 @@ export function createRequestHandler({
   publicDir,
   worktreeDeletion,
 }) {
-  return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:' }) {
+  return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:', body }) {
     const isReadable = method === 'GET' || method === 'HEAD';
     const includeBody = method !== 'HEAD';
     const ignoreGitignore = searchParams.get('ignoreGitignore') !== 'false';
@@ -69,12 +76,8 @@ export function createRequestHandler({
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
       if (method === 'DELETE') {
-        // No CORS opt-in: cross-site HTML forms cannot set this header. Fetch
-        // metadata also excludes sibling origins, and Origin must match Host.
-        const site = headers['sec-fetch-site'];
         if (!headers['x-canopy-confirmation'] || typeof headers['x-canopy-confirmation'] !== 'string' ||
-            !headers.host || (site && site !== 'same-origin') ||
-            (headers.origin && headers.origin !== `${protocol}//${headers.host}`)) {
+            crossOrigin(headers, protocol)) {
           return respond(403, { error: 'Same-origin request with confirmation header required' });
         }
       }
@@ -86,6 +89,28 @@ export function createRequestHandler({
       } catch (err) {
         return respond(err.status ?? 500, { error: err.message, removed: err.removed === undefined ? false : err.removed,
           branchDeleted: err.branchDeleted ?? false, branch: err.branch ?? null });
+      }
+    }
+
+    if (pathname === '/api/comments' && method === 'POST') {
+      const respond = (status, payload) => {
+        const response = json(status, payload);
+        response.headers['Cache-Control'] = 'no-store';
+        return response;
+      };
+      const { worktreePath, error } = await resolveWorktree();
+      if (error) return error;
+      if (crossOrigin(headers, protocol) || !/^application\/json\b/i.test(headers['content-type'] ?? '')) {
+        return respond(403, { error: 'Same-origin JSON request required' });
+      }
+      let input;
+      try { input = JSON.parse(body ?? ''); } catch { return respond(400, { error: 'Invalid JSON body' }); }
+      if (input === null || typeof input !== 'object' || Array.isArray(input)) return respond(400, { error: 'Invalid JSON body' });
+      try {
+        return respond(201, await createComment(worktreePath, input));
+      } catch (err) {
+        return respond(err.status ?? 500, { error: err.status ? err.message : 'Could not save comment',
+          conflict: err.conflict ?? false, revision: err.revision ?? null });
       }
     }
 
