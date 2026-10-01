@@ -45,7 +45,7 @@ const DIFF_MODE_OPTIONS = {
 // the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'. With
 // `autoScroll`, the viewport moves to the first change once Monaco has
 // computed the diff (#24).
-// Returns a controller with `dispose()`, `nextChange()` and `prevChange()`.
+// Returns a controller with disposal, hunk navigation, and viewport scrolling.
 export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false }) {
   await ensureLoader();
 
@@ -105,12 +105,19 @@ export async function mountDiffEditor(container, { original, modified, language,
   return {
     nextChange() { navigate(1); },
     prevChange() { navigate(-1); },
+    scrollUp() { scroll(editor.getModifiedEditor(), -1); },
+    scrollDown() { scroll(editor.getModifiedEditor(), 1); },
     dispose() {
       editor.dispose();
       originalModel.dispose();
       modifiedModel.dispose();
     },
   };
+}
+
+function scroll(editor, direction) {
+  const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+  editor.setScrollTop(editor.getScrollTop() + direction * 10 * lineHeight);
 }
 
 // Mounts a plain read-only full-file view (File mode). Returns a
@@ -128,14 +135,9 @@ export async function mountEditor(container, { content, language, wrap = false }
     wordWrap: wrap ? 'on' : 'off',
   });
 
-  function scroll(direction) {
-    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-    editor.setScrollTop(editor.getScrollTop() + direction * 10 * lineHeight);
-  }
-
   return {
-    scrollUp() { scroll(-1); },
-    scrollDown() { scroll(1); },
+    scrollUp() { scroll(editor, -1); },
+    scrollDown() { scroll(editor, 1); },
     dispose() {
       editor.dispose();
     },

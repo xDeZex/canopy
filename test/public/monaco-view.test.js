@@ -104,6 +104,44 @@ test('File mode scrolls ten configured line heights from the current viewport in
   view.dispose();
 });
 
+test('all diff layouts scroll ten current line heights through the modified editor', async () => {
+  for (const mode of ['inline', 'side-by-side', 'collapsed']) {
+    let scrollTop = 500;
+    let lineHeight = 23;
+    const positions = [];
+    globalThis.window = { monaco: true };
+    globalThis.monaco = {
+      editor: {
+        EditorOption: { lineHeight: 67 },
+        createDiffEditor() {
+          return {
+            setModel() {},
+            getModifiedEditor: () => ({
+              getScrollTop: () => scrollTop,
+              getOption(option) {
+                assert.equal(option, 67);
+                return lineHeight;
+              },
+              setScrollTop(position) { positions.push(position); scrollTop = position; },
+            }),
+            dispose() {},
+          };
+        },
+        createModel() { return { dispose() {} }; },
+      },
+    };
+    const view = await mountDiffEditor({}, { original: 'old', modified: 'new', mode, wrap: true });
+    view.scrollUp();
+    view.scrollDown();
+    view.scrollDown();
+    scrollTop = 1000;
+    lineHeight = 19;
+    view.scrollUp();
+    assert.deepEqual(positions, [270, 500, 730, 810], mode);
+    view.dispose();
+  }
+});
+
 test('diff viewer uses Monaco diff word wrap when requested', async () => {
   let options;
   globalThis.window = { monaco: true };

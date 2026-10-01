@@ -69,12 +69,12 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
     void mount();
   }
 
-  // Missing capabilities and unmounted views are a no-op; scrolling is File-only.
+  // Missing capabilities and unmounted views are a no-op.
   return {
     render,
     nextChange: () => currentView?.nextChange?.(),
     prevChange: () => currentView?.prevChange?.(),
-    scrollUp: () => { if (getViewMode() === 'file') currentView?.scrollUp?.(); },
-    scrollDown: () => { if (getViewMode() === 'file') currentView?.scrollDown?.(); },
+    scrollUp: () => currentView?.scrollUp?.(),
+    scrollDown: () => currentView?.scrollDown?.(),
   };
 }

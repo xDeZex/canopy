@@ -195,7 +195,7 @@ test('change navigation is a no-op with no view or a File mode view', async () =
   f.viewer.prevChange();
 });
 
-test('scrolling forwards only to the current File view and is a no-op while unmounted or in Diff mode', async () => {
+test('scrolling forwards to the current Diff or File view and is a no-op while unmounted', async () => {
   const f = fixture();
   const scrolled = [];
   const controller = (name) => ({
@@ -211,7 +211,7 @@ test('scrolling forwards only to the current File view and is a no-op while unmo
   await f.calls[0].promise;
   f.viewer.scrollUp();
   f.viewer.scrollDown();
-  assert.deepEqual(scrolled, []);
+  assert.deepEqual(scrolled, ['diff:up', 'diff:down']);
 
   f.setMode('file');
   f.viewer.render();
@@ -220,8 +220,9 @@ test('scrolling forwards only to the current File view and is a no-op while unmo
   await f.calls[1].promise;
   f.viewer.scrollUp();
   f.viewer.scrollDown();
-  assert.deepEqual(scrolled, ['file:up', 'file:down']);
+  assert.deepEqual(scrolled, ['diff:up', 'diff:down', 'file:up', 'file:down']);
 
+  f.setMode('diff');
   f.viewer.render();
   f.viewer.render();
   f.calls[2].resolve(controller('stale'));
@@ -233,5 +234,13 @@ test('scrolling forwards only to the current File view and is a no-op while unmo
   f.setState({ fileContent: null });
   f.viewer.render();
   f.viewer.scrollUp();
-  assert.deepEqual(scrolled, ['file:up', 'file:down', 'latest:down']);
+  assert.deepEqual(scrolled, ['diff:up', 'diff:down', 'file:up', 'file:down', 'latest:down']);
+
+  f.setState({ fileContent: { head: 'old', working: 'new' } });
+  f.viewer.render();
+  f.calls[4].resolve({ dispose() {} });
+  await f.calls[4].promise;
+  f.viewer.scrollUp();
+  f.viewer.scrollDown();
+  assert.deepEqual(scrolled, ['diff:up', 'diff:down', 'file:up', 'file:down', 'latest:down']);
 });
