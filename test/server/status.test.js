@@ -22,8 +22,8 @@ test('parses NUL-delimited diff names with spaces, staged and unstaged alike', (
 
 test('parses NUL-delimited untracked paths as added, spaces included', () => {
   assert.deepEqual(parseUntracked('untracked.txt\0dir/with space.txt\0'), [
-    { path: 'untracked.txt', status: 'added' },
-    { path: 'dir/with space.txt', status: 'added' },
+    { path: 'untracked.txt', status: 'added', untracked: true },
+    { path: 'dir/with space.txt', status: 'added', untracked: true },
   ]);
   assert.deepEqual(parseUntracked(''), []);
 });
@@ -33,7 +33,7 @@ test('combineRefDiff lists diff entries followed by untracked additions', () => 
     { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
     { path: 'gone.txt', status: 'deleted' },
     { path: 'changed.txt', status: 'modified' },
-    { path: 'untracked.txt', status: 'added' },
+    { path: 'untracked.txt', status: 'added', untracked: true },
   ]);
   assert.deepEqual(combineRefDiff('', ''), []);
 });
@@ -44,9 +44,9 @@ test('parses a modified tracked file', () => {
   ]);
 });
 
-test('parses an untracked file as added', () => {
+test('parses an untracked file as added and tags it untracked', () => {
   assert.deepEqual(parseStatus('?? server/status.js\0'), [
-    { path: 'server/status.js', status: 'added' },
+    { path: 'server/status.js', status: 'added', untracked: true },
   ]);
 });
 
@@ -74,7 +74,7 @@ test('parses multiple NUL records', () => {
 
   assert.deepEqual(parseStatus(output), [
     { path: 'server/app.js', status: 'modified' },
-    { path: 'server/status.js', status: 'added' },
+    { path: 'server/status.js', status: 'added', untracked: true },
   ]);
 });
 
@@ -83,7 +83,7 @@ test('porcelain copies and deleted rename destinations keep ordinary statuses an
     { path: 'copy name.js', status: 'modified' },
     { path: 'removed.js', status: 'deleted' },
     { path: 'added then deleted.js', status: 'deleted' },
-    { path: 'literal -> name\n.js', status: 'added' },
+    { path: 'literal -> name\n.js', status: 'added', untracked: true },
     { path: 'edited rename.js', status: 'renamed', oldPath: 'original.js' },
   ]);
 });
@@ -336,7 +336,7 @@ test('getFileTree adds saved edit times only to changed files present on disk', 
     return { mtimeMs: path.endsWith('edit.js') ? 1234 : 5678 };
   };
 
-  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat), [
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat, async () => null), [
     { name: 'src', type: 'dir', path: 'src', children: [
       { name: 'edit.js', type: 'file', path: 'src/edit.js', status: 'modified', mtimeMs: 1234 },
     ] },
@@ -357,5 +357,75 @@ test('getFileTree keeps changed files when their edit time cannot be read', asyn
   assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat), [
     { name: 'missing.txt', type: 'file', path: 'missing.txt', status: 'modified' },
     { name: 'present.txt', type: 'file', path: 'present.txt', status: 'added', mtimeMs: 900 },
+  ]);
+});
+
+test('getChangedPaths on HEAD pairs a deleted file with a similar untracked file as one rename', async () => {
+  const content = 'one\ntwo\nthree\n';
+  const { runGit, calls } = fakeGit({ status: ' D old.txt\0?? new.txt\0?? other.txt\0', show: content });
+  const files = { '/wt/new.txt': content, '/wt/other.txt': 'unrelated\n' };
+
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async (path) => files[path]), [
+    { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
+    { path: 'other.txt', status: 'added' },
+  ]);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'show').args, ['show', 'HEAD:old.txt']);
+});
+
+test('getChangedPaths leaves unrelated deletions and additions unpaired', async () => {
+  const { runGit } = fakeGit({ status: ' D old.txt\0?? new.txt\0', show: 'a\nb\nc\n' });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async () => 'x\ny\nz\n'), [
+    { path: 'old.txt', status: 'deleted' },
+    { path: 'new.txt', status: 'added' },
+  ]);
+});
+
+test('getChangedPaths does not pair a staged addition with a deletion', async () => {
+  const { runGit } = fakeGit({ status: ' D old.txt\0A  new.txt\0', show: 'a\nb\n' });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async () => 'a\nb\n'), [
+    { path: 'old.txt', status: 'deleted' },
+    { path: 'new.txt', status: 'added' },
+  ]);
+});
+
+test('getChangedPaths against a ref pairs the deleted file with an untracked file', async () => {
+  const { runGit, calls } = fakeGit({ 'rev-parse': 'abc123\n', diff: 'D\0old.txt\0', 'ls-files': 'new.txt\0', show: 'a\nb\n' });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'v1', runGit, async () => 'a\nb\n'), [
+    { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
+  ]);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'show').args, ['show', 'abc123:old.txt']);
+});
+
+test('getChangedPaths does not pair a path deleted and recreated with itself', async () => {
+  const { runGit } = fakeGit({ status: 'D  same.txt\0?? same.txt\0', show: 'a\nb\n' });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async () => 'a\nb\n'), [
+    { path: 'same.txt', status: 'deleted' },
+    { path: 'same.txt', status: 'added' },
+  ]);
+});
+
+test('getChangedPaths pairs a staged deletion with an untracked file', async () => {
+  const { runGit } = fakeGit({ status: 'D  old.txt\0?? new.txt\0', show: 'a\nb\n' });
+
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async () => 'a\nb\n'), [
+    { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
+  ]);
+});
+
+test('getFileTree shows an unstaged move as one renamed file, not a renamed file plus a clean old path', async () => {
+  const content = 'one\ntwo\nthree\n';
+  const { runGit } = fakeGit({
+    status: ' D old.txt\0?? new.txt\0',
+    'ls-files': 'keep.txt\0old.txt\0',
+    show: content,
+  });
+
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, async () => ({ mtimeMs: 5678 }), async () => content), [
+    { name: 'keep.txt', type: 'file', path: 'keep.txt', status: 'clean' },
+    { name: 'new.txt', type: 'file', path: 'new.txt', status: 'renamed', oldPath: 'old.txt', mtimeMs: 5678 },
   ]);
 });

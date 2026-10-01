@@ -8,31 +8,68 @@
 // separate directory walk is needed. See `git status --help`.
 
 import { runGit as defaultRunGit } from './git.js';
-import { stat as defaultStat } from 'node:fs/promises';
+import { readFile, stat as defaultStat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { renameCandidates, pairRenames, applyRenames } from './pair-renames.js';
 
-export async function getChangedPaths(worktreePath, ref = 'HEAD', runGit = defaultRunGit) {
+const defaultReadFile = (absolutePath) => readFile(absolutePath, 'utf8');
+
+export async function getChangedPaths(worktreePath, ref = 'HEAD', runGit = defaultRunGit, readWorkingFile = defaultReadFile) {
   if (ref === 'HEAD') {
-    return parseStatus(await runGit(['status', '--porcelain', '-z', '--untracked-files=all'], worktreePath));
+    const output = await runGit(['status', '--porcelain', '-z', '--untracked-files=all'], worktreePath);
+    return pairUnstagedRenames(parseStatus(output), { ref: 'HEAD', worktreePath, runGit, readWorkingFile });
   }
 
   // Resolve before using the ref as a diff argument: even a caller-supplied
   // value beginning with '-' cannot become a git option. Invalid refs fail.
-  const resolved = await runGit(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], worktreePath);
+  const resolved = (await runGit(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], worktreePath)).trim();
   const [diff, untracked] = await Promise.all([
-    runGit(['diff', '--no-ext-diff', '--name-status', '-z', resolved.trim(), '--'], worktreePath),
+    runGit(['diff', '--no-ext-diff', '--name-status', '-z', resolved, '--'], worktreePath),
     runGit(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath),
   ]);
-  return combineRefDiff(diff, untracked);
+  return pairUnstagedRenames(combineRefDiff(diff, untracked), { ref: resolved, worktreePath, runGit, readWorkingFile });
+}
+
+// Reads the candidate files' contents (the git/disk edge) and pairs them
+// into renames. The `untracked` tag only serves the pairing, so it is dropped.
+async function pairUnstagedRenames(entries, { ref, worktreePath, runGit, readWorkingFile }) {
+  const withoutTag = (list) => list.map(({ untracked, ...entry }) => entry);
+  const candidates = renameCandidates(entries);
+  if (!candidates) return withoutTag(entries);
+
+  const orNull = (read) => read.catch(() => null);
+  const [deleted, added] = await Promise.all([
+    mapInBatches(candidates.deleted, async (path) => ({
+      path, content: await orNull(runGit(['show', `${ref}:${path}`], worktreePath)),
+    })),
+    mapInBatches(candidates.added, async (path) => ({
+      path, content: await orNull(readWorkingFile(join(worktreePath, path))),
+    })),
+  ]);
+  return withoutTag(applyRenames(entries, pairRenames(deleted, added)));
+}
+
+// Bounds how many git processes or file reads are in flight at once, so a
+// bulk move cannot exhaust file descriptors.
+const READ_BATCH_SIZE = 50;
+
+async function mapInBatches(items, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += READ_BATCH_SIZE) {
+    results.push(...await Promise.all(items.slice(i, i + READ_BATCH_SIZE).map(fn)));
+  }
+  return results;
 }
 
 // The tracked files merged with their changed-path statuses, as a nested tree.
-export async function getFileTree(worktreePath, ref = 'HEAD', runGit = defaultRunGit, stat = defaultStat) {
+export async function getFileTree(worktreePath, ref = 'HEAD', runGit = defaultRunGit, stat = defaultStat, readWorkingFile = defaultReadFile) {
   const [changedPaths, lsOut] = await Promise.all([
-    getChangedPaths(worktreePath, ref, runGit),
+    getChangedPaths(worktreePath, ref, runGit, readWorkingFile),
     runGit(['ls-files', '-z'], worktreePath),
   ]);
-  const trackedPaths = lsOut.split('\0').filter(Boolean);
+  // An unstaged move leaves the old path in the index, but the file is gone.
+  const movedAway = new Set(changedPaths.filter(({ status }) => status === 'renamed').map(({ oldPath }) => oldPath));
+  const trackedPaths = lsOut.split('\0').filter((path) => path && !movedAway.has(path));
   const merged = mergeFileStatuses(trackedPaths, changedPaths);
   const withTimes = await Promise.all(merged.map(async (entry) => {
     if (entry.status === 'clean' || entry.status === 'deleted') return entry;
@@ -52,9 +89,10 @@ export function combineRefDiff(diffOutput, untrackedOutput) {
   return [...parseNameStatus(diffOutput), ...parseUntracked(untrackedOutput)];
 }
 
-// `git ls-files --others -z`: NUL-terminated paths.
+// `git ls-files --others -z`: NUL-terminated paths. Entries are tagged
+// `untracked` so a rename can tell them from staged additions.
 export function parseUntracked(output) {
-  return output.split('\0').filter(Boolean).map((path) => ({ path, status: 'added' }));
+  return output.split('\0').filter(Boolean).map((path) => ({ path, status: 'added', untracked: true }));
 }
 
 // `git diff --name-status -z`: status and path are separate NUL fields;
@@ -82,7 +120,7 @@ export function parseStatus(output) {
     const path = record.slice(3);
     const oldPath = /[RC]/.test(code) ? records[i++] : undefined;
     const status = normalizeStatus(code);
-    entries.push({ path, status, ...(status === 'renamed' ? { oldPath } : {}) });
+    entries.push({ path, status, ...(status === 'renamed' ? { oldPath } : {}), ...(code === '??' ? { untracked: true } : {}) });
   }
   return entries;
 }
