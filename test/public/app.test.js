@@ -4,7 +4,9 @@ import { startApp } from '../../public/app.js';
 import { Element } from './fake-dom.js';
 
 function browserStub() {
-  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'rail', 'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
+  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'body', 'rail', 'rail-divider', 'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
+  elements.body.clientWidth = 1006;
+  elements['rail-divider'].offsetWidth = 6;
   elements.toolbar.isRoot = true;
   elements['shortcut-help'].hidden = true;
   const listeners = { keydown: new Set(), click: new Set() };
@@ -15,7 +17,16 @@ function browserStub() {
     createElement: (tag) => new Element(tag),
     createDocumentFragment: () => new Element('fragment'),
   };
-  const window = { localStorage: { getItem: () => null }, addEventListener() {} };
+  const windowListeners = new Map();
+  const window = {
+    localStorage: { getItem: () => null },
+    addEventListener(event, listener) {
+      if (!windowListeners.has(event)) windowListeners.set(event, new Set());
+      windowListeners.get(event).add(listener);
+    },
+    removeEventListener(event, listener) { windowListeners.get(event)?.delete(listener); },
+    emit(event) { windowListeners.get(event)?.forEach((listener) => listener()); },
+  };
   const keydownListeners = listeners.keydown;
   const pressKey = (key, extra = {}) => [...keydownListeners].forEach((listener) => listener({
     key, target: { tagName: 'BODY' }, preventDefault() {}, ...extra,
@@ -165,6 +176,36 @@ test('j and l step the mounted diff to the previous and next change', async () =
   pressKey('j', { ctrlKey: true });
   pressKey('l', { target: { tagName: 'INPUT', readOnly: false } });
   assert.deepEqual(navigated, ['prev', 'next'], 'modifiers and typing leave the keys alone');
+});
+
+test('rail divider keyboard and viewport resizing leave the editor mounted and dispose disables resizing', async () => {
+  const { document, window, elements } = browserStub();
+  let mounts = 0;
+  let disposals = 0;
+  const app = await startApp({ document, window, EventSource: EventSourceStub, fetch: fakeFetch(),
+    mountDiffEditor: async () => {
+      mounts++;
+      return { dispose() { disposals++; } };
+    },
+  });
+  await settle();
+  elements.rail.querySelector('.rail__file').click();
+  await settle();
+  assert.equal(mounts, 1);
+  assert.equal(elements.rail.style.width, '220px');
+  const divider = elements['rail-divider'];
+  divider.listeners.get('keydown')({ key: 'ArrowRight', preventDefault() {} });
+  assert.equal(elements.rail.style.width, '230px');
+  elements.body.clientWidth = 306;
+  window.emit('resize');
+  assert.equal(elements.rail.style.width, '150px');
+  assert.equal(mounts, 1);
+  assert.equal(disposals, 0);
+  app.dispose();
+  assert.equal(divider.listeners.size, 0);
+  elements.body.clientWidth = 1006;
+  window.emit('resize');
+  assert.equal(elements.rail.style.width, '150px');
 });
 
 test('f opens changed files in path order and wraps to the first', async () => {

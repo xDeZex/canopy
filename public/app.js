@@ -17,6 +17,7 @@ import { computeTabScrollAffordance } from './tab-scroll.js';
 import { createWorkspaceStore } from './workspace-state.js';
 import { shortcutAction } from './keyboard-shortcuts.js';
 import { changedFiles } from './changed-files.js';
+import { createRailResizer } from './rail-resize.js';
 
 export async function startApp({
   document: doc = globalThis.document,
@@ -45,6 +46,10 @@ export async function startApp({
     getItem: (key) => browserWindow.localStorage.getItem(key),
     setItem: (key, value) => browserWindow.localStorage.setItem(key, value),
   };
+  const railResizer = createRailResizer({
+    bodyEl: doc.getElementById('body'), railEl,
+    dividerEl: doc.getElementById('rail-divider'), window: browserWindow, storage,
+  });
   const viewModeStore = createViewModeStore(storage);
   const getWrap = () => wrap ?? (viewModeStore.getMode() === 'file' || diffRenderMode !== 'side-by-side');
   const autoScrollStore = createAutoScrollStore(storage);
@@ -160,6 +165,7 @@ export async function startApp({
   helpEl.addEventListener('click', () => { helpEl.hidden = true; });
   doc.addEventListener('keydown', onKeyDown);
   const dispose = () => {
+    railResizer.dispose();
     doc.removeEventListener('keydown', onKeyDown);
     liveUpdates.dispose();
     cancel(editTimer);

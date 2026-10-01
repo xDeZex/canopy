@@ -16,10 +16,14 @@
     <div class="tabs-wrapper" id="tabs-wrapper">
       <div class="tabs" id="tabs" role="tablist" aria-label="Worktrees"></div>
     </div>
-    <div class="body">
+    <div class="body" id="body">
       <nav class="rail" id="rail" aria-label="Files">
         <p class="empty rail__message">Loading files…</p>
       </nav>
+      <div class="rail-divider" id="rail-divider" role="separator" tabindex="0"
+           aria-orientation="vertical" aria-label="File panel width" aria-controls="rail"
+           aria-valuemin="160" aria-valuemax="560" aria-valuenow="220"
+           title="Drag or use Left / Right arrow keys to resize the file panel"></div>
       <div class="workspace-content">
         <div class="viewer__toolbar" id="toolbar" hidden></div>
         <main class="main" id="main">

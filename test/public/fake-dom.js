@@ -55,6 +55,9 @@ export class Element {
 
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
   addEventListener(event, listener) { this.listeners.set(event, listener); }
+  removeEventListener(event, listener) {
+    if (this.listeners.get(event) === listener) this.listeners.delete(event);
+  }
   click() { this.listeners.get('click')?.(); }
   setAttribute(name, value) { this[name] = value; }
 }

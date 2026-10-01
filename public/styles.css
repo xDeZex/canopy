@@ -209,6 +209,30 @@ body {
   overflow: hidden;
 }
 
+.rail-divider {
+  flex: 0 0 6px;
+  background: var(--bg-1);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.rail-divider:hover,
+.rail-divider:focus-visible,
+.body.is-resizing .rail-divider {
+  background: var(--accent);
+}
+
+.rail-divider:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.body.is-resizing,
+.body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .rail__tree {
   flex: 1;
   min-height: 0;
