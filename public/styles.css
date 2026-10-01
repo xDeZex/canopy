@@ -509,6 +509,18 @@ body {
   font: inherit;
 }
 
+.commit-picker__trigger--behind {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.commit-picker__trigger--at {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.commit-picker__trigger--ahead {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
 .commit-picker__trigger-sha {
   font-family: "SF Mono", monospace;
   font-size: 12px;

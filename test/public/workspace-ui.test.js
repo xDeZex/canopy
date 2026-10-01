@@ -342,12 +342,15 @@ test('toolbar controls survive commit updates and reset on worktree change', asy
   f.workspace.updateWorktrees([{ path: '/a' }, { path: '/b' }]);
   const oldPicker = f.toolbarEl.querySelector('.commit-picker');
   oldPicker.querySelector('.commit-picker__trigger').click();
-  await f.reply(f.requests[1], [{ sha: '12345678', message: 'commit' }]);
+  await f.reply(f.requests[1], [{ sha: '12345678', message: 'commit', isOriginMain: true }]);
   assert.equal(f.toolbarEl.querySelector('.commit-picker'), oldPicker);
+  assert.equal(oldPicker.querySelector('.commit-picker__trigger').className, 'commit-picker__trigger commit-picker__trigger--at');
   assert.equal(oldPicker.querySelector('.commit-picker__menu').classList.contains('is-open'), true);
   f.tabsEl.children[1].click();
   assert.notEqual(f.toolbarEl.querySelector('.commit-picker'), oldPicker);
   assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger').className, 'commit-picker__trigger');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger').title, '');
   f.ui.renderError(new Error('unavailable'));
   assert.equal(f.tabsEl.children.length, 0);
   assert.equal(f.railEl.children.length, 0);
@@ -511,11 +514,188 @@ test('commit dropdown draws an origin/main divider above the flagged commit, sep
   assert.equal(rows[1].textContent, 'origin/main');
 });
 
+test('selecting a commit behind the origin/main divergence accents the left edge and explains the relationship', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[1], [
+    { sha: 'newest', message: 'Local' },
+    { sha: 'base', message: 'Divergence', isOriginMain: true },
+    { sha: 'older', message: 'Older' },
+  ]);
+  f.toolbarEl.querySelectorAll('.commit-picker__item-sha')[2].parentElement.click();
+  const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--behind');
+  assert.equal(trigger.title, 'Selected commit is behind the origin/main divergence');
+});
+
+test('selecting the origin/main divergence moves the accent to the top edge', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[1], [
+    { sha: 'base', message: 'Divergence', isOriginMain: true },
+    { sha: 'older', message: 'Older' },
+  ]);
+  const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+  f.toolbarEl.querySelectorAll('.commit-picker__item-sha')[1].parentElement.click();
+  f.toolbarEl.querySelectorAll('.commit-picker__item-sha')[0].parentElement.click();
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--at');
+  assert.equal(trigger.title, 'Selected commit is at the origin/main divergence');
+});
+
+test('selecting a commit ahead of the origin/main divergence moves the accent to the right edge', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[1], [
+    { sha: 'newest', message: 'Local' },
+    { sha: 'base', message: 'Divergence', isOriginMain: true },
+  ]);
+  const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+  f.toolbarEl.querySelectorAll('.commit-picker__item-sha')[1].parentElement.click();
+  f.toolbarEl.querySelectorAll('.commit-picker__item-sha')[0].parentElement.click();
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--ahead');
+  assert.equal(trigger.title, 'Selected commit is ahead of the origin/main divergence');
+});
+
+test('Auto uses the newest commit relationship, including after resetting a locked commit', async () => {
+  for (const [commits, expected, tooltip] of [
+    [[
+      { sha: 'base', message: 'Divergence', isOriginMain: true },
+      { sha: 'older', message: 'Older' },
+    ], 'at', 'Selected commit is at the origin/main divergence'],
+    [[
+      { sha: 'newest', message: 'Local' },
+      { sha: 'base', message: 'Divergence', isOriginMain: true },
+      { sha: 'older', message: 'Older' },
+    ], 'ahead', 'Selected commit is ahead of the origin/main divergence'],
+  ]) {
+    const f = fixture();
+    f.workspace.updateWorktrees([{ path: '/repo' }]);
+    await f.reply(f.requests[1], commits);
+    const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+    assert.equal(trigger.className, `commit-picker__trigger commit-picker__trigger--${expected}`);
+    assert.equal(trigger.title, tooltip);
+    f.toolbarEl.querySelectorAll('.commit-picker__item-sha').at(-1).parentElement.click();
+    assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--behind');
+    f.toolbarEl.querySelector('.commit-picker__menu').children[0].click();
+    assert.equal(trigger.className, `commit-picker__trigger commit-picker__trigger--${expected}`);
+    assert.equal(trigger.title, tooltip);
+    assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+    assert.equal(trigger.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  }
+});
+
+test('missing selected commits, missing divergence markers and empty logs clear stale accents and tooltips', async () => {
+  for (const commits of [
+    [{ sha: 'other', message: 'Other history', isOriginMain: true }],
+    [{ sha: 'base', message: 'No known divergence' }],
+    [],
+  ]) {
+    const f = fixture();
+    f.commitLock.lockCommit('/repo', 'base');
+    f.workspace.updateWorktrees([{ path: '/repo' }]);
+    const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+    assert.equal(trigger.className, 'commit-picker__trigger');
+    assert.equal(trigger.title, '');
+    await f.reply(f.requests[1], [{ sha: 'base', message: 'Divergence', isOriginMain: true }]);
+    assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--at');
+    f.workspace.loadCommits();
+    await f.reply(f.requests.at(-1), commits);
+    assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger'), trigger);
+    assert.equal(trigger.className, 'commit-picker__trigger');
+    assert.equal(trigger.title, '');
+    assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'base');
+    assert.equal(trigger.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+  }
+});
+
+test('refreshing the divergence marker updates the selected commit accent without replacing or closing the picker', async () => {
+  const f = fixture();
+  f.commitLock.lockCommit('/repo', 'middle');
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[1], [
+    { sha: 'newest', message: 'Newest' },
+    { sha: 'middle', message: 'Selected', isOriginMain: true },
+    { sha: 'oldest', message: 'Oldest' },
+  ]);
+  const picker = f.toolbarEl.querySelector('.commit-picker');
+  const trigger = picker.querySelector('.commit-picker__trigger');
+  const menu = picker.querySelector('.commit-picker__menu');
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--at');
+  trigger.click();
+  for (const [originMainSha, expected, tooltip] of [
+    ['oldest', 'ahead', 'Selected commit is ahead of the origin/main divergence'],
+    ['newest', 'behind', 'Selected commit is behind the origin/main divergence'],
+  ]) {
+    f.workspace.updateWorktrees([{ path: '/repo', originMainSha }]);
+    await f.reply(f.requests.at(-1), [
+      { sha: 'newest', message: 'Newest', isOriginMain: originMainSha === 'newest' },
+      { sha: 'middle', message: 'Selected' },
+      { sha: 'oldest', message: 'Oldest', isOriginMain: originMainSha === 'oldest' },
+    ]);
+    assert.equal(f.toolbarEl.querySelector('.commit-picker'), picker);
+    assert.equal(picker.querySelector('.commit-picker__trigger'), trigger);
+    assert.equal(picker.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.classList.contains('is-open'), true);
+    assert.equal(trigger.className, `commit-picker__trigger commit-picker__trigger--${expected}`);
+    assert.equal(trigger.title, tooltip);
+    assert.equal(f.commitLock.getLockedCommit('/repo'), 'middle');
+  }
+});
+
+test('a failed commit refresh clears the divergence accent, preserves the lock and shows the existing error message', async () => {
+  const f = fixture();
+  f.commitLock.lockCommit('/repo', 'base');
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[1], [{ sha: 'base', message: 'Divergence', isOriginMain: true }]);
+  const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--at');
+  f.workspace.loadCommits();
+  f.requests.at(-1).resolve({ ok: false, status: 503 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(trigger.className, 'commit-picker__trigger');
+  assert.equal(trigger.title, '');
+  assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'base');
+  assert.equal(f.commitLock.getLockedCommit('/repo'), 'base');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__divider'), null);
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__item--error').textContent,
+    'Failed to load commits: request failed with status 503');
+  f.workspace.loadCommits();
+  await f.reply(f.requests.at(-1), [{ sha: 'base', message: 'Divergence', isOriginMain: true }]);
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--at');
+  assert.equal(trigger.title, 'Selected commit is at the origin/main divergence');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__item--error'), null);
+});
+
+test('Auto follows refreshed HEAD history and becomes neutral when the history is empty', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo', head: 'base' }]);
+  const trigger = f.toolbarEl.querySelector('.commit-picker__trigger');
+  assert.equal(trigger.className, 'commit-picker__trigger');
+  assert.equal(trigger.title, '');
+  await f.reply(f.requests[1], [{ sha: 'base', message: 'Divergence', isOriginMain: true }]);
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--at');
+  f.workspace.updateWorktrees([{ path: '/repo', head: 'newest' }]);
+  await f.reply(f.requests.at(-1), [
+    { sha: 'newest', message: 'New HEAD' },
+    { sha: 'base', message: 'Divergence', isOriginMain: true },
+  ]);
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger'), trigger);
+  assert.equal(trigger.className, 'commit-picker__trigger commit-picker__trigger--ahead');
+  assert.equal(trigger.title, 'Selected commit is ahead of the origin/main divergence');
+  f.workspace.loadCommits();
+  await f.reply(f.requests.at(-1), []);
+  assert.equal(trigger.className, 'commit-picker__trigger');
+  assert.equal(trigger.title, '');
+  assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+});
+
 test('without an origin/main flag the commit dropdown shows no divider', async () => {
   const f = fixture();
   f.workspace.updateWorktrees([{ path: '/repo', branch: 'main' }]);
   await f.reply(f.requests[1], [{ sha: '1111111aaa', message: 'one', date: '2025-01-01' }]);
   assert.equal(f.toolbarEl.querySelector('.commit-picker__divider'), null);
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger').className, 'commit-picker__trigger');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger').title, '');
 });
 
 async function openFile(f) {

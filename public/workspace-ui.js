@@ -1,5 +1,13 @@
 import { changedFiles } from './changed-files.js';
 
+function commitDivergence(commits, lockedSha) {
+  const originIndex = commits.findIndex((commit) => commit.isOriginMain);
+  const selectedIndex = lockedSha ? commits.findIndex((commit) => commit.sha === lockedSha) : 0;
+  if (originIndex < 0 || selectedIndex < 0) return null;
+  if (selectedIndex === originIndex) return 'at';
+  return selectedIndex > originIndex ? 'behind' : 'ahead';
+}
+
 // DOM controls for the workspace: the tab bar, the file rail and the viewer
 // toolbar (commit picker, Diff/File toggle #5, diff render modes #6, per
 // worktree tree expansion #13, tab-bar scroll affordance #14). The editor and
@@ -251,6 +259,10 @@ export function createWorkspaceUI({
     toolbarCommitsError = commitsError;
     toolbarLockedSha = lockedSha;
     const picker = toolbarEl.querySelector('.commit-picker');
+    const trigger = picker.querySelector('.commit-picker__trigger');
+    const divergence = commitDivergence(commits, lockedSha);
+    trigger.className = `commit-picker__trigger${divergence ? ` commit-picker__trigger--${divergence}` : ''}`;
+    trigger.title = divergence ? `Selected commit is ${divergence === 'ahead' ? 'ahead of' : divergence} the origin/main divergence` : '';
     picker.querySelector('.commit-picker__trigger-sha').textContent = lockedSha ? lockedSha.slice(0, 7) : 'HEAD';
     picker.querySelector('.commit-picker__trigger-label').textContent = lockedSha ? 'locked' : 'since last commit';
     const menu = picker.querySelector('.commit-picker__menu');
