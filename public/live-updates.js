@@ -22,6 +22,10 @@ export function createLiveUpdates({ workspace, treeExpansion, EventSource, onAct
       if (disposed || source !== activeSource) return;
       workspace.remoteChange(JSON.parse(event.data).paths);
     };
+    source.addEventListener('status-invalidated', () => {
+      if (disposed || source !== activeSource) return;
+      workspace.invalidateStatus();
+    });
   }
 
   function connectWorktrees() {

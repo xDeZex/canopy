@@ -123,6 +123,34 @@ test('same active path does not reopen; events from closed file streams are igno
   assert.equal(f.sources.length, 2, 'disposed wiring cannot reconnect');
 });
 
+test('status invalidations fetch only the active tree and reject closing, stale and disposed streams', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees(f.list('/a', '/b'));
+  f.workspace.selectFile('open');
+  const old = f.sources[0];
+  const before = f.requests.length;
+  old.event('status-invalidated', {});
+  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa']);
+  assert.equal(f.workspace.getState().activeFile, 'open');
+  old.onClose = () => old.event('status-invalidated', {});
+  f.workspace.selectWorktree('/b');
+  const current = f.sources[1];
+  const switched = f.requests.length;
+  old.event('status-invalidated', {});
+  assert.equal(f.requests.length, switched);
+  current.event('status-invalidated', {});
+  assert.equal(f.requests.at(-1), '/api/files?worktree=%2Fb');
+  assert.equal(f.requests.length, switched + 1);
+  f.workspace.selectWorktree('/a');
+  const returned = f.requests.length;
+  old.event('status-invalidated', {});
+  assert.equal(f.requests.length, returned, 'returning to the path does not revive its old stream');
+  f.sources[2].onClose = () => f.sources[2].event('status-invalidated', {});
+  f.liveUpdates.dispose();
+  f.sources[2].event('status-invalidated', {});
+  assert.equal(f.requests.length, returned);
+});
+
 test('a closing source cannot deliver a change during re-scoping or after returning to its path', () => {
   const f = fixture();
   f.workspace.updateWorktrees(f.list('/a', '/b'));

@@ -41,6 +41,70 @@ function fixture(savedMode = null) {
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
 const list = (paths) => paths.map((path) => ({ path }));
 
+test('status invalidation reconciles the API tree only, preserving content, selection, commits and lock', async () => {
+  const f = fixture('diff');
+  f.commitLock.lockCommit('/a', 'locked');
+  f.store.updateWorktrees([{ path: '/a', head: 'same' }]);
+  await f.reply(f.requests[0], tree('open', 'clean'));
+  f.store.selectFile('open');
+  await f.reply(f.requests[2], { head: 'same base', working: 'same disk' });
+  await f.reply(f.fileCommitRequests[0], [{ sha: 'same', touchesFile: true }]);
+  const before = f.store.getState();
+  f.changes.length = 0;
+
+  const pending = f.store.invalidateStatus();
+  assert.equal(f.requests.length, 4, 'only one additional tree request');
+  assert.equal(f.requests[3].url, '/api/files?worktree=%2Fa&ref=locked');
+  assert.equal(f.fileCommitRequests.length, 1);
+  await f.reply(f.requests[3], tree('open', 'deleted'));
+  await pending;
+
+  assert.deepEqual(f.store.getState().fileTree, tree('open', 'deleted'));
+  assert.equal(f.store.getState().activeFile, 'open');
+  assert.equal(f.store.getState().fileContent, before.fileContent);
+  assert.equal(f.store.getState().commits, before.commits);
+  assert.equal(f.commitLock.getLockedCommit('/a'), 'locked');
+  assert.equal(f.viewModeStore.getMode(), 'diff');
+  assert.deepEqual(f.changes, ['rail']);
+});
+
+test('status refresh does not seed an unresolved viewer and older trees cannot overwrite it', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('open');
+  await f.reply(f.requests[2], { working: 'same disk' });
+  f.changes.length = 0;
+  f.store.invalidateStatus();
+  f.store.invalidateStatus();
+  await f.reply(f.requests[4], tree('open', 'clean'));
+  assert.equal(f.viewModeStore.getMode(), 'diff', 'status-only refresh leaves the mounted mode alone');
+  assert.deepEqual(f.changes, ['rail']);
+  f.changes.length = 0;
+  await f.reply(f.requests[0], tree('old', 'added'));
+  f.requests[3].reject(new Error('older status failure'));
+  await Promise.resolve();
+  assert.deepEqual(f.store.getState().fileTree, tree('open', 'clean'));
+  assert.equal(f.store.getState().fileTreeError, null);
+  assert.deepEqual(f.changes, []);
+});
+
+test('status responses stay stale across worktree switches, even after returning to the same path', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a', '/b']));
+  f.store.invalidateStatus(); // 2 old /a status
+  f.store.selectWorktree('/b'); // 3 tree, 4 commits
+  f.store.invalidateStatus(); // 5 old /b status
+  f.store.selectWorktree('/a'); // 6 tree, 7 commits
+  await f.reply(f.requests[6], tree('current', 'clean'));
+  f.changes.length = 0;
+  await f.reply(f.requests[2], tree('old-a', 'added'));
+  f.requests[5].reject(new Error('old-b failure'));
+  await Promise.resolve();
+  assert.deepEqual(f.store.getState().fileTree, tree('current', 'clean'));
+  assert.equal(f.store.getState().fileTreeError, null);
+  assert.deepEqual(f.changes, []);
+});
+
 test('active HEAD change in Auto reloads commits, tree and open content without changing selection', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees([{ path: '/a', head: 'old' }]);
