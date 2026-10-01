@@ -485,7 +485,7 @@ test('origin/main SSE refresh moves and removes the open dropdown divider withou
   const menu = picker.querySelector('.commit-picker__menu');
   menu.querySelectorAll('.commit-picker__item').at(-1).click();
   await flush();
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'pushed');
   picker.querySelector('.commit-picker__trigger').click();
   const tab = elements.tabs.children[0];
   const rail = elements.rail.children[0];
@@ -501,7 +501,7 @@ test('origin/main SSE refresh moves and removes the open dropdown divider withou
     assert.equal(elements.toolbar.querySelector('.commit-picker'), picker);
     assert.equal(picker.querySelector('.commit-picker__menu'), menu);
     assert.equal(menu.classList.contains('is-open'), true);
-    assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+    assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'pushed');
     assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
     assert.equal(elements.tabs.children[0], tab);
     assert.equal(tab['aria-selected'], 'true');
@@ -574,7 +574,7 @@ test('an invalid locked base after a history SSE event shows errors and retains 
   assert.equal(mounts, mountedWhileLoading, 'failed responses do not mount a comparison');
   assert.equal(elements.main.classList.contains('main--viewer'), false);
   assert.equal(elements.toolbar.querySelector('.commit-picker'), picker);
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'abcdef1');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   assert.equal(menu.children[0].classList.contains('is-selected'), false);
   assert.equal(menu.classList.contains('is-open'), true);
@@ -586,7 +586,7 @@ test('an invalid locked base after a history SSE event shows errors and retains 
   assert.deepEqual(urls.slice(beforeAuto), [
     '/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=f.js',
   ]);
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
   assert.equal(menu.children[0].classList.contains('is-selected'), true);
   assert.equal(elements.rail.querySelector('.rail__message'), null);
@@ -749,7 +749,7 @@ test('comparison lock, locked HEAD refresh and working-file edits still update t
   ]);
   assert.equal(controllers[0].disposed, true);
   assert.equal(controllers.at(-1).options.original, 'older base');
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'older');
   const beforeHead = urls.length;
   api.content = { head: 'older base', working: 'post-commit disk' };
   await updateWorktrees([{ ...api.worktrees[0], head: 'new-head' }, api.worktrees[1]]);
@@ -759,7 +759,7 @@ test('comparison lock, locked HEAD refresh and working-file edits still update t
   ]);
   assert.equal(controllers.at(-1).options.original, 'older base');
   assert.equal(controllers.at(-1).options.modified, 'post-commit disk');
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'older');
   const beforeEdit = urls.length;
   api.content = { head: 'older base', working: 'edited disk' };
   sources.find((source) => source.url === '/api/watch?worktree=%2Fa&ignoreGitignore=true')
@@ -775,7 +775,7 @@ test('comparison lock, locked HEAD refresh and working-file edits still update t
   elements.toolbar.querySelector('.commit-picker__menu').querySelectorAll('.commit-picker__item')[0].click();
   await flushApp();
   assert.equal(controllers.at(-1).options.original, 'current HEAD base');
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
 });
 
 test('r locks HEAD from Auto, then steps to older commits without wrapping or filtering by file touches', async (t) => {
@@ -790,7 +790,7 @@ test('r locks HEAD from Auto, then steps to older commits without wrapping or fi
   assert.deepEqual(urls.slice(before), [
     '/api/files?worktree=%2Fa&ref=aaa', '/api/file-content?worktree=%2Fa&file=f.js&ref=aaa',
   ]);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   assert.equal(controllers.at(-1).options.original, 'HEAD base');
   api.content = { head: 'older base', working: 'new' };
@@ -800,7 +800,7 @@ test('r locks HEAD from Auto, then steps to older commits without wrapping or fi
   assert.deepEqual(urls.slice(before), [
     '/api/files?worktree=%2Fa&ref=older', '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
   ]);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'older');
   assert.equal(controllers.at(-1).options.original, 'older base');
   before = urls.length;
   pressKey('r');
@@ -819,7 +819,7 @@ test('w steps from a picked older commit to locked HEAD, then Auto, and stops th
   assert.deepEqual(urls.slice(before), [
     '/api/files?worktree=%2Fa&ref=aaa', '/api/file-content?worktree=%2Fa&file=f.js&ref=aaa',
   ]);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'first');
   assert.equal(controllers.at(-1).options.original, 'HEAD base');
   api.content = { head: 'Auto base', working: 'new' };
   before = urls.length;
@@ -828,7 +828,7 @@ test('w steps from a picked older commit to locked HEAD, then Auto, and stops th
   assert.deepEqual(urls.slice(before), [
     '/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=f.js',
   ]);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
   assert.equal(controllers.at(-1).options.original, 'Auto base');
   before = urls.length;
@@ -849,14 +849,14 @@ test('comparison shortcuts work without an open file and keep each worktree lock
   pressKey('r');
   await flushApp();
   assert.deepEqual(urls.slice(before), ['/api/files?worktree=%2Fb&ref=aaa']);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'first');
   assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
   pressKey('1');
   await flushApp();
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'older');
   pressKey('w');
   await flushApp();
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'first');
   pressKey('w');
   await flushApp();
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
@@ -885,7 +885,7 @@ test('comparison shortcuts preserve typing and modifier guards and accept the re
   const readOnlyEvent = { target: { tagName: 'TEXTAREA', readOnly: true }, preventDefault: () => prevented++ };
   pressKey('r', readOnlyEvent);
   await flushApp();
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'first');
   assert.equal(elements.toolbar.querySelector('.commit-picker__menu').classList.contains('is-open'), false);
   pressKey('w', readOnlyEvent);
   await flushApp();
@@ -904,7 +904,7 @@ test('comparison shortcuts retain an unknown locked SHA rather than guessing a n
   pressKey('r');
   await flushApp();
   assert.deepEqual(urls.slice(before), []);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'aaa');
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'locked');
 });
 
@@ -972,7 +972,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   assert.equal(bSource.closed, true);
   assert.deepEqual(urls.slice(beforeRemoval), ['/api/files?worktree=%2Fa&ref=older', '/api/commits?worktree=%2Fa', '/api/comments?worktree=%2Fa']);
   assert.equal(elements.tabs.children[0]['aria-selected'], 'true');
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older', 'surviving worktree retains its lock');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'older', 'surviving worktree retains its lock');
   assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
   await updateWorktrees([]);
   assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
@@ -981,7 +981,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   const beforeReadd = urls.length;
   await updateWorktrees([{ path: '/a', branch: 're-added', head: 'aaa' }]);
   assert.deepEqual(urls.slice(beforeReadd), ['/api/files?worktree=%2Fa', '/api/commits?worktree=%2Fa', '/api/comments?worktree=%2Fa']);
-  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD', 'removed worktree locks are pruned');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-title').textContent, 'HEAD', 'removed worktree locks are pruned');
   const beforeStaleEvent = urls.length;
   aSource.onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });
   bSource.onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });

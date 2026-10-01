@@ -612,8 +612,11 @@ body {
   box-shadow: inset -2px 0 0 var(--accent);
 }
 
-.commit-picker__trigger-sha {
-  font-family: "SF Mono", monospace;
+.commit-picker__trigger-title {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
 }

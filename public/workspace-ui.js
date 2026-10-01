@@ -285,7 +285,10 @@ export function createWorkspaceUI({
     const divergence = commitDivergence(commits, lockedSha);
     trigger.className = `commit-picker__trigger${divergence ? ` commit-picker__trigger--${divergence}` : ''}`;
     trigger.title = divergence ? `Selected commit is ${divergence === 'ahead' ? 'ahead of' : divergence} the origin/main divergence` : '';
-    picker.querySelector('.commit-picker__trigger-sha').textContent = lockedSha ? lockedSha.slice(0, 7) : 'HEAD';
+    const selectedCommit = commits.find((commit) => commit.sha === lockedSha);
+    const titleEl = picker.querySelector('.commit-picker__trigger-title');
+    titleEl.textContent = lockedSha ? selectedCommit?.message || lockedSha.slice(0, 7) : 'HEAD';
+    titleEl.title = titleEl.textContent;
     picker.querySelector('.commit-picker__trigger-label').textContent = lockedSha ? 'locked' : 'since last commit';
     const menu = picker.querySelector('.commit-picker__menu');
     const autoItem = document.createElement('div');
@@ -318,11 +321,11 @@ export function createWorkspaceUI({
     const trigger = document.createElement('button');
     trigger.type = 'button';
     trigger.className = 'commit-picker__trigger';
-    const shaEl = document.createElement('span');
-    shaEl.className = 'commit-picker__trigger-sha';
+    const titleEl = document.createElement('span');
+    titleEl.className = 'commit-picker__trigger-title';
     const labelEl = document.createElement('span');
     labelEl.className = 'commit-picker__trigger-label';
-    trigger.append(shaEl, labelEl);
+    trigger.append(titleEl, labelEl);
     const menu = document.createElement('div');
     menu.className = 'commit-picker__menu';
     trigger.addEventListener('click', () => {

@@ -261,7 +261,8 @@ test('commit picker locks base, reloads tree and open file, then displays lock a
   assert.equal(f.requests[4].url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
   assert.equal(f.toolbarEl.querySelector('.commit-picker'), picker, 'editor controls stay mounted');
   assert.equal(picker.querySelector('.commit-picker__menu').classList.contains('is-open'), false);
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'Earlier version');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').title, 'Earlier version');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   assert.equal(picker.querySelector('.commit-picker__item-time').textContent, 'recently');
 
@@ -269,7 +270,7 @@ test('commit picker locks base, reloads tree and open file, then displays lock a
   assert.equal(f.commitLock.getLockedCommit('/repo'), null);
   assert.equal(f.requests[5].url, '/api/files?worktree=%2Frepo');
   assert.equal(f.requests[6].url, '/api/file-content?worktree=%2Frepo&file=a.txt');
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
 });
 
@@ -280,7 +281,7 @@ test('a stored lock absent from the log stays visible and sends its SHA until ex
   f.workspace.updateWorktrees([{ path: '/repo', head: 'new-head' }]);
   const picker = f.toolbarEl.querySelector('.commit-picker');
   const menu = picker.querySelector('.commit-picker__menu');
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'abcdef1');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   assert.equal(menu.children[0].classList.contains('is-selected'), false);
   assert.equal(f.requests[0].url, `/api/files?worktree=%2Frepo&ref=${sha}`);
@@ -290,7 +291,7 @@ test('a stored lock absent from the log stays visible and sends its SHA until ex
   f.railEl.querySelector('.rail__file').click();
   await f.reply(f.fileCommitRequests[0], []);
   assert.equal(f.requests[2].url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'abcdef1');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   assert.equal(menu.children[0].classList.contains('is-selected'), false);
   assert.equal(f.commitLock.getLockedCommit('/repo'), sha);
@@ -299,7 +300,7 @@ test('a stored lock absent from the log stays visible and sends its SHA until ex
   assert.equal(f.commitLock.getLockedCommit('/repo'), null);
   assert.equal(f.requests[3].url, '/api/files?worktree=%2Frepo');
   assert.equal(f.requests[4].url, '/api/file-content?worktree=%2Frepo&file=a.txt');
-  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
   assert.equal(menu.children[0].classList.contains('is-selected'), true);
 });
@@ -351,7 +352,7 @@ test('history changes and working edits preserve an off-log lock, file and open 
     assert.equal(picker.querySelector('.commit-picker__menu'), menu);
     assert.equal(menu.classList.contains('is-open'), true);
     assert.equal(menu.children[0].classList.contains('is-selected'), false);
-    assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+    assert.equal(picker.querySelector('.commit-picker__trigger-title').textContent, 'abcdef1');
     assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   }
 });
@@ -367,7 +368,7 @@ test('toolbar controls survive commit updates and reset on worktree change', asy
   assert.equal(oldPicker.querySelector('.commit-picker__menu').classList.contains('is-open'), true);
   f.tabsEl.children[1].click();
   assert.notEqual(f.toolbarEl.querySelector('.commit-picker'), oldPicker);
-  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
   assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger').className, 'commit-picker__trigger');
   assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger').title, '');
   f.ui.renderError(new Error('unavailable'));
@@ -384,7 +385,7 @@ test('locking without a selected file still refreshes the tree, not file content
   f.toolbarEl.querySelector('.commit-picker__item-sha').parentElement.click();
   assert.equal(f.requests.length, 3);
   assert.equal(f.requests[2].url, '/api/files?worktree=%2Fa&ref=12345678');
-  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger-sha').textContent, '1234567');
+  assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger-title').textContent, 'base');
 });
 
 test('commit dropdown marks only commits that touched the open file, keeping all in order', async () => {
@@ -598,16 +599,16 @@ test('Auto uses the newest commit relationship, including after resetting a lock
     f.toolbarEl.querySelector('.commit-picker__menu').children[0].click();
     assert.equal(trigger.className, `commit-picker__trigger commit-picker__trigger--${expected}`);
     assert.equal(trigger.title, tooltip);
-    assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+    assert.equal(trigger.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
     assert.equal(trigger.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
   }
 });
 
 test('missing selected commits, missing divergence markers and empty logs clear stale accents and tooltips', async () => {
-  for (const commits of [
-    [{ sha: 'other', message: 'Other history', isOriginMain: true }],
-    [{ sha: 'base', message: 'No known divergence' }],
-    [],
+  for (const [commits, expectedTitle] of [
+    [[{ sha: 'other', message: 'Other history', isOriginMain: true }], 'base'],
+    [[{ sha: 'base', message: 'No known divergence' }], 'No known divergence'],
+    [[], 'base'],
   ]) {
     const f = fixture();
     f.commitLock.lockCommit('/repo', 'base');
@@ -622,7 +623,7 @@ test('missing selected commits, missing divergence markers and empty logs clear 
     assert.equal(f.toolbarEl.querySelector('.commit-picker__trigger'), trigger);
     assert.equal(trigger.className, 'commit-picker__trigger');
     assert.equal(trigger.title, '');
-    assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'base');
+    assert.equal(trigger.querySelector('.commit-picker__trigger-title').textContent, expectedTitle);
     assert.equal(trigger.querySelector('.commit-picker__trigger-label').textContent, 'locked');
   }
 });
@@ -673,7 +674,7 @@ test('a failed commit refresh clears the divergence accent, preserves the lock a
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(trigger.className, 'commit-picker__trigger');
   assert.equal(trigger.title, '');
-  assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'base');
+  assert.equal(trigger.querySelector('.commit-picker__trigger-title').textContent, 'base');
   assert.equal(f.commitLock.getLockedCommit('/repo'), 'base');
   assert.equal(f.toolbarEl.querySelector('.commit-picker__divider'), null);
   assert.equal(f.toolbarEl.querySelector('.commit-picker__item--error').textContent,
@@ -705,7 +706,7 @@ test('Auto follows refreshed HEAD history and becomes neutral when the history i
   await f.reply(f.requests.at(-1), []);
   assert.equal(trigger.className, 'commit-picker__trigger');
   assert.equal(trigger.title, '');
-  assert.equal(trigger.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(trigger.querySelector('.commit-picker__trigger-title').textContent, 'HEAD');
 });
 
 test('without an origin/main flag the commit dropdown shows no divider', async () => {
