@@ -100,7 +100,8 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
   }
   if (composer && contentAvailable) {
     const editor = getEditor();
-    const { MouseTargetType, KeyMod, KeyCode } = monaco.editor;
+    const { MouseTargetType } = monaco.editor;
+    const { KeyMod, KeyCode } = monaco;
     const gutterLine = (event) => [MouseTargetType.GUTTER_GLYPH_MARGIN, MouseTargetType.GUTTER_LINE_NUMBERS]
       .includes(event.target.type) ? event.target.position?.lineNumber ?? null : null;
     const showHover = (line) => {

@@ -725,3 +725,29 @@ test('disposing a pending auto-scroll mount releases its listener and ignores qu
   updated();
   assert.equal(unsubscribed, 1);
 });
+
+test('the add-comment shortcut reads KeyMod and KeyCode from the top-level monaco namespace', async () => {
+  const actions = [];
+  const noop = () => ({ dispose() {} });
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    KeyMod: { CtrlCmd: 1, Alt: 2 },
+    KeyCode: { KeyM: 4 },
+    editor: {
+      MouseTargetType: { GUTTER_GLYPH_MARGIN: 'glyph', GUTTER_LINE_NUMBERS: 'numbers' },
+      create: () => ({
+        updateOptions() {},
+        onMouseMove: noop,
+        onMouseLeave: noop,
+        onMouseDown: noop,
+        addAction: (action) => { actions.push(action); return { dispose() {} }; },
+        changeViewZones() {},
+        dispose() {},
+      }),
+    },
+  };
+  const composer = { draft: null, onChange() {}, save: async () => {} };
+  const view = await mountEditor({}, { content: 'plain', composer });
+  assert.deepEqual(actions.map((action) => [action.id, action.keybindings]), [['canopy.addComment', [7]]]);
+  view.dispose();
+});
