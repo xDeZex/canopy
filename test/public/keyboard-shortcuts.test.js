@@ -54,6 +54,21 @@ test('e and d scroll up and down with the same typing and modifier guards', () =
   assert.equal(press('D'), null);
 });
 
+test('c adds a comment with the same typing and modifier guards', () => {
+  assert.deepEqual(press('c'), { type: 'add-comment' });
+  for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+    assert.equal(press('c', { [modifier]: true }), null);
+  }
+  for (const target of [
+    { tagName: 'INPUT', readOnly: false },
+    { tagName: 'TEXTAREA', readOnly: false },
+    { tagName: 'SELECT' },
+    { tagName: 'DIV', isContentEditable: true },
+  ]) assert.equal(press('c', { target }), null);
+  assert.deepEqual(press('c', { target: { tagName: 'TEXTAREA', readOnly: true } }), { type: 'add-comment' });
+  assert.equal(press('C'), null);
+});
+
 test('digits 1-9 select the worktree at that position', () => {
   assert.deepEqual(press('1'), { type: 'select-worktree', index: 0 });
   assert.deepEqual(press('9'), { type: 'select-worktree', index: 8 });

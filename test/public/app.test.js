@@ -1058,6 +1058,39 @@ test('j and l step the mounted diff to the previous and next change', async () =
   assert.deepEqual(navigated, ['prev', 'next'], 'modifiers and typing leave the keys alone');
 });
 
+test('c asks the active editor view to add a comment, with the usual guards', async (t) => {
+  const { document, window, elements, pressKey } = browserStub();
+  const added = [];
+  const controller = (mode) => ({ dispose() {}, addComment: () => added.push(mode) });
+  const app = await startApp({
+    document, window, EventSource: EventSourceStub, fetch: fakeFetch(),
+    mountDiffEditor: async (_container, options) => controller(options.mode),
+    mountEditor: async () => controller('file'),
+  });
+  t.after(() => app.dispose());
+  await settle();
+  elements.rail.querySelector('.rail__file').click();
+  await settle();
+  const [inline, sideBySide] = elements.toolbar.querySelector('.view-toggle--diff').querySelectorAll('.view-toggle__btn');
+  const [, file] = elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn');
+  const guardedEvents = [
+    { ctrlKey: true }, { metaKey: true }, { altKey: true },
+    { target: { tagName: 'INPUT', readOnly: false } },
+    { target: { tagName: 'TEXTAREA', readOnly: false } },
+    { target: { tagName: 'SELECT' } },
+    { target: { tagName: 'DIV', isContentEditable: true } },
+  ];
+  for (const [mode, button] of [['inline', inline], ['side-by-side', sideBySide], ['file', file]]) {
+    button.click();
+    await settle();
+    for (const extra of guardedEvents) pressKey('c', extra);
+    assert.deepEqual(added, [], `guarded c in ${mode} does nothing`);
+    pressKey('c');
+    assert.deepEqual(added, [mode]);
+    added.length = 0;
+  }
+});
+
 test('e and d scroll File and all diff views once per keydown, preserving guards', async (t) => {
   const { document, window, elements, pressKey } = browserStub();
   const scrolled = [];

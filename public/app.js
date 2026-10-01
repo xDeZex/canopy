@@ -218,6 +218,7 @@ export async function startApp({
     switch (action.type) {
       case 'next-change': return viewer.nextChange();
       case 'prev-change': return viewer.prevChange();
+      case 'add-comment': return viewer.addComment();
       case 'scroll-up': return viewer.scrollUp();
       case 'scroll-down': return viewer.scrollDown();
       case 'next-file': return stepFile(1);

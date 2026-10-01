@@ -150,13 +150,15 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
   }
 
   // Missing capabilities and unmounted views are a no-op.
+  const forward = (name) => () => currentView?.[name]?.();
   return {
     render,
     refreshComments,
     dispose() { disposed = true; generation++; currentView?.dispose(); currentView = null; },
-    nextChange: () => currentView?.nextChange?.(),
-    prevChange: () => currentView?.prevChange?.(),
-    scrollUp: () => currentView?.scrollUp?.(),
-    scrollDown: () => currentView?.scrollDown?.(),
+    nextChange: forward('nextChange'),
+    prevChange: forward('prevChange'),
+    addComment: forward('addComment'),
+    scrollUp: forward('scrollUp'),
+    scrollDown: forward('scrollDown'),
   };
 }

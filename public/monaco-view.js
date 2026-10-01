@@ -57,7 +57,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
     observer?.disconnect();
     getEditor().changeViewZones((accessor) => accessor.removeZone(id));
   }
-  // The gutter target and keyboard action both open the same composer: a
+  // The gutter target and keyboard shortcut both open the same composer: a
   // native form in a view zone after the last chosen modified-side line. The
   // draft lives with the caller so remounts can restore it.
   function openComposer(line, endLine = line, text = '', error = null) {
@@ -105,7 +105,6 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
   if (composer && contentAvailable) {
     const editor = getEditor();
     const { MouseTargetType } = monaco.editor;
-    const { KeyMod, KeyCode } = monaco;
     const gutterLine = (event) => [MouseTargetType.GUTTER_GLYPH_MARGIN, MouseTargetType.GUTTER_LINE_NUMBERS]
       .includes(event.target.type) ? event.target.position?.lineNumber ?? null : null;
     const showHover = (line) => {
@@ -126,12 +125,6 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
           openComposer(line, endLine);
         }
       }),
-      editor.addAction({ id: 'canopy.addComment', label: 'Add Comment on Line',
-        keybindings: [KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyM],
-        run: (ed) => {
-          const target = composerTarget(ed.getSelection(), lineCount(ed));
-          if (target) openComposer(target.line, target.endLine);
-        } }),
     );
     if (composer.draft) openComposer(composer.draft.line, composer.draft.endLine, composer.draft.text, composer.draft.error);
   }
@@ -143,7 +136,15 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
     zones = [];
     threadsById.clear();
   }
+  // Opens the composer for the editor's current selection (the `c` shortcut).
+  function addComment() {
+    if (disposed || !composer || !contentAvailable) return;
+    const editor = getEditor();
+    const target = composerTarget(editor.getSelection(), lineCount(editor));
+    if (target) openComposer(target.line, target.endLine);
+  }
   return {
+    addComment,
     updateThreads(threads) {
       if (disposed) return;
       const nextSnapshot = JSON.stringify(threads);
@@ -352,6 +353,7 @@ export async function mountDiffEditor(container, { original, modified, language,
 
   return {
     updateThreads: threadZones.updateThreads,
+    addComment: threadZones.addComment,
     revealThread(id) {
       if (!threadZones.revealThread(id)) return false;
       pendingAutoScroll = false;
@@ -397,6 +399,7 @@ export async function mountEditor(container, { content, language, wrap = false, 
   threadZones.updateThreads(threads);
   return {
     updateThreads: threadZones.updateThreads,
+    addComment: threadZones.addComment,
     revealThread: threadZones.revealThread,
     scrollUp() { scroll(editor, -1); },
     scrollDown() { scroll(editor, 1); },

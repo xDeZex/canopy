@@ -726,35 +726,8 @@ test('disposing a pending auto-scroll mount releases its listener and ignores qu
   assert.equal(unsubscribed, 1);
 });
 
-test('the add-comment shortcut reads KeyMod and KeyCode from the top-level monaco namespace', async () => {
-  const actions = [];
-  const noop = () => ({ dispose() {} });
-  globalThis.window = { monaco: true };
-  globalThis.monaco = {
-    KeyMod: { CtrlCmd: 1, Alt: 2 },
-    KeyCode: { KeyM: 4 },
-    editor: {
-      MouseTargetType: { GUTTER_GLYPH_MARGIN: 'glyph', GUTTER_LINE_NUMBERS: 'numbers' },
-      create: () => ({
-        updateOptions() {},
-        onMouseMove: noop,
-        onMouseLeave: noop,
-        onMouseDown: noop,
-        addAction: (action) => { actions.push(action); return { dispose() {} }; },
-        changeViewZones() {},
-        dispose() {},
-      }),
-    },
-  };
-  const composer = { draft: null, onChange() {}, save: async () => {} };
-  const view = await mountEditor({}, { content: 'plain', composer });
-  assert.deepEqual(actions.map((action) => [action.id, action.keybindings]), [['canopy.addComment', [7]]]);
-  view.dispose();
-});
-
 // Mounts an editor with a Monaco stub and returns what the composer glue did.
-async function mountWithComposer({ selection, lineCount = 10 }) {
-  const actions = [];
+async function mountWithComposer({ selection, lineCount = 10, content = 'plain', withComposer = true }) {
   const mouseDown = [];
   const zones = [];
   const noop = () => ({ dispose() {} });
@@ -762,8 +735,6 @@ async function mountWithComposer({ selection, lineCount = 10 }) {
     getBoundingClientRect: () => ({ height: 0 }) });
   globalThis.window = { monaco: true };
   globalThis.monaco = {
-    KeyMod: { CtrlCmd: 1, Alt: 2 },
-    KeyCode: { KeyM: 4 },
     editor: {
       MouseTargetType: { GUTTER_GLYPH_MARGIN: 'glyph', GUTTER_LINE_NUMBERS: 'numbers' },
       create: () => ({
@@ -771,7 +742,6 @@ async function mountWithComposer({ selection, lineCount = 10 }) {
         onMouseMove: noop,
         onMouseLeave: noop,
         onMouseDown: (listener) => { mouseDown.push(listener); return { dispose() {} }; },
-        addAction: (action) => { actions.push(action); return { dispose() {} }; },
         getModel: () => ({ getLineCount: () => lineCount }),
         getSelection: () => selection,
         getPosition: () => ({ lineNumber: selection.startLineNumber }),
@@ -782,14 +752,14 @@ async function mountWithComposer({ selection, lineCount = 10 }) {
   };
   const changes = [];
   const composer = { draft: null, onChange: (draft) => changes.push(draft), save: async () => {} };
-  const view = await mountEditor({}, { content: 'plain', composer, document: { createElement: element } });
-  return { view, actions, mouseDown, zones, changes };
+  const view = await mountEditor({}, { content, ...(withComposer ? { composer } : {}), document: { createElement: element } });
+  return { view, mouseDown, zones, changes };
 }
 const sel = (startLineNumber, startColumn, endLineNumber, endColumn) => ({ startLineNumber, startColumn, endLineNumber, endColumn });
 
-test('the add-comment action opens the composer after the last line of the selected range', async () => {
-  const { view, actions, zones } = await mountWithComposer({ selection: sel(3, 2, 5, 4) });
-  actions[0].run({ getSelection: () => sel(3, 2, 5, 4), getModel: () => ({ getLineCount: () => 10 }) });
+test('addComment opens the composer after the last line of the selected range', async () => {
+  const { view, zones } = await mountWithComposer({ selection: sel(3, 2, 5, 4) });
+  view.addComment();
   assert.equal(zones.length, 1);
   assert.equal(zones[0].afterLineNumber, 5);
   view.dispose();
@@ -807,8 +777,17 @@ test('a gutter click inside the selected range comments on the whole range, outs
 });
 
 test('an invalid selection opens no composer', async () => {
-  const { view, actions, zones } = await mountWithComposer({ selection: sel(9, 1, 11, 2) });
-  actions[0].run({ getSelection: () => sel(9, 1, 11, 2), getModel: () => ({ getLineCount: () => 10 }) });
+  const { view, zones } = await mountWithComposer({ selection: sel(9, 1, 11, 2) });
+  view.addComment();
   assert.deepEqual(zones, []);
   view.dispose();
+});
+
+test('addComment opens no composer when the view has no composer or no content', async () => {
+  for (const options of [{ withComposer: false }, { content: null }]) {
+    const { view, zones } = await mountWithComposer({ selection: sel(3, 2, 5, 4), ...options });
+    view.addComment();
+    assert.deepEqual(zones, []);
+    view.dispose();
+  }
 });

@@ -11,18 +11,24 @@ export function isTypingTarget(target) {
   return Boolean(target?.isContentEditable);
 }
 
+// Key to action type, so a binding is one named entry rather than a branch.
+const KEY_ACTIONS = {
+  j: 'prev-change',
+  l: 'next-change',
+  s: 'prev-file',
+  f: 'next-file',
+  w: 'newer-commit',
+  r: 'older-commit',
+  c: 'add-comment',
+  e: 'scroll-up',
+  d: 'scroll-down',
+  '?': 'toggle-help',
+  Escape: 'close',
+};
+
 export function shortcutAction({ key, ctrlKey, metaKey, altKey, target }) {
   if (ctrlKey || metaKey || altKey || isTypingTarget(target)) return null;
-  if (key === 'j') return { type: 'prev-change' };
-  if (key === 'l') return { type: 'next-change' };
-  if (key === 's') return { type: 'prev-file' };
-  if (key === 'f') return { type: 'next-file' };
-  if (key === 'w') return { type: 'newer-commit' };
-  if (key === 'r') return { type: 'older-commit' };
-  if (key === 'e') return { type: 'scroll-up' };
-  if (key === 'd') return { type: 'scroll-down' };
+  if (Object.hasOwn(KEY_ACTIONS, key)) return { type: KEY_ACTIONS[key] };
   if (/^[1-9]$/.test(key)) return { type: 'select-worktree', index: Number(key) - 1 };
-  if (key === '?') return { type: 'toggle-help' };
-  if (key === 'Escape') return { type: 'close' };
   return null;
 }
