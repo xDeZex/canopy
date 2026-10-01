@@ -21,10 +21,12 @@ export async function readFileContent(
   worktreePath,
   filePath,
   ref = 'HEAD',
-  { runGit = defaultRunGit, readWorkingFile = defaultReadFile } = {},
+  { runGit = defaultRunGit, readWorkingFile = defaultReadFile, oldPath = filePath } = {},
 ) {
+  // A renamed file's ref side is its old path's content, so the diff shows
+  // only the edits made on top of the move.
   const [head, working] = await Promise.all([
-    readRefContent(worktreePath, filePath, ref, runGit),
+    readRefContent(worktreePath, oldPath, ref, runGit),
     readWorkingContent(worktreePath, filePath, readWorkingFile),
   ]);
   return { head, working };

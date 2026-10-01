@@ -19,7 +19,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   let activeFile = null;
   let fileTree = [];
   let fileTreeError = null;
-  let fileStatusByPath = new Map();
+  let fileInfoByPath = new Map();
   let treeResolved = false;
   let fileContent = null;
   let fileContentError = null;
@@ -40,6 +40,11 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   }
 
   // Optional `&name=value` query fragment.
+  // The status and, for a renamed file, old path the tree gives each path.
+  function indexFiles(files) {
+    fileInfoByPath = new Map(files.map((node) => [node.path, { status: node.status, oldPath: node.oldPath }]));
+  }
+
   function param(name, value) {
     return value ? `&${name}=${encodeURIComponent(value)}` : '';
   }
@@ -64,7 +69,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     comments = { threads: [], warning: null };
     fileTree = [];
     fileTreeError = null;
-    fileStatusByPath = new Map();
+    indexFiles([]);
     treeResolved = false;
     commits = [];
     commitsError = null;
@@ -84,32 +89,37 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     if (!path) {
       fileTree = [];
       fileTreeError = null;
-      fileStatusByPath = new Map();
+      indexFiles([]);
       treeResolved = true;
       onChange('rail');
       return;
     }
     const lockedSha = commitLock.getLockedCommit(path);
+    const openFile = activeFile;
+    const previousOldPath = fileInfoByPath.get(openFile)?.oldPath;
     try {
       const tree = await fetchJson(`/api/files?worktree=${encodeURIComponent(path)}${param('ref', lockedSha)}`);
       if (generation !== treeRequest) return;
       fileTree = tree;
       fileTreeError = null;
-      fileStatusByPath = new Map(collectFiles(tree).map((node) => [node.path, node.status]));
+      indexFiles(collectFiles(tree));
     } catch (err) {
       if (generation !== treeRequest) return;
       fileTree = [];
       fileTreeError = err;
-      fileStatusByPath = new Map();
+      indexFiles([]);
     }
     treeResolved = true;
     onChange('rail');
+    // The file's base side moves with its old path, so a pairing found after
+    // it was opened needs its content read again.
+    if (activeFile && activeFile === openFile && fileInfoByPath.get(activeFile)?.oldPath !== previousOldPath) loadFileContent();
     if (comments?.threads?.length) onChange('comments');
     if (activeFile && !statusOnly) {
       const previousMode = viewModeStore.getMode();
       // A missing file or failed tree has no status; default to Diff rather
       // than leaving the first choice pending indefinitely.
-      viewModeStore.seed(fileStatusByPath.get(activeFile));
+      viewModeStore.seed(fileInfoByPath.get(activeFile)?.status);
       if (viewModeStore.getMode() !== previousMode) {
         onChange('toolbar');
         onChange('main');
@@ -147,7 +157,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     const lockedSha = commitLock.getLockedCommit(path);
     try {
       const content = await fetchJson(
-        `/api/file-content?worktree=${encodeURIComponent(path)}${param('file', file)}${param('ref', lockedSha)}`
+        `/api/file-content?worktree=${encodeURIComponent(path)}${param('file', file)}${param('oldFile', fileInfoByPath.get(file)?.oldPath)}${param('ref', lockedSha)}`
       );
       if (generation !== contentRequest) return;
       // Both API sides are strings or null. Identical content must not
@@ -200,7 +210,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     }
     activeFile = file;
     contentRequest++;
-    if (treeResolved && file) viewModeStore.seed(fileStatusByPath.get(file));
+    if (treeResolved && file) viewModeStore.seed(fileInfoByPath.get(file)?.status);
     fileContent = null;
     fileContentError = null;
     // Marks belong to the previous file; drop them until this file's commits load.

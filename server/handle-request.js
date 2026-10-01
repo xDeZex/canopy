@@ -159,11 +159,18 @@ export function createRequestHandler({
       const { worktreePath, error } = await resolveWorktree(missingError);
       if (error) return error;
 
-      // Defense in depth: keep the resolved path inside the worktree even
-      // though callers are expected to pass paths from /api/files.
-      if (!isInsideWorktree(worktreePath, filePath)) return json(403, { error: 'Forbidden' });
+      // The old path of a renamed file, whose ref side is read from there.
+      const oldPath = searchParams.get('oldFile');
 
-      const { head, working } = await getContent(worktreePath, filePath, searchParams.get('ref') || 'HEAD');
+      // Defense in depth: keep the resolved paths inside the worktree even
+      // though callers are expected to pass paths from /api/files.
+      if (![filePath, oldPath].every((candidate) => !candidate || isInsideWorktree(worktreePath, candidate))) {
+        return json(403, { error: 'Forbidden' });
+      }
+
+      const { head, working } = await getContent(
+        worktreePath, filePath, searchParams.get('ref') || 'HEAD', oldPath ? { oldPath } : undefined,
+      );
       if (head === null && working === null) return json(404, { error: 'Not found' });
 
       return json(200, { path: filePath, head, working });

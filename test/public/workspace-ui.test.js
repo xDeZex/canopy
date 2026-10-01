@@ -468,7 +468,7 @@ test('renamed files show full old → new labels and titles in both rail views a
     row.click();
     assert.equal(f.workspace.getState().activeFile, 'new dir/new -> name.js');
   }
-  assert.equal(f.requests[2].url, '/api/file-content?worktree=%2Frepo&file=new%20dir%2Fnew%20-%3E%20name.js');
+  assert.equal(f.requests[2].url, '/api/file-content?worktree=%2Frepo&file=new%20dir%2Fnew%20-%3E%20name.js&oldFile=old%20dir%2Fold%20-%3E%20name.js');
   assert.equal(treeRows[1].textContent, 'ordinary.js');
   assert.equal(treeRows[1].title, 'new dir/ordinary.js');
   assert.equal(changedRows[1].querySelector('.changed-files__path').textContent, 'new dir/ordinary.js');

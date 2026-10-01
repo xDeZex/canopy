@@ -317,3 +317,17 @@ test('dependency errors propagate to the caller', async () => {
     /git failed/
   );
 });
+
+test('/api/file-content passes the old path of a renamed file to getContent', async () => {
+  const calls = [];
+  const res = await run('/api/file-content?worktree=/main&file=new.js&oldFile=old.js', 'GET', {
+    getContent: async (...args) => { calls.push(args); return { head: 'h', working: 'w' }; },
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls, [['/main', 'new.js', 'HEAD', { oldPath: 'old.js' }]]);
+});
+
+test('/api/file-content forbids an old path escaping the worktree', async () => {
+  const res = await run('/api/file-content?worktree=/main&file=new.js&oldFile=../etc/passwd');
+  assert.equal(res.status, 403);
+});

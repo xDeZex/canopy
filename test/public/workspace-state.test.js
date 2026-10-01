@@ -786,3 +786,20 @@ test('deselecting the file refetches unmarked commits', async () => {
   assert.equal(f.requests.length, before + 1);
   assert.equal(f.requests.at(-1).url, '/api/commits?worktree=%2Fa');
 });
+
+test('a renamed file loads its content with the old path, and a pairing found later reloads it', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.requests[0], [{ type: 'file', path: 'new.js', name: 'new.js', status: 'renamed', oldPath: 'old.js' }]);
+  f.store.selectFile('new.js');
+  assert.equal(f.requests[2].url, '/api/file-content?worktree=%2Fa&file=new.js&oldFile=old.js');
+
+  const g = fixture('diff');
+  g.store.updateWorktrees(list(['/a']));
+  await g.reply(g.requests[0], [{ type: 'file', path: 'moved.js', name: 'moved.js', status: 'added' }]);
+  g.store.selectFile('moved.js');
+  assert.equal(g.requests[2].url, '/api/file-content?worktree=%2Fa&file=moved.js');
+  g.store.remoteChange();
+  await g.reply(g.requests[3], [{ type: 'file', path: 'moved.js', name: 'moved.js', status: 'renamed', oldPath: 'gone.js' }]);
+  assert.ok(g.requests.some((request) => request.url === '/api/file-content?worktree=%2Fa&file=moved.js&oldFile=gone.js'));
+});

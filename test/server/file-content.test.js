@@ -179,3 +179,14 @@ test('readFileContent rethrows errors that are not a missing side', async () => 
     { code: 'EACCES' },
   );
 });
+
+test('readFileContent reads the ref side from the old path of a renamed file', async () => {
+  const shown = [];
+  const result = await readFileContent('/wt', 'new.txt', 'HEAD', {
+    oldPath: 'old.txt',
+    runGit: async (args) => { shown.push(args.at(-1)); return 'same\n'; },
+    readWorkingFile: async (absolutePath) => (absolutePath === '/wt/new.txt' ? 'same\n' : 'wrong'),
+  });
+  assert.deepEqual(shown, ['HEAD:old.txt']);
+  assert.deepEqual(result, { head: 'same\n', working: 'same\n' });
+});
