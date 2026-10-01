@@ -1,7 +1,9 @@
 ## Workflow
 
 Use Conventional Commits for commits pushed to `main`.
+
 Before starting a task or exploration, create a dedicated Git worktree from origin/main and move the OpenCode session into it.
+You are allowed to install existing locked dependencies in worktrees.
 
 ## Coding standards
 
