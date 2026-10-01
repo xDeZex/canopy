@@ -464,6 +464,28 @@ body {
   border-radius: 4px;
 }
 
+.viewer__delete-worktree {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.viewer__delete-worktree:disabled {
+  color: var(--fg-dim);
+  cursor: not-allowed;
+}
+
+.viewer__deletion-status {
+  max-width: 260px;
+  white-space: normal;
+  color: var(--status-deleted, #e06c75);
+  font-size: 11px;
+}
+
 /* ---------- Commit picker (variant D shape, #5) ---------- */
 
 .commit-picker {

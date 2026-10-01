@@ -12,6 +12,16 @@ export function parseWorktreeList(output) {
 }
 
 function parseBlock(block) {
+  return parseFields(block.split('\n'));
+}
+
+// -z avoids quoting paths and preserves embedded newlines. Keep the raw local
+// ref too, so destructive callers can validate rather than guess its prefix.
+export function parseWorktreeListZ(output) {
+  return output.split('\0\0').filter(Boolean).map((block) => parseFields(block.split('\0'), true));
+}
+
+function parseFields(fields, includeBranchRef = false) {
   const worktree = {
     path: null,
     head: null,
@@ -24,7 +34,9 @@ function parseBlock(block) {
     prunableReason: null,
   };
 
-  for (const line of block.split('\n')) {
+  if (includeBranchRef) worktree.branchRef = null;
+
+  for (const line of fields) {
     if (!line) continue;
     const spaceIndex = line.indexOf(' ');
     const key = spaceIndex === -1 ? line : line.slice(0, spaceIndex);
@@ -38,6 +50,7 @@ function parseBlock(block) {
         worktree.head = value;
         break;
       case 'branch':
+        if (includeBranchRef) worktree.branchRef = value;
         worktree.branch = value.replace(/^refs\/heads\//, '');
         break;
       case 'detached':

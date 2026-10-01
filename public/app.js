@@ -118,6 +118,53 @@ export async function startApp({
     helpEl.hidden = !helpEl.hidden;
   }
 
+  let deletionBusy = false;
+  async function onDeleteWorktree(path) {
+    if (!path || deletionBusy) return;
+    deletionBusy = true;
+    ui.setDeletionState(true);
+    let message = '';
+    let mutationAttempted = false;
+    const url = `/api/worktree-deletion?worktree=${encodeURIComponent(path)}`;
+    async function fetchJson(url, options) {
+      const response = await request(url, options);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `request failed with status ${response.status}`);
+      return body;
+    }
+    try {
+      const preview = await fetchJson(url);
+      if (preview.reason) throw new Error(preview.reason);
+      if (preview.path !== path || !preview.confirmation) throw new Error('Invalid deletion preview; nothing was deleted');
+      const warning = [
+        `Delete worktree: ${path}`,
+        preview.branch ? `Also DELETE local branch: ${preview.branch}` : 'Detached worktree: no local branch to delete.',
+        `Uncommitted work: ${preview.hasUncommittedWork ? 'yes (staged, unstaged or untracked files)' : 'no'}`,
+        `Ignored files: ${preview.ignoredFileCount}`,
+        `Local-only commits: ${preview.localOnlyCommitCount}`,
+        'Commit check uses locally known remote-tracking refs only; no fetch.',
+        'This is irreversible: all worktree files (including ignored files), uncommitted work and local-only commits may be lost. Delete?',
+      ].join('\n\n');
+      if (!browserWindow.confirm(warning)) return;
+      mutationAttempted = true;
+      await fetchJson(url, { method: 'DELETE', headers: { 'X-Canopy-Confirmation': preview.confirmation } });
+    } catch (err) {
+      message = err.message;
+    } finally {
+      // Reconcile even on a partial failure or a lost response: removal and
+      // branch deletion are not a transaction and cannot honestly roll back.
+      if (mutationAttempted) {
+        try {
+          treeExpansion.pruneToKnownWorktrees(workspace.updateWorktrees(await fetchJson('/api/worktrees')));
+        } catch (err) {
+          message = `${message ? `${message}. ` : ''}Failed to refresh worktrees: ${err.message}`;
+        }
+      }
+      deletionBusy = false;
+      ui.setDeletionState(false, message);
+    }
+  }
+
   ui = createWorkspaceUI({
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
     viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime, formatEditTime, now,
@@ -125,6 +172,7 @@ export async function startApp({
     onAutoScrollChanged, onNextChange: () => viewer.nextChange(), onPrevChange: () => viewer.prevChange(),
     getWrap, onWrapChanged,
     onToggleHelp: toggleHelp,
+    onDeleteWorktree,
     getDiffRenderMode: () => diffRenderMode,
     document: doc, window: browserWindow,
   });

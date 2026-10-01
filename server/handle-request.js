@@ -17,7 +17,7 @@ const SSE_HEADERS = {
 // description, with no `req`/`res`, server or port involved. The caller
 // (app.js) translates between Node's HTTP objects and these descriptions.
 //
-// Request: `{ method, pathname, searchParams }`.
+// Request: `{ method, pathname, searchParams, headers, protocol }`.
 // Response: `{ status, headers, body }` where `body` is a string/Buffer (or
 // undefined for HEAD), or `{ status, headers, stream }` for server-sent
 // events, where `stream.subscribe(write)` starts pushing frames through
@@ -37,8 +37,9 @@ export function createRequestHandler({
   subscribeToActivity,
   readStatic,
   publicDir,
+  worktreeDeletion,
 }) {
-  return async function handleRequest({ method, pathname, searchParams }) {
+  return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:' }) {
     const isReadable = method === 'GET' || method === 'HEAD';
     const includeBody = method !== 'HEAD';
     const json = (status, body) => jsonResponse(status, body, { includeBody });
@@ -56,6 +57,35 @@ export function createRequestHandler({
       }
       return { worktreePath };
     };
+
+    if (pathname === '/api/worktree-deletion' && (isReadable || method === 'DELETE')) {
+      const respond = (status, body) => {
+        const response = json(status, body);
+        response.headers['Cache-Control'] = 'no-store';
+        return response;
+      };
+      const { worktreePath, error } = await resolveWorktree();
+      if (error) return error;
+      if (method === 'DELETE') {
+        // No CORS opt-in: cross-site HTML forms cannot set this header. Fetch
+        // metadata also excludes sibling origins, and Origin must match Host.
+        const site = headers['sec-fetch-site'];
+        if (!headers['x-canopy-confirmation'] || typeof headers['x-canopy-confirmation'] !== 'string' ||
+            !headers.host || (site && site !== 'same-origin') ||
+            (headers.origin && headers.origin !== `${protocol}//${headers.host}`)) {
+          return respond(403, { error: 'Same-origin request with confirmation header required' });
+        }
+      }
+      try {
+        const result = method === 'DELETE'
+          ? await worktreeDeletion.remove(worktreePath, headers['x-canopy-confirmation'])
+          : await worktreeDeletion.preview(worktreePath);
+        return respond(200, result);
+      } catch (err) {
+        return respond(err.status ?? 500, { error: err.message, removed: err.removed === undefined ? false : err.removed,
+          branchDeleted: err.branchDeleted ?? false, branch: err.branch ?? null });
+      }
+    }
 
     if (!isReadable) return jsonResponse(404, { error: 'Not found' });
 

@@ -11,6 +11,7 @@ export function createWorkspaceUI({
   DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged, getDiffRenderMode,
   onAutoScrollChanged, onNextChange, onPrevChange, onToggleHelp,
   getWrap, onWrapChanged,
+  onDeleteWorktree,
   document, window,
 }) {
   let toolbarPath = null;
@@ -18,6 +19,8 @@ export function createWorkspaceUI({
   let toolbarCommitsError = null;
   let toolbarLockedSha = null;
   let editTimes = {};
+  let deletionBusy = false;
+  let deletionMessage = '';
 
   function updateCommitTimes(currentTime = now()) {
     const currentDate = new Date(currentTime);
@@ -381,6 +384,15 @@ export function createWorkspaceUI({
     return button;
   }
 
+  function renderDeleteButton() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'viewer__delete-worktree';
+    button.textContent = 'Delete worktree';
+    button.addEventListener('click', () => onDeleteWorktree?.(workspace.getState().activePath));
+    return button;
+  }
+
   function createToolbar() {
     const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
@@ -398,7 +410,10 @@ export function createWorkspaceUI({
     toggle.append(renderToggleButton('diff', 'Diff'), renderToggleButton('file', 'File'));
     const right = document.createElement('div');
     right.className = 'viewer__toolbar-right';
-    right.append(renderChangeNav(), renderDiffModeToggle(), renderWrapButton(), renderHelpButton());
+    const deletionStatus = document.createElement('span');
+    deletionStatus.className = 'viewer__deletion-status';
+    deletionStatus.setAttribute('role', 'status');
+    right.append(renderChangeNav(), renderDiffModeToggle(), renderWrapButton(), renderDeleteButton(), deletionStatus, renderHelpButton());
     toolbar.append(left, toggle, right);
     return toolbar;
   }
@@ -406,7 +421,7 @@ export function createWorkspaceUI({
   // Keep the controls and open menu mounted across file and commit updates.
   // Only a worktree change replaces them.
   function renderToolbar() {
-    const { activePath, activeFile, commits, commitsError } = workspace.getState();
+    const { activePath, activeFile, commits, commitsError, worktrees } = workspace.getState();
     toolbarEl.hidden = !activePath;
     if (!activePath) {
       toolbarEl.replaceChildren();
@@ -445,6 +460,14 @@ export function createWorkspaceUI({
     const wrapButton = toolbarEl.querySelector('.viewer__wrap');
     wrapButton.classList.toggle('is-active', getWrap());
     wrapButton.setAttribute('aria-pressed', String(getWrap()));
+    const deleteButton = toolbarEl.querySelector('.viewer__delete-worktree');
+    const reason = worktrees.find((worktree) => worktree.path === activePath)?.deletionReason;
+    deleteButton.disabled = deletionBusy || Boolean(reason);
+    deleteButton.title = reason || 'Delete this worktree and its local branch';
+    deleteButton.textContent = deletionBusy ? 'Deleting…' : 'Delete worktree';
+    const deletionStatus = toolbarEl.querySelector('.viewer__deletion-status');
+    deletionStatus.textContent = deletionMessage;
+    deletionStatus.hidden = !deletionMessage;
   }
 
   function renderError(_err) {
@@ -462,5 +485,11 @@ export function createWorkspaceUI({
     toolbarEl.querySelector('.commit-picker__menu')?.classList.remove('is-open');
   }
 
-  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus, setEditTimes, updateEditTimes };
+  function setDeletionState(busy, message = '') {
+    deletionBusy = busy;
+    deletionMessage = message;
+    renderToolbar();
+  }
+
+  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus, setEditTimes, updateEditTimes, setDeletionState };
 }

@@ -26,6 +26,35 @@ function request(method, url) {
 
 const run = (url, method = 'GET', overrides) => makeHandler(overrides)(request(method, url));
 
+test('deletion preview and confirmed DELETE validate exact membership, origin and custom confirmation header', async () => {
+  const calls = [];
+  const handler = makeHandler({ worktreeDeletion: {
+    preview: async (path) => ({ path, confirmation: 'signed-snapshot' }),
+    remove: async (path, confirmation) => { calls.push({ path, confirmation }); return { removed: true }; },
+  } });
+  const url = '/api/worktree-deletion?worktree=/linked';
+  const preview = await handler(request('GET', url));
+  assert.deepEqual(JSON.parse(preview.body), { path: '/linked', confirmation: 'signed-snapshot' });
+  assert.match(preview.headers['Cache-Control'], /no-store/);
+  for (const [target, headers, status] of [
+    ['/api/worktree-deletion', { host: 'localhost' }, 400],
+    ['/api/worktree-deletion?worktree=/arbitrary', { host: 'localhost', 'x-canopy-confirmation': 'token' }, 404],
+    [url, { host: 'localhost' }, 403],
+    [url, { host: 'localhost', origin: 'https://evil.example', 'x-canopy-confirmation': 'token' }, 403],
+    [url, { host: 'localhost', 'sec-fetch-site': 'cross-site', 'x-canopy-confirmation': 'token' }, 403],
+    [url, { host: 'localhost', 'sec-fetch-site': 'same-site', 'x-canopy-confirmation': 'token' }, 403],
+  ]) {
+    assert.equal((await handler({ ...request('DELETE', target), headers })).status, status);
+  }
+  assert.deepEqual(calls, []);
+  const result = await handler({ ...request('DELETE', url), headers: {
+    host: 'localhost:3000', origin: 'http://localhost:3000', 'sec-fetch-site': 'same-origin',
+    'x-canopy-confirmation': 'signed-snapshot',
+  } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{ path: '/linked', confirmation: 'signed-snapshot' }]);
+});
+
 test('/api/worktrees responds with the listed worktrees as JSON', async () => {
   const res = await run('/api/worktrees');
   assert.equal(res.status, 200);
