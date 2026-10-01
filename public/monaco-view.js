@@ -337,6 +337,7 @@ export async function mountDiffEditor(container, { original, modified, language,
     currentChange = changes[index];
     markChange(changes[index], target);
     modifiedEditor.revealLineInCenter(target);
+    placeCursor(modifiedEditor, target);
   }
 
   let pendingAutoScroll = autoScroll;
@@ -361,8 +362,8 @@ export async function mountDiffEditor(container, { original, modified, language,
     },
     nextChange() { navigate(1); },
     prevChange() { navigate(-1); },
-    scrollUp() { scroll(editor.getModifiedEditor(), -1); },
-    scrollDown() { scroll(editor.getModifiedEditor(), 1); },
+    scrollUp() { scrollWithCursor(editor.getModifiedEditor(), -1); },
+    scrollDown() { scrollWithCursor(editor.getModifiedEditor(), 1); },
     dispose() {
       disposed = true;
       diffUpdated.dispose();
@@ -374,9 +375,29 @@ export async function mountDiffEditor(container, { original, modified, language,
   };
 }
 
-function scroll(editor, direction) {
-  const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-  editor.setScrollTop(editor.getScrollTop() + direction * 10 * lineHeight);
+const SCROLL_LINES = 10;
+
+export function clampLine(lineNumber, lineCount) {
+  return Math.min(lineCount, Math.max(1, lineNumber));
+}
+
+// Puts the cursor at the start of a line. Monaco only draws the cursor in a
+// focused editor, so this focuses it too.
+function placeCursor(editor, lineNumber) {
+  editor.setPosition({ lineNumber, column: 1 });
+  editor.focus();
+}
+
+// Moves the cursor by ten lines (clamped to the file) and scrolls the viewport
+// by the vertical distance the cursor travelled, so the cursor keeps its place
+// on screen. Measuring in pixels rather than lines keeps them in sync over
+// soft-wrapped lines and at the ends of the file.
+function scrollWithCursor(editor, direction) {
+  const from = editor.getPosition().lineNumber;
+  const to = clampLine(from + direction * SCROLL_LINES, editor.getModel().getLineCount());
+  const distance = editor.getTopForLineNumber(to, true) - editor.getTopForLineNumber(from, true);
+  editor.setScrollTop(editor.getScrollTop() + distance);
+  placeCursor(editor, to);
 }
 
 // Mounts a plain read-only full-file view (File mode). Returns a
@@ -401,8 +422,8 @@ export async function mountEditor(container, { content, language, wrap = false, 
     updateThreads: threadZones.updateThreads,
     addComment: threadZones.addComment,
     revealThread: threadZones.revealThread,
-    scrollUp() { scroll(editor, -1); },
-    scrollDown() { scroll(editor, 1); },
+    scrollUp() { scrollWithCursor(editor, -1); },
+    scrollDown() { scrollWithCursor(editor, 1); },
     dispose() {
       threadZones.dispose();
       editor.dispose();

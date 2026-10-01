@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { DIFF_RENDER_MODES, mountDiffEditor, mountEditor } from '../../public/monaco-view.js';
+import { clampLine, DIFF_RENDER_MODES, mountDiffEditor, mountEditor } from '../../public/monaco-view.js';
 
 const originalWindow = globalThis.window;
 const originalMonaco = globalThis.monaco;
@@ -14,6 +14,8 @@ function stubDiffEditor(initialChanges) {
   let changes = initialChanges;
   const listeners = new Set();
   const revealed = [];
+  const cursors = [];
+  const focused = [];
   const panes = {};
   for (const side of ['original', 'modified']) {
     const decorations = new Map();
@@ -22,6 +24,8 @@ function stubDiffEditor(initialChanges) {
       decorations,
       getModel: () => ({ getLineCount: () => 20 }),
       revealLineInCenter: (line) => revealed.push(line),
+      setPosition: (position) => cursors.push(position),
+      focus: () => focused.push(side),
       deltaDecorations(oldIds, newDecorations) {
         for (const id of oldIds) decorations.delete(id);
         return newDecorations.map((decoration) => {
@@ -52,6 +56,8 @@ function stubDiffEditor(initialChanges) {
   return {
     panes,
     revealed,
+    cursors,
+    focused,
     listeners,
     setChanges(value) { changes = value; },
     updateDiff(value) {
@@ -163,6 +169,33 @@ test('diff recomputation clears stale markers without waiting for another jump',
   updateDiff([]);
   assert.deepEqual(markedLines(panes.original), []);
   assert.deepEqual(markedLines(panes.modified), []);
+  view.dispose();
+});
+
+test('jumping to a change puts the cursor at the start of that change line, in both directions', async () => {
+  const { cursors, focused } = stubDiffEditor([
+    { originalStartLineNumber: 1, originalEndLineNumber: 0, modifiedStartLineNumber: 2, modifiedEndLineNumber: 4 },
+    { originalStartLineNumber: 9, originalEndLineNumber: 9, modifiedStartLineNumber: 12, modifiedEndLineNumber: 12 },
+  ]);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new' });
+  view.nextChange();
+  view.nextChange();
+  view.prevChange();
+  assert.deepEqual(cursors, [
+    { lineNumber: 2, column: 1 },
+    { lineNumber: 12, column: 1 },
+    { lineNumber: 2, column: 1 },
+  ]);
+  assert.deepEqual(focused, ['modified', 'modified', 'modified'], 'Monaco only draws the cursor in a focused editor');
+  view.dispose();
+});
+
+test('auto-scroll to the first change on opening a diff also puts the cursor at the start of its line', async () => {
+  const { cursors, updateDiff } = stubDiffEditor(null);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new', autoScroll: true });
+  assert.deepEqual(cursors, []);
+  updateDiff([{ originalStartLineNumber: 1, originalEndLineNumber: 1, modifiedStartLineNumber: 7, modifiedEndLineNumber: 8 }]);
+  assert.deepEqual(cursors, [{ lineNumber: 7, column: 1 }]);
   view.dispose();
 });
 
@@ -504,6 +537,8 @@ test('selected conversation reveal wins delayed auto-scroll while hunk highlight
     panes.modified.getLayoutInfo = () => ({ height: 400, horizontalScrollbarHeight: 0 });
     panes.modified.render = () => {};
     panes.modified.getScrollTop = () => 100;
+    panes.modified.getPosition = () => ({ lineNumber: 2, column: 1 });
+    panes.modified.getTopForLineNumber = (line) => (line - 1) * 20;
     panes.modified.getOption = () => 20;
     panes.modified.setScrollTop = (position) => positions.push(position);
     globalThis.monaco.editor.EditorOption = { lineHeight: 1 };
@@ -541,6 +576,8 @@ test('diff controller navigates fresh hunks in both directions, wrapping at the 
             deltaDecorations: () => [],
             getModel: () => ({ getLineCount: () => 20 }),
             revealLineInCenter: (line) => revealed.push(line),
+            setPosition() {},
+            focus() {},
           }),
           dispose: () => disposed.push('editor'),
         };
@@ -590,73 +627,100 @@ test('File mode controller does not expose change navigation', async () => {
   view.dispose();
 });
 
-test('File mode scrolls ten configured line heights from the current viewport in either direction', async () => {
-  let scrollTop = 500;
-  let lineHeight = 23;
-  const positions = [];
+// A Monaco editor stub that records cursor moves, focus and scrolling, in
+// order. `top` gives a line's vertical pixel offset, so tests can model
+// soft-wrapped lines taking several rows.
+function stubCursorEditor({ lineCount, cursor, scrollTop = 0, top = (line) => (line - 1) * 20 }) {
+  const calls = [];
+  return {
+    calls,
+    editor: {
+      getScrollTop: () => scrollTop,
+      setScrollTop(position) { calls.push({ scrollTop: position }); scrollTop = position; },
+      getTopForLineNumber: top,
+      getModel: () => ({ getLineCount: () => lineCount }),
+      getPosition: () => cursor,
+      setPosition(position) { calls.push(position); cursor = position; },
+      focus() { calls.push('focus'); },
+    },
+    moveViewport(position) { scrollTop = position; },
+  };
+}
+
+function withMonacoEditor(editor) {
   globalThis.window = { monaco: true };
   globalThis.monaco = {
     editor: {
-      EditorOption: { lineHeight: 67 },
-      create: () => ({
-        getScrollTop: () => scrollTop,
-        getOption(option) {
-          assert.equal(option, 67);
-          return lineHeight;
-        },
-        setScrollTop(position) { positions.push(position); scrollTop = position; },
+      create: () => ({ ...editor, dispose() {} }),
+      createDiffEditor: () => ({
+        setModel() {},
+        onDidUpdateDiff: () => ({ dispose() {} }),
+        getModifiedEditor: () => editor,
         dispose() {},
       }),
+      createModel() { return { dispose() {} }; },
     },
   };
-  const view = await mountEditor({}, { content: 'plain', wrap: true });
-  view.scrollUp();
+}
+
+test('clampLine keeps a line number within the file', () => {
+  assert.equal(clampLine(-9, 85), 1);
+  assert.equal(clampLine(0, 85), 1);
+  assert.equal(clampLine(40, 85), 40);
+  assert.equal(clampLine(95, 85), 85);
+});
+
+test('File mode scrolling moves the cursor ten lines and the viewport by the same distance, from the current viewport', async () => {
+  const { editor, calls, moveViewport } = stubCursorEditor({ lineCount: 85, cursor: { lineNumber: 70, column: 5 }, scrollTop: 500 });
+  withMonacoEditor(editor);
+  const view = await mountEditor({}, { content: 'plain' });
   view.scrollDown();
-  view.scrollDown();
-  scrollTop = 1000; // Mouse scrolling can move the viewport between shortcuts.
-  lineHeight = 19; // Read Monaco's current configuration, not a cached pixel step.
+  moveViewport(1000); // Mouse scrolling can move the viewport between shortcuts.
   view.scrollUp();
-  assert.deepEqual(positions, [270, 500, 730, 810]);
+  assert.deepEqual(calls, [
+    { scrollTop: 700 }, { lineNumber: 80, column: 1 }, 'focus',
+    { scrollTop: 800 }, { lineNumber: 70, column: 1 }, 'focus',
+  ]);
   view.dispose();
 });
 
-test('all diff layouts scroll ten current line heights through the modified editor', async () => {
-  for (const mode of DIFF_RENDER_MODES) {
-    let scrollTop = 500;
-    let lineHeight = 23;
-    const positions = [];
-    globalThis.window = { monaco: true };
-    globalThis.monaco = {
-      editor: {
-        EditorOption: { lineHeight: 67 },
-        createDiffEditor() {
-          return {
-            setModel() {},
-            onDidUpdateDiff: () => ({ dispose() {} }),
-            getModifiedEditor: () => ({
-              getScrollTop: () => scrollTop,
-              getOption(option) {
-                assert.equal(option, 67);
-                return lineHeight;
-              },
-              setScrollTop(position) { positions.push(position); scrollTop = position; },
-            }),
-            dispose() {},
-          };
-        },
-        createModel() { return { dispose() {} }; },
-      },
-    };
-    const view = await mountDiffEditor({}, { original: 'old', modified: 'new', mode, wrap: true });
-    view.scrollUp();
-    view.scrollDown();
-    view.scrollDown();
-    scrollTop = 1000;
-    lineHeight = 19;
-    view.scrollUp();
-    assert.deepEqual(positions, [270, 500, 730, 810], mode);
-    view.dispose();
-  }
+test('scrolling over soft-wrapped lines moves the viewport by the rows the cursor crossed', async () => {
+  // Lines 72-75 each wrap onto three rows, so they are 60px tall instead of 20px.
+  const top = (line) => (line - 1) * 20 + 40 * Math.max(0, Math.min(line, 76) - 72);
+  const { editor, calls } = stubCursorEditor({ lineCount: 200, cursor: { lineNumber: 70, column: 1 }, scrollTop: 100, top });
+  withMonacoEditor(editor);
+  const view = await mountEditor({}, { content: 'plain', wrap: true });
+  view.scrollDown();
+  assert.deepEqual(calls, [{ scrollTop: 100 + 200 + 160 }, { lineNumber: 80, column: 1 }, 'focus']);
+  view.dispose();
+});
+
+test('scrolling at the bottom of the file clamps the cursor and moves the viewport only as far', async () => {
+  const { editor, calls } = stubCursorEditor({ lineCount: 85, cursor: { lineNumber: 80, column: 1 }, scrollTop: 300 });
+  withMonacoEditor(editor);
+  const view = await mountEditor({}, { content: 'plain' });
+  view.scrollDown();
+  view.scrollDown();
+  assert.deepEqual(calls, [
+    { scrollTop: 400 }, { lineNumber: 85, column: 1 }, 'focus',
+    { scrollTop: 400 }, { lineNumber: 85, column: 1 }, 'focus',
+  ]);
+  view.dispose();
+});
+
+test('diff scrolling moves the modified-side cursor and viewport together', async () => {
+  const { editor, calls } = stubCursorEditor({ lineCount: 200, cursor: { lineNumber: 70, column: 3 } });
+  withMonacoEditor(editor);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new' });
+  view.scrollDown();
+  view.scrollUp();
+  view.scrollUp();
+  assert.deepEqual(calls, [
+    { scrollTop: 200 }, { lineNumber: 80, column: 1 }, 'focus',
+    { scrollTop: 0 }, { lineNumber: 70, column: 1 }, 'focus',
+    { scrollTop: -200 }, { lineNumber: 60, column: 1 }, 'focus',
+  ]);
+  view.dispose();
 });
 
 test('diff viewer uses Monaco diff word wrap when requested', async () => {
