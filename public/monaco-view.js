@@ -74,33 +74,67 @@ export async function mountDiffEditor(container, { original, modified, language,
   // Start at the first/last hunk and keep navigation local to this mount;
   // each call reads fresh hunks so a recomputed diff cannot leave a stale index.
   let currentLine = null;
+  let currentChange = null;
+  let originalMarkers = [];
+  let modifiedMarkers = [];
+  function clearMarkers() {
+    originalMarkers = editor.getOriginalEditor().deltaDecorations(originalMarkers, []);
+    modifiedMarkers = editor.getModifiedEditor().deltaDecorations(modifiedMarkers, []);
+  }
+  function markChange(change, target) {
+    const decoration = (start, end) => [{
+      range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: 1 },
+      options: { isWholeLine: true, linesDecorationsClassName: 'current-hunk-marker' },
+    }];
+    originalMarkers = editor.getOriginalEditor().deltaDecorations(originalMarkers,
+      change.originalEndLineNumber > 0
+        ? decoration(change.originalStartLineNumber, change.originalEndLineNumber) : []);
+    modifiedMarkers = editor.getModifiedEditor().deltaDecorations(modifiedMarkers,
+      decoration(target, change.modifiedEndLineNumber > 0 ? change.modifiedEndLineNumber : target));
+  }
   function navigate(direction) {
     const changes = editor.getLineChanges();
     if (!changes?.length) {
       currentLine = null;
+      currentChange = null;
+      clearMarkers();
       return;
     }
 
     const modifiedEditor = editor.getModifiedEditor();
     const lastLine = modifiedEditor.getModel().getLineCount();
     const lines = changes.map((change) => Math.min(lastLine, Math.max(1, change.modifiedStartLineNumber)));
+    const currentIndex = currentChange === null ? -1 : changes.findIndex((change) =>
+      change.originalStartLineNumber === currentChange.originalStartLineNumber
+      && change.originalEndLineNumber === currentChange.originalEndLineNumber
+      && change.modifiedStartLineNumber === currentChange.modifiedStartLineNumber
+      && change.modifiedEndLineNumber === currentChange.modifiedEndLineNumber);
     let candidate = -1;
-    if (currentLine !== null) {
+    if (currentIndex !== -1) {
+      candidate = (currentIndex + direction + changes.length) % changes.length;
+    } else if (currentLine !== null) {
       candidate = direction === 1
         ? lines.findIndex((line) => line > currentLine)
         : lines.findLastIndex((line) => line < currentLine);
     }
-    const target = lines[candidate === -1 ? (direction === 1 ? 0 : lines.length - 1) : candidate];
+    const index = candidate === -1 ? (direction === 1 ? 0 : lines.length - 1) : candidate;
+    const target = lines[index];
     currentLine = target;
+    currentChange = changes[index];
+    markChange(changes[index], target);
     modifiedEditor.revealLineInCenter(target);
   }
 
-  if (autoScroll) {
-    const diffUpdated = editor.onDidUpdateDiff(() => {
-      diffUpdated.dispose();
+  let pendingAutoScroll = autoScroll;
+  const diffUpdated = editor.onDidUpdateDiff(() => {
+    clearMarkers();
+    currentLine = null;
+    currentChange = null;
+    if (pendingAutoScroll) {
+      pendingAutoScroll = false;
       navigate(1);
-    });
-  }
+    }
+  });
 
   return {
     nextChange() { navigate(1); },
@@ -108,6 +142,7 @@ export async function mountDiffEditor(container, { original, modified, language,
     scrollUp() { scroll(editor.getModifiedEditor(), -1); },
     scrollDown() { scroll(editor.getModifiedEditor(), 1); },
     dispose() {
+      diffUpdated.dispose();
       editor.dispose();
       originalModel.dispose();
       modifiedModel.dispose();

@@ -598,6 +598,10 @@ body {
 
 /* ---------- Diff hunk navigation (#24) ---------- */
 
+.monaco-editor .current-hunk-marker {
+  border-left: 4px solid var(--accent);
+}
+
 .change-nav {
   display: flex;
   align-items: center;

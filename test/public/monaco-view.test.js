@@ -10,6 +10,201 @@ after(() => {
   globalThis.monaco = originalMonaco;
 });
 
+function stubDiffEditor(initialChanges) {
+  let changes = initialChanges;
+  const listeners = new Set();
+  const revealed = [];
+  const panes = {};
+  for (const side of ['original', 'modified']) {
+    const decorations = new Map();
+    let nextId = 0;
+    panes[side] = {
+      decorations,
+      getModel: () => ({ getLineCount: () => 20 }),
+      revealLineInCenter: (line) => revealed.push(line),
+      deltaDecorations(oldIds, newDecorations) {
+        for (const id of oldIds) decorations.delete(id);
+        return newDecorations.map((decoration) => {
+          const id = String(++nextId);
+          decorations.set(id, decoration);
+          return id;
+        });
+      },
+    };
+  }
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    editor: {
+      createDiffEditor: () => ({
+        setModel() {},
+        getLineChanges: () => changes,
+        getOriginalEditor: () => panes.original,
+        getModifiedEditor: () => panes.modified,
+        onDidUpdateDiff(listener) {
+          listeners.add(listener);
+          return { dispose: () => listeners.delete(listener) };
+        },
+        dispose() {},
+      }),
+      createModel: () => ({ dispose() {} }),
+    },
+  };
+  return {
+    panes,
+    revealed,
+    listeners,
+    setChanges(value) { changes = value; },
+    updateDiff(value) {
+      changes = value;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
+
+function markedLines(pane) {
+  return [...pane.decorations.values()].map(({ range, options }) => {
+    assert.equal(options.linesDecorationsClassName, 'current-hunk-marker');
+    assert.equal(options.isWholeLine, true);
+    return [range.startLineNumber, range.endLineNumber];
+  });
+}
+
+test('jumped-to hunk has a gutter marker spanning its lines, moving and wrapping in every diff mode', async () => {
+  for (const mode of ['inline', 'side-by-side', 'collapsed']) {
+    const { panes, revealed } = stubDiffEditor([
+      { originalStartLineNumber: 1, originalEndLineNumber: 0, modifiedStartLineNumber: 2, modifiedEndLineNumber: 4 },
+      { originalStartLineNumber: 8, originalEndLineNumber: 9, modifiedStartLineNumber: 10, modifiedEndLineNumber: 12 },
+    ]);
+    const view = await mountDiffEditor({}, { original: 'old', modified: 'new', mode });
+    assert.deepEqual(markedLines(panes.modified), []);
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.modified), [[2, 4]]);
+    assert.deepEqual(markedLines(panes.original), []);
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.modified), [[10, 12]]);
+    assert.deepEqual(markedLines(panes.original), [[8, 9]]);
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.modified), [[2, 4]]);
+    assert.deepEqual(markedLines(panes.original), []);
+    view.prevChange();
+    assert.deepEqual(markedLines(panes.modified), [[10, 12]]);
+    assert.deepEqual(revealed, [2, 10, 2, 10]);
+    view.dispose();
+  }
+});
+
+test('deletion-only hunks mark deleted original lines and a visible modified anchor at file boundaries', async () => {
+  for (const mode of ['inline', 'side-by-side', 'collapsed']) {
+    const { panes, revealed } = stubDiffEditor([
+      { originalStartLineNumber: 1, originalEndLineNumber: 3, modifiedStartLineNumber: 0, modifiedEndLineNumber: 0 },
+      { originalStartLineNumber: 9, originalEndLineNumber: 11, modifiedStartLineNumber: 5, modifiedEndLineNumber: 0 },
+      { originalStartLineNumber: 24, originalEndLineNumber: 27, modifiedStartLineNumber: 20, modifiedEndLineNumber: 0 },
+    ]);
+    const view = await mountDiffEditor({}, { original: 'old', modified: 'new', mode });
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.original), [[1, 3]]);
+    assert.deepEqual(markedLines(panes.modified), [[1, 1]]);
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.original), [[9, 11]]);
+    assert.deepEqual(markedLines(panes.modified), [[5, 5]]);
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.original), [[24, 27]]);
+    assert.deepEqual(markedLines(panes.modified), [[20, 20]]);
+    assert.deepEqual(revealed, [1, 5, 20]);
+    view.dispose();
+  }
+  const { panes } = stubDiffEditor([
+    { originalStartLineNumber: 1, originalEndLineNumber: 20, modifiedStartLineNumber: 0, modifiedEndLineNumber: 0 },
+  ]);
+  panes.modified.getModel = () => ({ getLineCount: () => 1 }); // Empty Monaco models still have one line.
+  const view = await mountDiffEditor({}, { original: 'deleted file', modified: '' });
+  view.prevChange();
+  assert.deepEqual(markedLines(panes.original), [[1, 20]]);
+  assert.deepEqual(markedLines(panes.modified), [[1, 1]]);
+  view.dispose();
+});
+
+test('navigating with no computed hunks clears both markers and resets the next jump', async () => {
+  const { panes, setChanges, revealed } = stubDiffEditor([
+    { originalStartLineNumber: 8, originalEndLineNumber: 9, modifiedStartLineNumber: 10, modifiedEndLineNumber: 12 },
+  ]);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new' });
+  for (const empty of [[], null]) {
+    view.nextChange();
+    assert.deepEqual(markedLines(panes.original), [[8, 9]]);
+    setChanges(empty);
+    view.prevChange();
+    assert.deepEqual(markedLines(panes.original), []);
+    assert.deepEqual(markedLines(panes.modified), []);
+    setChanges([
+      { originalStartLineNumber: 8, originalEndLineNumber: 9, modifiedStartLineNumber: 10, modifiedEndLineNumber: 12 },
+      { originalStartLineNumber: 16, originalEndLineNumber: 17, modifiedStartLineNumber: 18, modifiedEndLineNumber: 19 },
+    ]);
+  }
+  view.nextChange();
+  assert.deepEqual(revealed, [10, 10, 10]);
+  view.dispose();
+});
+
+test('diff recomputation clears stale markers without waiting for another jump', async () => {
+  const { panes, updateDiff, revealed } = stubDiffEditor([
+    { originalStartLineNumber: 8, originalEndLineNumber: 9, modifiedStartLineNumber: 10, modifiedEndLineNumber: 12 },
+  ]);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new' });
+  view.nextChange();
+  updateDiff([
+    { originalStartLineNumber: 14, originalEndLineNumber: 16, modifiedStartLineNumber: 15, modifiedEndLineNumber: 18 },
+  ]);
+  assert.deepEqual(markedLines(panes.original), []);
+  assert.deepEqual(markedLines(panes.modified), []);
+  assert.deepEqual(revealed, [10], 'recomputation does not jump automatically');
+  view.nextChange();
+  assert.deepEqual(markedLines(panes.modified), [[15, 18]]);
+  updateDiff([]);
+  assert.deepEqual(markedLines(panes.original), []);
+  assert.deepEqual(markedLines(panes.modified), []);
+  view.dispose();
+});
+
+test('disposing a diff controller unsubscribes even before its pending auto-scroll jump', async () => {
+  for (const autoScroll of [false, true]) {
+    for (const computed of [false, true]) {
+      const { listeners, revealed, updateDiff } = stubDiffEditor(null);
+      const view = await mountDiffEditor({}, { original: 'old', modified: 'new', autoScroll });
+      const changes = [{ originalStartLineNumber: 2, originalEndLineNumber: 3, modifiedStartLineNumber: 2, modifiedEndLineNumber: 4 }];
+      if (computed) updateDiff(changes);
+      assert.equal(listeners.size, 1);
+      view.dispose();
+      assert.equal(listeners.size, 0);
+      updateDiff(changes);
+      assert.deepEqual(revealed, autoScroll && computed ? [2] : []);
+    }
+  }
+});
+
+test('hunks sharing a modified-side anchor remain distinct navigation targets', async () => {
+  const changes = [
+    { originalStartLineNumber: 1, originalEndLineNumber: 2, modifiedStartLineNumber: 0, modifiedEndLineNumber: 0 },
+    { originalStartLineNumber: 3, originalEndLineNumber: 4, modifiedStartLineNumber: 1, modifiedEndLineNumber: 2 },
+  ];
+  const { panes, revealed, setChanges } = stubDiffEditor(changes);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new' });
+  view.nextChange();
+  assert.deepEqual(markedLines(panes.original), [[1, 2]]);
+  setChanges(changes.map((change) => ({ ...change }))); // Monaco can return fresh change objects.
+  view.nextChange();
+  assert.deepEqual(markedLines(panes.original), [[3, 4]]);
+  assert.deepEqual(markedLines(panes.modified), [[1, 2]]);
+  view.nextChange();
+  assert.deepEqual(markedLines(panes.original), [[1, 2]]);
+  view.prevChange();
+  assert.deepEqual(markedLines(panes.original), [[3, 4]]);
+  view.prevChange();
+  assert.deepEqual(markedLines(panes.original), [[1, 2]]);
+  assert.deepEqual(revealed, [1, 1, 1, 1, 1]);
+  view.dispose();
+});
+
 test('diff controller navigates fresh hunks in both directions, wrapping at the ends', async () => {
   const revealed = [];
   const disposed = [];
@@ -22,7 +217,9 @@ test('diff controller navigates fresh hunks in both directions, wrapping at the 
           setModel() {},
           getLineChanges: () => changes,
           onDidUpdateDiff: () => ({ dispose() {} }),
+          getOriginalEditor: () => ({ deltaDecorations: () => [] }),
           getModifiedEditor: () => ({
+            deltaDecorations: () => [],
             getModel: () => ({ getLineCount: () => 20 }),
             revealLineInCenter: (line) => revealed.push(line),
           }),
@@ -116,6 +313,7 @@ test('all diff layouts scroll ten current line heights through the modified edit
         createDiffEditor() {
           return {
             setModel() {},
+            onDidUpdateDiff: () => ({ dispose() {} }),
             getModifiedEditor: () => ({
               getScrollTop: () => scrollTop,
               getOption(option) {
@@ -149,7 +347,7 @@ test('diff viewer uses Monaco diff word wrap when requested', async () => {
     editor: {
       createDiffEditor(_container, settings) {
         options = settings;
-        return { setModel() {}, dispose() {} };
+        return { setModel() {}, onDidUpdateDiff: () => ({ dispose() {} }), dispose() {} };
       },
       createModel() { return { dispose() {} }; },
     },
@@ -175,38 +373,19 @@ test('file viewer uses Monaco word wrap when requested', async () => {
   view.dispose();
 });
 
-test('auto-scroll reveals the first change once the diff is computed, and only once', async () => {
-  const revealed = [];
-  let diffUpdated;
-  let subscriptionDisposed = false;
-  globalThis.window = { monaco: true };
-  globalThis.monaco = {
-    editor: {
-      createDiffEditor() {
-        return {
-          setModel() {},
-          getLineChanges: () => [{ modifiedStartLineNumber: 7 }, { modifiedStartLineNumber: 12 }],
-          onDidUpdateDiff(listener) {
-            diffUpdated = listener;
-            return { dispose: () => { subscriptionDisposed = true; } };
-          },
-          getModifiedEditor: () => ({
-            getModel: () => ({ getLineCount: () => 20 }),
-            revealLineInCenter: (line) => revealed.push(line),
-          }),
-          dispose() {},
-        };
-      },
-      createModel() { return { dispose() {} }; },
-    },
-  };
-
-  await mountDiffEditor({}, { original: 'old', modified: 'new' });
-  assert.equal(diffUpdated, undefined, 'no subscription unless auto-scroll is on');
-
-  await mountDiffEditor({}, { original: 'old', modified: 'new', autoScroll: true });
+test('auto-scroll reveals and marks the first change once the diff is computed, and only once', async () => {
+  const changes = [
+    { originalStartLineNumber: 6, originalEndLineNumber: 8, modifiedStartLineNumber: 7, modifiedEndLineNumber: 10 },
+    { originalStartLineNumber: 10, originalEndLineNumber: 11, modifiedStartLineNumber: 12, modifiedEndLineNumber: 13 },
+  ];
+  const { panes, revealed, updateDiff } = stubDiffEditor(null);
+  const view = await mountDiffEditor({}, { original: 'old', modified: 'new', autoScroll: true });
   assert.deepEqual(revealed, []);
-  diffUpdated();
+  updateDiff(changes);
+  assert.deepEqual(markedLines(panes.original), [[6, 8]]);
+  assert.deepEqual(markedLines(panes.modified), [[7, 10]]);
+  updateDiff(changes);
   assert.deepEqual(revealed, [7]);
-  assert.equal(subscriptionDisposed, true);
+  assert.deepEqual(markedLines(panes.modified), []);
+  view.dispose();
 });
