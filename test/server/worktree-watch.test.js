@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { worktreeListsEqual, pollWorktrees } from '../../server/worktree-watch.js';
+import { createFanOut } from '../../server/fan-out.js';
 
 test('two empty lists are equal', () => {
   assert.equal(worktreeListsEqual([], []), true);
@@ -58,6 +59,12 @@ async function settle() {
 function listSource(...lists) {
   let call = 0;
   return async () => lists[Math.min(call++, lists.length - 1)];
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((finish) => { resolve = finish; });
+  return { promise, resolve };
 }
 
 const main = { path: '/main', branch: 'main' };
@@ -159,4 +166,120 @@ test('close() stops further polling', async () => {
 
   assert.equal(scheduler.hasPending(), false);
   assert.equal(changes.length, 1);
+});
+
+test('reconnecting to a shared poll catches additions, removals, and HEAD changes immediately', async () => {
+  const scheduler = fakeScheduler();
+  const snapshots = [[main], [main, linked], [main], [{ ...main, head: 'new-head' }]];
+  let calls = 0;
+  let starts = 0;
+  let closes = 0;
+  const subscribe = createFanOut((onChange, options) => {
+    starts++;
+    const poll = pollWorktrees(async () => snapshots[calls++], onChange, { ...options, ...scheduler });
+    return { close() { closes++; poll.close(); } };
+  });
+  const keeper = [];
+  const leaveKeeper = subscribe({ onChange: (value) => keeper.push(value) });
+  await settle();
+  let reconnect = [];
+  let leaveReconnect = subscribe({ onChange: (value) => reconnect.push(value) });
+  assert.deepEqual(reconnect, [[main]]);
+
+  for (const expected of snapshots.slice(1)) {
+    leaveReconnect();
+    await scheduler.fire();
+    reconnect = [];
+    leaveReconnect = subscribe({ onChange: (value) => reconnect.push(value) });
+    assert.deepEqual(reconnect, [expected]);
+    assert.equal(calls, snapshots.indexOf(expected) + 1, 'reconnecting must not run another Git query');
+  }
+
+  assert.deepEqual(keeper, snapshots);
+  assert.equal(starts, 1);
+  leaveReconnect();
+  assert.equal(closes, 0);
+  assert.equal(scheduler.hasPending(), true);
+  leaveKeeper();
+  assert.equal(closes, 1);
+  assert.equal(scheduler.hasPending(), false);
+});
+
+test('subscriptions before and after a pending poll receive snapshots in order without duplicates', async () => {
+  const scheduler = fakeScheduler();
+  const initial = deferred();
+  const next = deferred();
+  let calls = 0;
+  const latest = [main, linked];
+  const getWorktrees = () => {
+    calls++;
+    if (calls === 1) return initial.promise;
+    if (calls === 2) return next.promise;
+    return Promise.resolve(latest);
+  };
+  const subscribe = createFanOut((onChange, options) => pollWorktrees(getWorktrees, onChange, { ...options, ...scheduler }));
+  const first = [];
+  const early = [];
+  const leaveFirst = subscribe({ onChange: (value) => first.push(value) });
+  const leaveEarly = subscribe({ onChange: (value) => early.push(value) });
+  assert.deepEqual(first, []);
+  assert.deepEqual(early, []);
+  assert.equal(calls, 1);
+  initial.resolve([main]);
+  await settle();
+  assert.deepEqual(first, [[main]]);
+  assert.deepEqual(early, [[main]]);
+
+  const pendingTick = scheduler.fire();
+  const during = [];
+  const leaveDuring = subscribe({ onChange: (value) => during.push(value) });
+  assert.deepEqual(during, [[main]]);
+  next.resolve(latest);
+  await pendingTick;
+  assert.deepEqual(during, [[main], latest]);
+  const after = [];
+  const leaveAfter = subscribe({ onChange: (value) => after.push(value) });
+  assert.deepEqual(after, [latest]);
+  await scheduler.fire();
+  assert.deepEqual(after, [latest]);
+  assert.deepEqual(during, [[main], latest]);
+  assert.equal(calls, 3);
+
+  leaveAfter();
+  leaveDuring();
+  leaveEarly();
+  leaveFirst();
+  assert.equal(scheduler.hasPending(), false);
+});
+
+test('closing the shared poll during a Git query prevents stale replay into a restarted poll', async () => {
+  const scheduler = fakeScheduler();
+  const oldQuery = deferred();
+  const newQuery = deferred();
+  let calls = 0;
+  const subscribe = createFanOut((onChange, options) => pollWorktrees(() => {
+    calls++;
+    return calls === 1 ? oldQuery.promise : newQuery.promise;
+  }, onChange, { ...options, ...scheduler }));
+  const old = [];
+  const leaveOld = subscribe({ onChange: (value) => old.push(value) });
+  leaveOld();
+  const current = [];
+  const leaveCurrent = subscribe({ onChange: (value) => current.push(value) });
+  oldQuery.resolve([main]);
+  await settle();
+  assert.deepEqual(old, []);
+  assert.deepEqual(current, []);
+  assert.equal(scheduler.hasPending(), false);
+
+  newQuery.resolve([linked]);
+  await settle();
+  const late = [];
+  const leaveLate = subscribe({ onChange: (value) => late.push(value) });
+  assert.deepEqual(current, [[linked]]);
+  assert.deepEqual(late, [[linked]]);
+  assert.equal(calls, 2);
+  leaveLate();
+  leaveCurrent();
+  assert.equal(scheduler.hasPending(), false);
 });
