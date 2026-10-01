@@ -1,0 +1,71 @@
+/* THROWAWAY #26. Intentionally isolated from the normal app stylesheet. */
+.prototype-comments-active #app { padding-bottom: 62px; }
+.prototype-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px 14px; background: #202b35; border-bottom: 1px solid #41617c; }
+.prototype-tools > strong { font-size: 10px; letter-spacing: 1px; color: #9dccff; }
+.prototype-hint { flex-basis: 100%; color: #b0bed0; font-size: 11px; }
+.prototype-comments-active button { font: inherit; }
+.prototype-tools button, .prototype-card button, .prototype-composer button { background: #293a49; color: #dfecfa; border: 1px solid #52687b; border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+.prototype-tools button:disabled, .prototype-card button:disabled { opacity: .4; cursor: default; }
+.prototype-picker { position: relative; }
+.prototype-picker__menu { position: absolute; top: 34px; left: 0; width: min(520px, 65vw); max-height: 360px; overflow: auto; padding: 5px; background: #252526; border: 1px solid #586578; box-shadow: 0 8px 30px #0009; z-index: 100; }
+.prototype-picker__menu[hidden] { display: none; }
+.prototype-picker__item { display: block; width: 100%; text-align: left; white-space: pre-wrap; margin-bottom: 4px; }
+.prototype-inspector { flex: 0 0 175px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, .75fr); gap: 5px 16px; padding: 8px 16px; overflow: auto; border-top: 1px solid #516477; background: #151c23; }
+.prototype-inspector__status { grid-column: 1 / -1; font-size: 11px; color: #a2c6e9; }
+.prototype-inspector pre { margin: 0; font: 11px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prototype-inspector summary { cursor: pointer; color: #91adc8; font-size: 11px; }
+.prototype-switcher { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 16px; border: 1px solid #a6c8fa; background: #d7e7ff; color: #142337; padding: 7px 12px; border-radius: 24px; box-shadow: 0 6px 30px #000b; z-index: 200; white-space: nowrap; font-weight: 600; font-size: 12px; }
+.prototype-switcher button { border: 0; background: #152c49; color: white; border-radius: 50%; width: 29px; height: 29px; cursor: pointer; }
+.prototype-zone { width: 100%; padding-right: 16px; font: 13px/1.5 -apple-system, 'Segoe UI', sans-serif; }
+/* Monaco appends its full-size .view-lines after .view-zones. Raise only our
+   zone nodes above that hit surface; leave editor widgets and code alone. */
+.monaco-editor .view-zones > .prototype-zone { z-index: 1; pointer-events: auto; }
+/* Undo .no-user-select .lines-content for native card/control selection. */
+.monaco-editor .prototype-zone, .monaco-editor .prototype-zone * { user-select: text; -webkit-user-select: text; }
+.prototype-zone__content { padding: 6px 0; width: 100%; }
+.prototype-card { white-space: normal; margin: 0 0 8px; background: #26323f; border: 1px solid #527494; border-radius: 6px; color: #d9e7f6; overflow-wrap: anywhere; }
+.prototype-card__meta { display: flex; justify-content: space-between; gap: 12px; color: #9fcbff; font-size: 11px; }
+.prototype-card__meta time { color: #9dacbd; font-size: 10px; }
+.prototype-card__message { margin: 12px 0; white-space: pre-wrap; line-height: 1.6; }
+.prototype-card__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.prototype-conversation { min-width: 0; }
+.prototype-messages { list-style: none; padding: 0; margin: 0; }
+.prototype-message + .prototype-message { border-top: 1px solid #526477; margin-top: 10px; padding-top: 10px; }
+.prototype-message__meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: #b4d9ff; font-size: 11px; }
+.prototype-message__meta time { color: #a9b6c5; font-size: 10px; }
+.prototype-reply { margin-top: 12px; border-top: 1px solid #526477; padding-top: 10px; }
+.prototype-reply label { display: block; font-size: 12px; }
+.prototype-reply textarea { display: block; box-sizing: border-box; width: 100%; min-height: 54px; margin: 6px 0; padding: 8px; color: #e3efff; background: #172330; border: 1px solid #6f8eae; resize: vertical; font: inherit; }
+.prototype-reply__hint { margin-left: 8px; font-size: 11px; }
+.prototype-agent-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.prototype-agent-actions > span { color: #a9b6c5; font-size: 11px; }
+.prototype-card--a { padding: 14px 18px; border-left: 4px solid #70adf2; }
+.prototype-card--a .prototype-card__actions { border-top: 1px solid #405265; padding-top: 10px; }
+.prototype-zone--b .prototype-zone__content { padding-left: 34px; border-left: 2px solid #748698; }
+.prototype-card--b { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 14px; padding: 10px 14px; border-radius: 0 6px 6px 0; }
+.prototype-card--b .prototype-card__meta { display: flex; flex-direction: column; gap: 2px; }
+.prototype-card--b .prototype-card__actions { margin-top: 8px; }
+.prototype-card--b .prototype-card__message { margin: 4px 0 0; }
+.prototype-card--c { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1fr); }
+.prototype-card__evidence { background: #1e2832; border-right: 1px solid #527494; padding: 12px; min-width: 0; }
+.prototype-card__evidence .prototype-card__meta { flex-direction: column; gap: 2px; }
+.prototype-card__evidence pre { font: 11px/1.5 ui-monospace, monospace; margin: 10px 0 0; white-space: pre-wrap; max-height: 150px; overflow: auto; }
+.prototype-card__feedback { padding: 12px 16px; }
+.prototype-card__feedback > strong { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #9fcbff; }
+.prototype-card.is-resolved { background: #282b2f; border-color: #53575c; color: #b1b6bd; }
+.prototype-card.is-resolved .prototype-card__message { text-decoration: line-through; }
+.prototype-card.is-resolved .prototype-card__meta, .prototype-card.is-resolved .prototype-message__meta, .prototype-picker__item.is-resolved { color: #adb3bc; }
+.prototype-card.is-resolved .prototype-card__evidence { background: #232529; border-color: #53575c; }
+.prototype-composer { margin: 8px 0; padding: 12px; border: 2px solid #80bfff; border-radius: 6px; background: #233447; white-space: normal; }
+.prototype-composer label { display: block; color: #b4d9ff; font-size: 12px; }
+.prototype-composer textarea { display: block; width: 100%; min-height: 64px; margin: 8px 0; padding: 8px; color: #e3efff; background: #172330; border: 1px solid #6f8eae; resize: vertical; font-family: inherit; font-size: 13px; line-height: 1.4; }
+.prototype-composer button { margin-right: 8px; }
+.monaco-editor .prototype-gutter-plus::before { content: '+'; display: block; color: #9bc9ff; background: #29425c; border-radius: 3px; text-align: center; cursor: pointer; font: bold 15px/18px sans-serif; }
+.monaco-editor .prototype-selected-range { background: #72b0fa20; }
+@media (max-width: 850px) {
+  .prototype-inspector { grid-template-columns: minmax(0, 1fr); }
+  .prototype-card--b { grid-template-columns: 130px minmax(0, 1fr); }
+  .prototype-card--c { grid-template-columns: minmax(0, 1fr); }
+  .prototype-card__evidence { border-right: 0; border-bottom: 1px solid #527494; }
+  .prototype-switcher { gap: 8px; font-size: 10px; }
+}

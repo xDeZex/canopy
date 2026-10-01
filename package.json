@@ -16,6 +16,7 @@
   },
   "scripts": {
     "dev": "node server/index.js",
+    "prototype": "node server/prototype-comments.js",
     "test": "node --test"
   },
   "dependencies": {

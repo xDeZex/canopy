@@ -27,6 +27,7 @@ export function createApp({
   watchWorktreeList,
   activityFeed,
   worktreeDeletion,
+  prototypeEnabled = false,
 } = {}) {
   const getWorktrees = listWorktrees ?? createListWorktrees(repoRoot);
 
@@ -61,6 +62,18 @@ export function createApp({
   return createServer(async (req, res) => {
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+      // Throwaway #26 assets are opt-in and never available in production.
+      const allowPrototype = prototypeEnabled && process.env.NODE_ENV !== 'production';
+      if (pathname === '/api/prototype-comments') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ enabled: allowPrototype }));
+        return;
+      }
+      if (pathname.startsWith('/prototype-') && !allowPrototype) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
       const response = await handleRequest({ method: req.method, pathname, searchParams, headers: req.headers,
         protocol: req.socket.encrypted ? 'https:' : 'http:' });
 

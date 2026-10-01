@@ -46,7 +46,7 @@ const DIFF_MODE_OPTIONS = {
 // `autoScroll`, the viewport moves to the first change once Monaco has
 // computed the diff (#24).
 // Returns a controller with `dispose()`, `nextChange()` and `prevChange()`.
-export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false }) {
+export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false, onMount }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
@@ -69,6 +69,7 @@ export async function mountDiffEditor(container, { original, modified, language,
   const originalModel = monaco.editor.createModel(original ?? '', language);
   const modifiedModel = monaco.editor.createModel(modified ?? '', language);
   editor.setModel({ original: originalModel, modified: modifiedModel });
+  const mounted = onMount?.(editor);
 
   // Monaco may still be computing the diff immediately after setModel().
   // Start at the first/last hunk and keep navigation local to this mount;
@@ -106,6 +107,7 @@ export async function mountDiffEditor(container, { original, modified, language,
     nextChange() { navigate(1); },
     prevChange() { navigate(-1); },
     dispose() {
+      mounted?.dispose();
       editor.dispose();
       originalModel.dispose();
       modifiedModel.dispose();

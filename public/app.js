@@ -31,6 +31,8 @@ export async function startApp({
   now = Date.now,
   setInterval: schedule = globalThis.setInterval,
   clearInterval: cancel = globalThis.clearInterval,
+  onReady = () => {},
+  onWorkspaceChange = () => {},
 } = {}) {
   const tabsWrapperEl = doc.getElementById('tabs-wrapper');
   const tabsEl = doc.getElementById('tabs');
@@ -75,6 +77,7 @@ export async function startApp({
       if (part === 'rail') ui.renderRail();
       if (part === 'main') viewer.render();
       if (part === 'toolbar') ui.renderToolbar();
+      onWorkspaceChange();
     },
   });
 
@@ -232,6 +235,7 @@ export async function startApp({
   };
 
   let worktrees;
+  onReady({ workspace, viewer, onViewModeChanged });
   try {
     const res = await request('/api/worktrees');
     if (!res.ok) throw new Error(`request failed with status ${res.status}`);
