@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { startApp } from '../../public/app.js';
 import { Element } from './fake-dom.js';
+import { EventEmitter } from 'node:events';
+import { createRequestHandler } from '../../server/handle-request.js';
+import { watchWorktree } from '../../server/watcher.js';
+import { getFileTree } from '../../server/status.js';
 
 function browserStub() {
   const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'body', 'rail', 'rail-divider', 'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
@@ -40,6 +44,153 @@ class EventSourceStub {
   addEventListener() {}
   close() {}
 }
+
+test('index startup reconciliation and later operations update both rails without reloading content or closing menus', async () => {
+  const { document, window, elements } = browserStub();
+  const watched = new Map();
+  const timers = new Map();
+  const urls = [];
+  let timerId = 0;
+  let phase = 'staged';
+  let mounts = 0;
+  let disposals = 0;
+  const indexPath = '/main/.git/worktrees/linked/index';
+  let resolveIndex;
+  const pendingIndex = new Promise((resolve) => { resolveIndex = resolve; });
+  // tracked.txt stays on disk; gone.txt is a staged addition already absent
+  // from disk. Resetting staged.txt keeps it on disk and normalized as added.
+  const snapshots = {
+    staged: { tracked: 'tracked.txt\0staged.txt\0gone.txt\0', status: 'A  staged.txt\nAD gone.txt\n' },
+    cachedRemoval: { tracked: 'staged.txt\0gone.txt\0', status: 'D  tracked.txt\n?? tracked.txt\nA  staged.txt\nAD gone.txt\n' },
+    resetGone: { tracked: 'staged.txt\0', status: 'D  tracked.txt\n?? tracked.txt\nA  staged.txt\n' },
+    resetPresent: { tracked: '', status: 'D  tracked.txt\n?? tracked.txt\n?? staged.txt\n' },
+  };
+  const runGit = async (args, cwd) => {
+    assert.equal(cwd, '/linked');
+    if (args[0] === 'rev-parse') return pendingIndex;
+    if (args[0] === 'ls-files') return snapshots[phase].tracked;
+    if (args[0] === 'status') return snapshots[phase].status;
+    throw new Error(`unexpected Git request: ${args}`);
+  };
+  const handler = createRequestHandler({
+    getWorktrees: async () => [{ path: '/linked', head: 'unchanged', branch: 'linked' }],
+    getTree: (path, ref) => getFileTree(path, ref, runGit, async () => ({ mtimeMs: 1000 })),
+    getContent: async () => ({ head: 'same HEAD content', working: 'same disk content' }),
+    getCommits: async () => [{ sha: 'unchanged', message: 'same commit', date: '2026-01-01' }],
+    watchWorktree: (path, onChange, options) => watchWorktree(path, onChange, {
+      ...options, runGit,
+      watch: (target) => {
+        const watcher = Object.assign(new EventEmitter(), { close: async () => {} });
+        watched.set(target, watcher);
+        return watcher;
+      },
+      setTimer: (fn) => { timers.set(++timerId, fn); return timerId; },
+      clearTimer: (id) => timers.delete(id),
+    }),
+    subscribeToWorktreeChanges: () => () => {},
+    subscribeToActivity: () => () => {},
+  });
+  const describeRequest = (url) => {
+    const { pathname, searchParams } = new URL(url, 'http://localhost');
+    return { method: 'GET', pathname, searchParams };
+  };
+  class EventSource {
+    constructor(url) {
+      this.listeners = new Map();
+      this.ready = handler(describeRequest(url)).then((response) => {
+        this.cleanup = response.stream.subscribe((frame) => {
+          const name = frame.match(/^event: (.+)\n/)?.[1];
+          const event = { data: frame.match(/data: (.+)\n/)[1] };
+          if (name) this.listeners.get(name)?.(event);
+          else this.onmessage?.(event);
+        });
+      });
+    }
+    addEventListener(name, callback) { this.listeners.set(name, callback); }
+    close() { this.ready.then(() => this.cleanup()); }
+  }
+  const app = await startApp({
+    document, window, EventSource,
+    fetch: async (url) => {
+      urls.push(url);
+      const response = await handler(describeRequest(url));
+      return { ok: response.status === 200, json: async () => JSON.parse(response.body) };
+    },
+    mountEditor: async () => { mounts++; return { dispose: () => disposals++ }; },
+    now: () => 1000, setInterval: () => 1, clearInterval: () => {},
+  });
+  try {
+    await settle();
+    const rows = (selector) => elements.rail.querySelector(selector).querySelectorAll('.rail__file');
+    const statuses = (selector) => rows(selector).map((row) => [row.title,
+      row.className.match(/status-(\w+)/)[1]]);
+    assert.deepEqual(statuses('.rail__tree'), [
+      ['gone.txt', 'deleted'], ['staged.txt', 'added'], ['tracked.txt', 'clean'],
+    ]);
+    assert.deepEqual(statuses('.changed-files'), [['gone.txt', 'deleted'], ['staged.txt', 'added']]);
+    rows('.rail__tree').find((row) => row.title === 'tracked.txt').click();
+    await settle();
+    assert.equal(mounts, 1);
+    elements.toolbar.querySelector('.commit-picker__trigger').click();
+    const menu = elements.toolbar.querySelector('.commit-picker__menu');
+    const toolbarChildren = [...elements.toolbar.children];
+    assert.equal(menu.classList.contains('is-open'), true);
+    const before = urls.length;
+
+    // The earlier API snapshot is mounted before index resolution or its
+    // initial scan completes. Git changes only the index during that gap,
+    // so ignoreInitial supplies no add/change event for the cached removal.
+    assert.equal(watched.has(indexPath), false);
+    watched.get('/linked').emit('ready');
+    phase = 'cachedRemoval';
+    resolveIndex(`${indexPath}\n`);
+    await settle();
+    assert.equal(urls.length, before, 'index resolution alone does not reconcile before observation starts');
+    assert.deepEqual(statuses('.changed-files'), [['gone.txt', 'deleted'], ['staged.txt', 'added']]);
+    watched.get(indexPath).emit('change', '/main/.git/index');
+    assert.equal(timers.size, 0, 'another worktree cannot invalidate this status');
+    watched.get(indexPath).emit('ready');
+    await settle();
+    assert.deepEqual(urls.slice(before), ['/api/files?worktree=%2Flinked']);
+    assert.deepEqual(statuses('.rail__tree'), [
+      ['gone.txt', 'deleted'], ['staged.txt', 'added'], ['tracked.txt', 'added'],
+    ]);
+    assert.deepEqual(statuses('.changed-files'), [
+      ['gone.txt', 'deleted'], ['staged.txt', 'added'], ['tracked.txt', 'added'],
+    ]);
+    assert.equal(mounts, 1);
+    assert.equal(disposals, 0);
+    assert.equal(elements.toolbar.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.classList.contains('is-open'), true);
+
+    // Subsequent operations still arrive as ordinary index replacements.
+    const invalidate = async (nextPhase) => {
+      phase = nextPhase;
+      watched.get(indexPath).emit('unlink', indexPath);
+      watched.get(indexPath).emit('add', indexPath);
+      for (const fn of timers.values()) fn();
+      timers.clear();
+      await settle();
+    };
+
+    await invalidate('resetGone');
+    assert.deepEqual(statuses('.rail__tree'), [['staged.txt', 'added'], ['tracked.txt', 'added']]);
+    assert.deepEqual(statuses('.changed-files'), [['staged.txt', 'added'], ['tracked.txt', 'added']]);
+    await invalidate('resetPresent');
+    assert.deepEqual(statuses('.rail__tree'), [['staged.txt', 'added'], ['tracked.txt', 'added']]);
+    assert.deepEqual(statuses('.changed-files'), [['staged.txt', 'added'], ['tracked.txt', 'added']]);
+    assert.deepEqual(urls.slice(before), Array(3).fill('/api/files?worktree=%2Flinked'));
+    assert.ok(rows('.rail__tree').find((row) => row.title === 'tracked.txt').classList.contains('is-active'));
+    assert.ok(rows('.changed-files').find((row) => row.title === 'tracked.txt').classList.contains('is-active'));
+    assert.equal(mounts, 1);
+    assert.equal(disposals, 0);
+    assert.deepEqual(elements.toolbar.children, toolbarChildren);
+    assert.equal(elements.toolbar.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.classList.contains('is-open'), true);
+  } finally {
+    app.dispose();
+  }
+});
 
 // Two worktrees, one modified file and no commits, served from memory.
 function fakeFetch(urls = []) {

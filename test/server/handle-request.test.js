@@ -145,6 +145,29 @@ test('/api/watch is described as an SSE stream that watches the worktree and cle
   assert.deepEqual(calls, [['watch', '/main'], ['close']]);
 });
 
+test('/api/watch delivers index invalidations separately from file edits for the requested worktree', async () => {
+  let invalidate;
+  let closed = false;
+  const res = await run('/api/watch?worktree=/linked', 'GET', {
+    watchWorktree: (worktreePath, onChange, options) => {
+      assert.equal(worktreePath, '/linked');
+      invalidate = options?.onStatusChange;
+      onChange(['open.txt']);
+      return { close: () => { closed = true; } };
+    },
+  });
+  const frames = [];
+  const cleanup = res.stream.subscribe((frame) => frames.push(frame));
+  assert.equal(typeof invalidate, 'function');
+  invalidate();
+  assert.deepEqual(frames, [
+    'data: {"paths":["open.txt"]}\n\n',
+    'event: status-invalidated\ndata: {}\n\n',
+  ]);
+  cleanup();
+  assert.equal(closed, true);
+});
+
 test('/api/watch-worktrees frames snapshots and poll errors, and unsubscribes on cleanup', async () => {
   let unsubscribed = false;
   const res = await run('/api/watch-worktrees', 'GET', {

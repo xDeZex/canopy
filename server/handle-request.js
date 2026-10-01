@@ -25,7 +25,7 @@ const SSE_HEADERS = {
 // A HEAD request for an SSE route gets the headers and no `stream`.
 //
 // Dependencies: `getWorktrees`, `getTree`, `getContent`, `getCommits`,
-// `watchWorktree(worktreePath, onChange)`, `subscribeToWorktreeChanges`,
+// `watchWorktree(worktreePath, onChange, { onStatusChange })`, `subscribeToWorktreeChanges`,
 // `readStatic(filePath)` and `publicDir`.
 export function createRequestHandler({
   getWorktrees,
@@ -84,7 +84,9 @@ export function createRequestHandler({
       // switches worktrees, so tearing down is all the re-scoping this MVP
       // needs (see server/watcher.js's header comment).
       return sseResponse(includeBody, (write) => {
-        const watcher = watchWorktree(worktreePath, (paths) => write(formatChangeEvent(paths)));
+        const watcher = watchWorktree(worktreePath, (paths) => write(formatChangeEvent(paths)), {
+          onStatusChange: () => write('event: status-invalidated\ndata: {}\n\n'),
+        });
         return () => watcher.close();
       });
     }

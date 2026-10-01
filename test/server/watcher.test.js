@@ -39,6 +39,137 @@ function recorder() {
   return fn;
 }
 
+test('linked worktree index replacement invalidates status without reporting file edits', async () => {
+  const files = fakeWatch();
+  const index = fakeWatch();
+  const gitCalls = [];
+  const onChange = recorder();
+  let statuses = 0;
+  const watcher = watchWorktree('/linked', onChange, {
+    ...files.options,
+    watch: (path, options) => (path === '/linked' ? files : index).options.watch(path, options),
+    runGit: async (args, cwd) => {
+      gitCalls.push({ args, cwd });
+      return '../main/.git/worktrees/linked/index\n';
+    },
+    onStatusChange: () => statuses++,
+  });
+  await Promise.resolve();
+  assert.deepEqual(gitCalls, [{ args: ['rev-parse', '--git-path', 'index'], cwd: '/linked' }]);
+  assert.equal(index.watcher.watchedWith.path, '/main/.git/worktrees/linked/index');
+  assert.equal(index.watcher.watchedWith.chokidarOptions.ignoreInitial, true);
+  assert.equal(index.watcher.watchedWith.chokidarOptions.ignored, undefined);
+  index.watcher.emit('unlink', '/main/.git/worktrees/linked/index');
+  index.watcher.emit('add', '/main/.git/worktrees/linked/index');
+  index.watcher.emit('change', '/main/.git/worktrees/linked/index');
+  assert.equal(statuses, 0);
+  files.fire();
+  assert.equal(statuses, 1);
+  assert.deepEqual(onChange.calls, []);
+  index.watcher.emit('change', '/main/.git/worktrees/linked/index');
+  assert.equal(files.hasPending(), true);
+  await watcher.close();
+  assert.equal(files.hasPending(), false);
+  index.watcher.emit('change', '/main/.git/worktrees/linked/index');
+  assert.equal(files.hasPending(), false);
+  assert.equal(statuses, 1);
+  assert.equal(files.watcher.closed, true);
+  assert.equal(index.watcher.closed, true);
+});
+
+test('an index watch ignores lock files and another worktree index', async () => {
+  const fake = fakeWatch();
+  const index = fakeWatch();
+  let statuses = 0;
+  const watcher = watchWorktree('/linked', recorder(), {
+    ...fake.options,
+    watch: (path, options) => (path === '/linked' ? fake : index).options.watch(path, options),
+    runGit: async () => '/repo/.git/worktrees/linked/index\n',
+    onStatusChange: () => statuses++,
+  });
+  await Promise.resolve();
+  index.watcher.emit('change', '/repo/.git/index');
+  index.watcher.emit('add', '/repo/.git/worktrees/other/index');
+  index.watcher.emit('unlink', '/repo/.git/worktrees/linked/index.lock');
+  assert.equal(fake.hasPending(), false);
+  assert.equal(statuses, 0);
+  await watcher.close();
+});
+
+test('closing during index resolution does not start a late watcher', async () => {
+  const fake = fakeWatch();
+  let resolveIndex;
+  const pending = new Promise((resolve) => { resolveIndex = resolve; });
+  const watcher = watchWorktree('/linked', recorder(), {
+    ...fake.options,
+    runGit: () => pending,
+    onStatusChange: () => assert.fail('closed watcher delivered status'),
+  });
+  await watcher.close();
+  resolveIndex('/repo/.git/worktrees/linked/index');
+  await Promise.resolve();
+  assert.equal(fake.watcher.watchedWith.path, '/linked');
+  assert.equal(fake.watcher.closed, true);
+  assert.equal(fake.hasPending(), false);
+});
+
+test('index readiness reconciles status once unless closed during its initial scan', async () => {
+  for (const closeBeforeReady of [false, true]) {
+    const files = fakeWatch();
+    const index = fakeWatch();
+    const onChange = recorder();
+    let statuses = 0;
+    const watcher = watchWorktree('/linked', onChange, {
+      ...files.options,
+      watch: (path, options) => (path === '/linked' ? files : index).options.watch(path, options),
+      runGit: async () => '/repo/.git/worktrees/linked/index',
+      onStatusChange: () => statuses++,
+    });
+    await Promise.resolve();
+    files.watcher.emit('ready');
+    assert.equal(statuses, 0, 'file readiness cannot finish index observation');
+    if (closeBeforeReady) await watcher.close();
+    index.watcher.emit('ready');
+    index.watcher.emit('ready');
+    assert.equal(statuses, closeBeforeReady ? 0 : 1);
+    assert.deepEqual(onChange.calls, [], 'index readiness is not a content edit');
+    assert.equal(files.hasPending(), false);
+    if (!closeBeforeReady) await watcher.close();
+    index.watcher.emit('ready');
+    assert.equal(statuses, closeBeforeReady ? 0 : 1);
+  }
+});
+
+test('index resolution and watcher errors are logged while file edits remain observable', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  for (const failure of ['resolve', 'watch', 'event']) {
+    const files = fakeWatch();
+    const index = fakeWatch();
+    const onChange = recorder();
+    const watcher = watchWorktree('/linked', onChange, {
+      ...files.options,
+      runGit: async () => {
+        if (failure === 'resolve') throw new Error('cannot resolve index');
+        return '/repo/.git/worktrees/linked/index';
+      },
+      watch: (path, options) => {
+        if (path === '/linked') return files.options.watch(path, options);
+        if (failure === 'watch') throw new Error('cannot watch index');
+        return index.options.watch(path, options);
+      },
+      onStatusChange: () => assert.fail('failed index delivered status'),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    if (failure === 'event') index.watcher.emit('error', new Error('index watch failed'));
+    files.watcher.emit('change', 'open.txt');
+    files.fire();
+    assert.deepEqual(onChange.calls, [['open.txt']], failure);
+    await watcher.close();
+  }
+  assert.equal(console.error.mock.callCount(), 3);
+});
+
 test('watches the worktree with relative paths, skipping the initial scan', () => {
   const fake = fakeWatch();
   watchWorktree('/wt', recorder(), fake.options);

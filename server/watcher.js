@@ -1,17 +1,19 @@
 // Watches a single worktree's files on disk and reports changed paths (add/
-// change/unlink), debounced and deduped, back to a callback. One watcher
-// instance corresponds to one actively-watched worktree; callers own the
+// change/unlink), debounced and deduped, back to a callback. Index observation
+// is optional and reports status invalidation through a separate callback.
+// One instance corresponds to one actively-watched worktree; callers own the
 // lifecycle (start one, `close()` it before starting the next) — see
 // server/app.js's `/api/watch` SSE route, which scopes exactly one watcher
 // to the client's currently active worktree per the issue's MVP scope.
 
 import chokidar from 'chokidar';
+import path from 'node:path';
+import { runGit as defaultRunGit } from './git.js';
 
 const DEFAULT_DEBOUNCE_MS = 150;
 
-// Ignore git's own bookkeeping churn (.git/index, .git/HEAD, lock files,
-// etc.), so routine git operations the app itself performs don't trigger a
-// refresh — only real working-tree edits should.
+// Keep bookkeeping out of file-edit notifications. The resolved index is
+// observed separately: it invalidates status, not HEAD-versus-disk content.
 export const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
 
 // `watch`, `setTimer` and `clearTimer` default to chokidar and the real
@@ -19,10 +21,14 @@ export const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
 export function watchWorktree(
   worktreePath,
   onChange,
-  { debounceMs = DEFAULT_DEBOUNCE_MS, watch = chokidar.watch, setTimer = setTimeout, clearTimer = clearTimeout } = {},
+  { debounceMs = DEFAULT_DEBOUNCE_MS, watch = chokidar.watch, setTimer = setTimeout,
+    clearTimer = clearTimeout, runGit = defaultRunGit, onStatusChange } = {},
 ) {
   const changedPaths = new Set();
   let timer = null;
+  let statusTimer = null;
+  let indexWatcher = null;
+  let closed = false;
 
   const flush = () => {
     timer = null;
@@ -37,6 +43,36 @@ export function watchWorktree(
     clearTimer(timer);
     timer = setTimer(flush, debounceMs);
   };
+
+  // Linked worktrees have their own index outside the worktree directory.
+  // Watching the exact path also observes Git's atomic index replacement,
+  // without reacting to another worktree's index or index.lock churn.
+  if (onStatusChange) {
+    (async () => {
+      const indexPath = path.resolve(worktreePath,
+        (await runGit(['rev-parse', '--git-path', 'index'], worktreePath)).trim());
+      if (closed) return;
+      indexWatcher = watch(indexPath, { ignoreInitial: true });
+      const scheduleStatus = (changedPath) => {
+        if (closed || path.resolve(changedPath) !== indexPath) return;
+        clearTimer(statusTimer);
+        statusTimer = setTimer(() => {
+          statusTimer = null;
+          if (!closed) onStatusChange();
+        }, debounceMs);
+      };
+      for (const event of ['add', 'change', 'unlink']) indexWatcher.on(event, scheduleStatus);
+      // The API tree may predate index resolution and the initial scan.
+      // Reconcile once observation starts, including changes ignoreInitial
+      // suppressed, without treating readiness as a working-file edit.
+      indexWatcher.once('ready', () => {
+        if (!closed) onStatusChange();
+      });
+      indexWatcher.on('error', (err) => console.error('canopy: index watcher error', err));
+    })().catch((err) => {
+      if (!closed) console.error('canopy: index watcher error', err);
+    });
+  }
 
   const watcher = watch(worktreePath, {
     cwd: worktreePath,
@@ -72,8 +108,10 @@ export function watchWorktree(
     // instead of guessing timings; production callers don't need to.
     ready,
     close() {
+      closed = true;
       clearTimer(timer);
-      return watcher.close();
+      clearTimer(statusTimer);
+      return Promise.all([watcher.close(), indexWatcher?.close()]);
     },
   };
 }

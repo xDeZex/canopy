@@ -58,10 +58,10 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     return true;
   }
 
-  async function loadFileTree() {
+  async function loadFileTree({ statusOnly = false } = {}) {
     const generation = ++treeRequest;
     const path = activePath;
-    treeResolved = false;
+    if (!statusOnly) treeResolved = false;
     if (!path) {
       fileTree = [];
       fileTreeError = null;
@@ -85,7 +85,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     }
     treeResolved = true;
     onChange('rail');
-    if (activeFile) {
+    if (activeFile && !statusOnly) {
       const previousMode = viewModeStore.getMode();
       // A missing file or failed tree has no status; default to Diff rather
       // than leaving the first choice pending indefinitely.
@@ -183,6 +183,11 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     remoteChange(paths) {
       loadFileTree();
       if (activeFile && paths.includes(activeFile)) loadFileContent();
+    },
+    // Index changes affect API statuses, not the selected comparison or its
+    // controls. Reuse the tree request guard without seeding/remounting it.
+    invalidateStatus() {
+      return loadFileTree({ statusOnly: true });
     },
     loadFileTree,
     loadCommits,
