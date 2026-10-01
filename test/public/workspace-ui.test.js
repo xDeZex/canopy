@@ -5,6 +5,7 @@ import { createWorkspaceStore } from '../../public/workspace-state.js';
 import { createCommitLockStore } from '../../public/commit-lock.js';
 import { createViewModeStore } from '../../public/view-mode.js';
 import { createAutoScrollStore } from '../../public/auto-scroll.js';
+import { DIFF_RENDER_MODES } from '../../public/monaco-view.js';
 import { formatRelativeTime } from '../../public/relative-time.js';
 import { Element } from './fake-dom.js';
 
@@ -56,7 +57,7 @@ function fixture({ now = () => 1000, relativeTime = () => 'recently', treeExpand
     tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, commitLock, viewModeStore, autoScrollStore,
     treeExpansion: { isExpanded: () => treeExpanded, toggle() {} },
     computeTabScrollAffordance: () => ({ showLeft: false, showRight: false }),
-    formatRelativeTime: relativeTime, DIFF_RENDER_MODES: ['inline', 'side-by-side', 'collapsed'],
+    formatRelativeTime: relativeTime, DIFF_RENDER_MODES,
     formatEditTime: (timestamp, now) => timestamp == null ? 'No edit time' : `${now - timestamp}ms ago`,
     now,
     onViewModeChanged() {}, onDiffRenderModeChanged() {}, getDiffRenderMode: () => 'inline',
@@ -88,6 +89,18 @@ test('sidebar comments refresh and navigate even with an empty file tree', async
   const mounted = f.railEl.querySelectorAll('.comment-index__button')[1];
   mounted.click();
   assert.equal(f.railEl.querySelectorAll('.comment-index__button')[1], mounted, 'same-file reveals preserve the focused sidebar button');
+});
+
+test('Diff layout toggle exposes only Inline and Side-by-side, and is concealed in File mode', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }]);
+  const toggle = f.toolbarEl.querySelector('.view-toggle--diff');
+  const buttons = toggle.querySelectorAll('.view-toggle__btn');
+  assert.deepEqual(buttons.map((button) => button.dataset.mode), ['inline', 'side-by-side']);
+  assert.deepEqual(buttons.map((button) => button.textContent), ['Inline', 'Side-by-side']);
+  f.viewModeStore.setMode('file');
+  f.ui.renderToolbar();
+  assert.equal(toggle.classList.contains('is-concealed'), true);
 });
 
 test('Wrap button toggles the file viewer setting in both Diff and File modes', () => {

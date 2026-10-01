@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mountDiffEditor, mountEditor } from '../../public/monaco-view.js';
+import { DIFF_RENDER_MODES, mountDiffEditor, mountEditor } from '../../public/monaco-view.js';
 
 const originalWindow = globalThis.window;
 const originalMonaco = globalThis.monaco;
@@ -70,7 +70,7 @@ function markedLines(pane) {
 }
 
 test('jumped-to hunk has a gutter marker spanning its lines, moving and wrapping in every diff mode', async () => {
-  for (const mode of ['inline', 'side-by-side', 'collapsed']) {
+  for (const mode of DIFF_RENDER_MODES) {
     const { panes, revealed } = stubDiffEditor([
       { originalStartLineNumber: 1, originalEndLineNumber: 0, modifiedStartLineNumber: 2, modifiedEndLineNumber: 4 },
       { originalStartLineNumber: 8, originalEndLineNumber: 9, modifiedStartLineNumber: 10, modifiedEndLineNumber: 12 },
@@ -94,7 +94,7 @@ test('jumped-to hunk has a gutter marker spanning its lines, moving and wrapping
 });
 
 test('deletion-only hunks mark deleted original lines and a visible modified anchor at file boundaries', async () => {
-  for (const mode of ['inline', 'side-by-side', 'collapsed']) {
+  for (const mode of DIFF_RENDER_MODES) {
     const { panes, revealed } = stubDiffEditor([
       { originalStartLineNumber: 1, originalEndLineNumber: 3, modifiedStartLineNumber: 0, modifiedEndLineNumber: 0 },
       { originalStartLineNumber: 9, originalEndLineNumber: 11, modifiedStartLineNumber: 5, modifiedEndLineNumber: 0 },
@@ -205,7 +205,7 @@ test('hunks sharing a modified-side anchor remain distinct navigation targets', 
   view.dispose();
 });
 
-test('review rails mount below the exact last modified anchor line in expanded diff modes, preserving native selection', async () => {
+test('supported modes and invalid-mode inline fallback retain exact review rails and native selection', async () => {
   const document = { createElement: (tag) => ({ tagName: tag, children: [], textContent: '',
     setAttribute(name, value) { this[name] = value; }, replaceChildren(...children) { this.children = children; },
     addEventListener(name, fn) { (this.events ??= {})[name] = fn; },
@@ -213,7 +213,8 @@ test('review rails mount below the exact last modified anchor line in expanded d
   const thread = { id: 't', file: 'a', line_range: { start: 1, end: 2 }, side: 'modified',
     created_at: '2026-10-01T12:00:00Z', resolved: true,
     messages: [{ id: 'm', author: 'agent', created_at: '2026-10-01T12:00:00Z', text: '<b>literal</b>\nSecond line' }] };
-  for (const mode of ['inline', 'side-by-side']) {
+  assert.deepEqual(DIFF_RENDER_MODES, ['inline', 'side-by-side']);
+  for (const mode of [...DIFF_RENDER_MODES, undefined, 'collapsed', 'unknown', 'toString']) {
     const zones = [];
     const removed = [];
     let options;
@@ -242,7 +243,7 @@ test('review rails mount below the exact last modified anchor line in expanded d
     zones[0].domNode.events.mousedown({ stopPropagation() { stopped = true; }, preventDefault() { assert.fail('must not block selection'); } });
     assert.equal(stopped, true);
     assert.equal(options.renderSideBySide, mode === 'side-by-side');
-    assert.equal(options.hideUnchangedRegions.enabled, mode === 'collapsed');
+    assert.equal(options.hideUnchangedRegions.enabled, false);
     view.dispose();
     assert.deepEqual(removed, [1]);
   }
@@ -492,31 +493,6 @@ test('same-anchor native deletion/alignment zones taller than the viewport canno
   }
 });
 
-test('collapsed Diff never creates comment zones or accesses folding internals, including after native unfold/recompute', async () => {
-  const { panes, updateDiff, listeners } = stubDiffEditor([]);
-  panes.modified.changeViewZones = () => assert.fail('collapsed must never create zones');
-  panes.modified.updateOptions = () => assert.fail('collapsed folding stays native');
-  const unsupportedAccess = [];
-  panes.modified = new Proxy(panes.modified, {
-    get(target, key) {
-      if (!Object.hasOwn(target, key)) {
-        unsupportedAccess.push(key);
-        throw new Error('Only the public fake controller is available');
-      }
-      return target[key];
-    },
-  });
-  const thread = { id: 't', side: 'modified', line_range: { start: 1, end: 2 }, messages: [] };
-  const view = await mountDiffEditor({}, { modified: 'a\nb', mode: 'collapsed', threads: [thread] });
-  assert.equal(listeners.size, 1, 'only the retained hunk subscription');
-  updateDiff([]); // Native unfold/recompute does not opt comments back in.
-  view.updateThreads([thread]);
-  assert.equal(view.revealThread('t'), false);
-  view.dispose();
-  assert.equal(listeners.size, 0);
-  assert.deepEqual(unsupportedAccess, []);
-});
-
 test('selected conversation reveal wins delayed auto-scroll while hunk highlights and scroll shortcuts coexist', async () => {
   for (const mode of ['inline', 'side-by-side']) {
     const { panes, updateDiff, revealed } = stubDiffEditor(null);
@@ -645,7 +621,7 @@ test('File mode scrolls ten configured line heights from the current viewport in
 });
 
 test('all diff layouts scroll ten current line heights through the modified editor', async () => {
-  for (const mode of ['inline', 'side-by-side', 'collapsed']) {
+  for (const mode of DIFF_RENDER_MODES) {
     let scrollTop = 500;
     let lineHeight = 23;
     const positions = [];

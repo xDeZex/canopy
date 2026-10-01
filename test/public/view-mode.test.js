@@ -91,11 +91,14 @@ test('setting a mode before seeding prevents the first file from overriding it',
 });
 
 test('an unrecognised saved value does not block first-file seeding', () => {
-  const storage = memoryStorage();
-  storage.setItem('canopy:view-mode', 'unknown');
-  const store = createViewModeStore(storage);
-  store.seed('clean');
-  assert.equal(store.getMode(), 'file');
+  for (const savedMode of ['unknown', 'collapsed']) {
+    const storage = memoryStorage();
+    storage.setItem('canopy:view-mode', savedMode);
+    const store = createViewModeStore(storage);
+    assert.equal(store.getMode(), 'diff');
+    store.seed('clean');
+    assert.equal(store.getMode(), 'file');
+  }
 });
 
 test('a blocked storage read falls back to session-only mode', () => {

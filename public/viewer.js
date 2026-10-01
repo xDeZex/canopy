@@ -9,7 +9,7 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
   let disposed = false;
 
   function currentComments() {
-    return commentsForView({ ...getState(), viewerError }, getViewMode(), getDiffRenderMode());
+    return commentsForView({ ...getState(), viewerError });
   }
   function inlineThreads(comments) {
     return comments.threads.filter((thread) => Object.hasOwn(thread, 'file') && !thread.unavailable);

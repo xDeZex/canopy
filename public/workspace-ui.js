@@ -358,7 +358,6 @@ export function createWorkspaceUI({
   const DIFF_RENDER_MODE_LABELS = {
     inline: 'Inline',
     'side-by-side': 'Side-by-side',
-    collapsed: 'Collapsed',
   };
 
   function renderDiffModeToggle() {

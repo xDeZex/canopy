@@ -149,7 +149,7 @@ test('comment refreshes preserve mounted editors and pending mounts receive the 
   assert.equal(disposed, 1);
 });
 
-test('same-file thread reveals survive pending mounts; collapsed selection replaces the editor without native callbacks', async () => {
+test('same-file thread reveals survive pending mounts and diff layout changes', async () => {
   const f = fixture();
   f.setState({ activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
     fileContent: { head: 'old', working: 'one\ntwo' }, comments: { threads: [reviewThread()], warning: null } });
@@ -166,17 +166,16 @@ test('same-file thread reveals survive pending mounts; collapsed selection repla
   assert.deepEqual(reveals, ['t', 't']);
   assert.equal(f.calls.length, 1);
   assert.doesNotMatch(texts(f.mainEl), /Full conversation/);
-  f.setDiffMode('collapsed');
+  f.setDiffMode('side-by-side');
   f.viewer.render();
   assert.equal(disposed, 1);
-  assert.equal(f.calls.length, 1);
-  assert.match(texts(f.mainEl), /Collapsed Diff/);
-  assert.match(texts(f.mainEl), /Full conversation/);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[1].options.mode, 'side-by-side');
+  assert.deepEqual(f.calls[1].options.threads, [reviewThread()]);
   f.setState({ selectedThreadId: null });
   f.viewer.refreshComments();
   assert.equal(f.calls.length, 2);
-  assert.equal(f.calls[1].options.threads, undefined);
-  assert.equal(f.calls[1].options.onThreadAvailability, undefined);
+  assert.deepEqual(f.calls[1].options.threads, [reviewThread()]);
   f.viewer.dispose();
   f.calls[1].resolve({ dispose() { disposed++; } });
   await f.calls[1].promise;
@@ -318,10 +317,10 @@ test('out-of-order mounts dispose stale controllers without replacing the latest
   assert.equal(f.mainEl.children[0], f.calls[1].container);
 
   f.setMode('diff');
-  f.setDiffMode('collapsed');
+  f.setDiffMode('side-by-side');
   f.viewer.render();
   assert.deepEqual(disposed, ['first', 'second']);
-  assert.deepEqual(f.calls[2].options, { original: '', modified: 'second', language: 'plaintext', mode: 'collapsed', autoScroll: false, wrap: false, document: f.document,
+  assert.deepEqual(f.calls[2].options, { original: '', modified: 'second', language: 'plaintext', mode: 'side-by-side', autoScroll: false, wrap: false, document: f.document,
   });
   f.calls[2].resolve(controller('third'));
   await f.calls[2].promise;

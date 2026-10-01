@@ -11,6 +11,10 @@ the structural change is small.
 Every claim below is cited to a primary source (vendor docs, source repos,
 CHANGELOGs, man pages, or first-party issue trackers).
 
+**Current scope:** Collapsed Diff has since been removed. References to PR #15's
+Collapsed mode below are historical; the supported layouts are Inline and
+Side-by-side.
+
 ---
 
 ## 1. Structural/AST diffing mechanics
@@ -271,7 +275,7 @@ top.
   in the standalone `monaco-editor` package the way it does inside VS
   Code proper, despite passing the documented options
   (`enabled`, `revealLineCount`, `minimumLineCount`, `contextLineCount`).
-  Worth a manual smoke-test in Canopy given it's now user-facing.
+  Canopy no longer exposes this option after removing Collapsed Diff.
 
 **Bottom line**: Monaco's "advanced" algorithm is still fundamentally a
 line/word/character-level diff with alignment heuristics — none of the
@@ -340,14 +344,14 @@ refactors, not diff review in general):**
 - **Body**: Frame it explicitly as gated on user-reported pain with the
   PR #15 toggle — i.e. only pick this up after Canopy has been used
   against a handful of real AI-agent refactor sessions and reformatting
-  noise still shows up as a recurring complaint despite `advanced` +
-  Collapsed mode. Note the two viable integration shapes from Section 2
+  noise still shows up as a recurring complaint despite `advanced` and
+  the supported layouts. Note the two viable integration shapes from Section 2
   (difftastic via `execFile` + text pane; GumTree via `execFile` + JSON)
   and that WASM-in-browser tree-sitter is out of scope (conflicts with
   the no-build-step frontend).
 - **Acceptance criteria** (draft):
   1. A new opt-in toolbar mode, e.g. "Structural" alongside
-     Inline/Side-by-side/Collapsed, only enabled when the configured
+     Inline/Side-by-side, only enabled when the configured
      binary is found on `PATH` at startup (no hard runtime dependency
      added for users who don't have it).
   2. Backend: `execFile`s the binary read-only against HEAD vs working

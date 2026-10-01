@@ -31,17 +31,15 @@ test('sidebar exposes only file/range buttons and the always-useful general navi
   assert.equal(renderCommentIndex(document, { threads: [] }, {}).children[0].textContent, 'Comments without a file');
 });
 
-test('File and expanded Diff permit exact ranges; collapsed and unavailable anchors never become general', () => {
+test('valid inline ranges are available; unavailable anchors never become general', () => {
   const state = { activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
     fileContent: { working: 'one\ntwo' }, comments: { threads: [
       { ...thread, file: 'a.js', unavailable: null, line_range: { start: 1, end: 2 } }, thread,
       { id: 'general', messages: [] },
     ] } };
-  for (const mode of ['file', 'diff']) {
-    const result = commentsForView(state, mode, 'inline');
-    assert.equal(result.threads[0].unavailable, null);
-    assert.equal(result.threads[1].file, 'missing.js');
-    assert.equal(Object.hasOwn(result.threads[2], 'file'), false);
-  }
-  assert.match(commentsForView(state, 'diff', 'collapsed').threads[0].unavailable, /Collapsed/);
+  const result = commentsForView(state);
+  assert.equal(result.threads[0].unavailable, null);
+  assert.equal(result.threads[1].file, 'missing.js');
+  assert.equal(result.threads[1].unavailable, 'missing');
+  assert.equal(Object.hasOwn(result.threads[2], 'file'), false);
 });

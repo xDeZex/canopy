@@ -51,10 +51,9 @@ until restart; other available rules still apply and edits remain observable.
 Canopy reads `.canopy/comments.yaml` from the active registered worktree. The left
 sidebar indexes file-attached threads by file and line/range only. Selecting one
 opens its full conversation beneath the exact anchor in **File**, **inline Diff**
-or **side-by-side Diff**. **Collapsed Diff never shows inline comments**, even
-after unfolding; selecting a thread opens its full conversation in the main pane
-instead. Missing, deleted, unavailable and out-of-range anchors also open there
-with their original file/range and a reason, never as general comments.
+or **side-by-side Diff**. Missing, deleted, unavailable and out-of-range anchors
+open in the main pane with their original file/range and a reason, never as
+general comments.
 
 The sidebar's **Comments without a file** button replaces the editor with all
 genuinely general conversations (or an empty explanation). Selecting a file

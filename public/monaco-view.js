@@ -30,21 +30,15 @@ function ensureLoader() {
 // - inline: the original full-file default — one pane, edits highlighted
 //   over the whole file (README: "not a hunk-only diff").
 // - side-by-side: classic two-pane diff.
-// - collapsed: inline, but unchanged regions are folded (expandable),
-//   which is a hunk-*focused* view rather than a hunk-*only* one — full
-//   context is still one click away, unlike the hunk-only view the README
-//   rules out.
-export const DIFF_RENDER_MODES = ['inline', 'side-by-side', 'collapsed'];
+export const DIFF_RENDER_MODES = ['inline', 'side-by-side'];
 
 const DIFF_MODE_OPTIONS = {
   inline: { renderSideBySide: false, hideUnchangedRegions: { enabled: false } },
   'side-by-side': { renderSideBySide: true, hideUnchangedRegions: { enabled: false } },
-  collapsed: { renderSideBySide: false, hideUnchangedRegions: { enabled: true } },
 };
 
-// Shared public code-editor seam for File and the modified pane of expanded
-// Diff. Collapsed Diff never enters this adapter, including after unfolding.
-function createThreadZones(getEditor, { enabled = true, contentAvailable = true, document, ResizeObserver }) {
+// Shared public code-editor seam for File and the modified pane of Diff.
+function createThreadZones(getEditor, { contentAvailable = true, document, ResizeObserver }) {
   let zones = [];
   let disposed = false;
   let snapshot = null;
@@ -60,7 +54,7 @@ function createThreadZones(getEditor, { enabled = true, contentAvailable = true,
   }
   return {
     updateThreads(threads) {
-      if (disposed || !enabled) return;
+      if (disposed) return;
       const nextSnapshot = JSON.stringify(threads);
       if (nextSnapshot === snapshot || (!threads.length && snapshot === null)) return;
       snapshot = nextSnapshot;
@@ -162,9 +156,9 @@ function createThreadZones(getEditor, { enabled = true, contentAvailable = true,
 }
 
 // Mounts a full-file diff: HEAD content vs on-disk content. `mode` selects
-// the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'. With
-// `autoScroll`, the viewport moves to the first change once Monaco has
-// computed the diff (#24).
+// the rendering (see DIFF_RENDER_MODES above); defaults or falls back to
+// 'inline'. With `autoScroll`, the viewport moves to the first change once
+// Monaco has computed the diff (#24).
 // Returns a controller with disposal, hunk navigation, and viewport scrolling.
 export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false,
   threads = [], document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
@@ -182,9 +176,9 @@ export async function mountDiffEditor(container, { original, modified, language,
     // Detects relocated blocks and draws a connecting arrow between the old
     // and new spot instead of an unrelated delete+add pair. Cheap (a native
     // option) and orthogonal to `mode`, so it's always on rather than a
-    // fourth toggle position (#6).
+    // separate toggle position (#6).
     experimental: { showMoves: true },
-    ...DIFF_MODE_OPTIONS[mode],
+    ...DIFF_MODE_OPTIONS[DIFF_RENDER_MODES.includes(mode) ? mode : 'inline'],
   });
 
   const originalModel = monaco.editor.createModel(original ?? '', language);
@@ -192,7 +186,7 @@ export async function mountDiffEditor(container, { original, modified, language,
   editor.setModel({ original: originalModel, modified: modifiedModel });
   let disposed = false;
   const threadZones = createThreadZones(() => editor.getModifiedEditor(), {
-    enabled: mode !== 'collapsed', contentAvailable: modified !== null, document, ResizeObserver,
+    contentAvailable: modified !== null, document, ResizeObserver,
   });
   threadZones.updateThreads(threads);
 

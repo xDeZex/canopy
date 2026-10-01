@@ -1099,10 +1099,9 @@ test('e and d scroll File and all diff views once per keydown, preserving guards
   const diffScrolls = [
     'inline:up', 'inline:down', 'inline:down',
     'side-by-side:up', 'side-by-side:down', 'side-by-side:down',
-    'collapsed:up', 'collapsed:down', 'collapsed:down',
   ];
   assert.deepEqual(scrolled, diffScrolls);
-  assert.equal(prevented, 9, 'guarded diff keys retain their native behavior');
+  assert.equal(prevented, 6, 'guarded diff keys retain their native behavior');
 
   elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn')[1].click();
   await settle();
@@ -1110,18 +1109,18 @@ test('e and d scroll File and all diff views once per keydown, preserving guards
   pressKey('d', readOnlyEvent);
   pressKey('d', { ...readOnlyEvent, repeat: true });
   assert.deepEqual(scrolled, [...diffScrolls, 'file:up', 'file:down', 'file:down']);
-  assert.equal(prevented, 12);
+  assert.equal(prevented, 9);
 
   for (const key of ['e', 'd']) {
     for (const extra of guardedEvents) pressKey(key, { preventDefault: () => prevented++, ...extra });
   }
   assert.deepEqual(scrolled, [...diffScrolls, 'file:up', 'file:down', 'file:down']);
-  assert.equal(prevented, 12, 'guarded keys retain their native behavior');
+  assert.equal(prevented, 9, 'guarded keys retain their native behavior');
 
   elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn')[0].click();
   await settle();
   pressKey('d');
-  assert.deepEqual(scrolled, [...diffScrolls, 'file:up', 'file:down', 'file:down', 'collapsed:down']);
+  assert.deepEqual(scrolled, [...diffScrolls, 'file:up', 'file:down', 'file:down', 'side-by-side:down']);
 });
 
 test('rail divider keyboard and viewport resizing leave the editor mounted and dispose disables resizing', async () => {

@@ -2,7 +2,7 @@ import { collectFiles } from './collect-files.js';
 
 // Never relocate an invalid range onto a convenient line or a synthetic
 // deleted-file model. Unavailable threads stay readable in the main pane.
-export function commentsForView(state, mode, diffMode = 'inline') {
+export function commentsForView(state) {
   const files = new Set(collectFiles(state.fileTree ?? []).map((file) => file.path));
   const threads = (state.comments?.threads ?? []).map((thread) => {
     if (!Object.hasOwn(thread, 'file')) return thread;
@@ -14,7 +14,6 @@ export function commentsForView(state, mode, diffMode = 'inline') {
       else if (!state.fileContent) unavailable = 'Anchor content is loading';
       else if (state.fileContent.working === null) unavailable = 'Deleted file: no modified-side anchor';
       else if (state.viewerError) unavailable = `Inline editor unavailable: ${state.viewerError}`;
-      else if (mode === 'diff' && diffMode === 'collapsed') unavailable = 'Collapsed Diff does not show inline conversations';
       else {
         const lineCount = state.fileContent.working.split(/\r\n|\r|\n/).length;
         if (thread.line_range.end > lineCount) unavailable = `Anchor range is outside modified lines 1–${lineCount}`;
