@@ -233,13 +233,12 @@ export function createWorkspaceUI({
     toolbarCommits = commits;
     toolbarCommitsError = commitsError;
     toolbarLockedSha = lockedSha;
-    const lockedCommit = commits.find((commit) => commit.sha === lockedSha) ?? null;
     const picker = toolbarEl.querySelector('.commit-picker');
-    picker.querySelector('.commit-picker__trigger-sha').textContent = lockedCommit ? lockedCommit.sha.slice(0, 7) : 'HEAD';
-    picker.querySelector('.commit-picker__trigger-label').textContent = lockedCommit ? 'locked' : 'since last commit';
+    picker.querySelector('.commit-picker__trigger-sha').textContent = lockedSha ? lockedSha.slice(0, 7) : 'HEAD';
+    picker.querySelector('.commit-picker__trigger-label').textContent = lockedSha ? 'locked' : 'since last commit';
     const menu = picker.querySelector('.commit-picker__menu');
     const autoItem = document.createElement('div');
-    autoItem.className = `commit-picker__item${lockedCommit ? '' : ' is-selected'}`;
+    autoItem.className = `commit-picker__item${lockedSha ? '' : ' is-selected'}`;
     autoItem.textContent = 'Auto (since last commit)';
     autoItem.addEventListener('click', () => {
       commitLock.setAuto(activePath);

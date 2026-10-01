@@ -171,6 +171,89 @@ test('commit picker locks base, reloads tree and open file, then displays lock a
   assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
 });
 
+test('a stored lock absent from the log stays visible and sends its SHA until explicit Auto', async () => {
+  const f = fixture();
+  const sha = 'abcdef1234567890';
+  f.commitLock.lockCommit('/repo', sha);
+  f.workspace.updateWorktrees([{ path: '/repo', head: 'new-head' }]);
+  const picker = f.toolbarEl.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+  assert.equal(menu.children[0].classList.contains('is-selected'), false);
+  assert.equal(f.requests[0].url, `/api/files?worktree=%2Frepo&ref=${sha}`);
+
+  await f.reply(f.requests[1], [{ sha: 'new-head', message: 'Current history' }]);
+  await f.reply(f.requests[0], [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }]);
+  f.railEl.querySelector('.rail__file').click();
+  await f.reply(f.fileCommitRequests[0], []);
+  assert.equal(f.requests[2].url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
+  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+  assert.equal(menu.children[0].classList.contains('is-selected'), false);
+  assert.equal(f.commitLock.getLockedCommit('/repo'), sha);
+
+  menu.children[0].click();
+  assert.equal(f.commitLock.getLockedCommit('/repo'), null);
+  assert.equal(f.requests[3].url, '/api/files?worktree=%2Frepo');
+  assert.equal(f.requests[4].url, '/api/file-content?worktree=%2Frepo&file=a.txt');
+  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  assert.equal(menu.children[0].classList.contains('is-selected'), true);
+});
+
+test('history changes and working edits preserve an off-log lock, file and open menu while rejecting stale responses', async () => {
+  const f = fixture();
+  const sha = 'abcdef1234567890';
+  await openFile(f);
+  await f.reply(f.fileCommitRequests[0], [{ sha, message: 'Base' }]);
+  f.toolbarEl.querySelector('.commit-picker__item-sha').parentElement.click();
+  await f.reply(f.requests[3], [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }]);
+  await f.reply(f.requests[4], { head: 'locked base', working: 'initial working' });
+  const picker = f.toolbarEl.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  picker.querySelector('.commit-picker__trigger').click();
+
+  for (const head of ['checkout-head', 'rebased-head', 'reset-head']) {
+    const before = f.requests.length;
+    f.workspace.updateWorktrees([{ path: '/repo', branch: 'main', head }]);
+    const [historyTree, historyContent] = f.requests.slice(before);
+    assert.equal(historyTree.url, `/api/files?worktree=%2Frepo&ref=${sha}`);
+    assert.equal(historyContent.url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
+    await f.reply(f.fileCommitRequests.at(-1), [{ sha: head, message: 'New history' }]);
+
+    f.workspace.remoteChange(['a.txt']);
+    const [editTree, editContent] = f.requests.slice(before + 2);
+    assert.equal(editTree.url, `/api/files?worktree=%2Frepo&ref=${sha}`);
+    assert.equal(editContent.url, `/api/file-content?worktree=%2Frepo&file=a.txt&ref=${sha}`);
+    const tree = [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }];
+    const content = { head: 'locked base', working: `working after ${head}` };
+    await f.reply(editTree, tree);
+    await f.reply(editContent, content);
+    if (head === 'rebased-head') {
+      historyTree.resolve({ ok: false, status: 500 });
+      historyContent.resolve({ ok: false, status: 500 });
+      await new Promise((resolve) => setImmediate(resolve));
+    } else {
+      await f.reply(historyTree, []);
+      await f.reply(historyContent, { head: 'wrong base', working: 'stale working' });
+    }
+
+    assert.deepEqual(f.workspace.getState().fileTree, tree);
+    assert.deepEqual(f.workspace.getState().fileContent, content);
+    assert.equal(f.workspace.getState().fileTreeError, null);
+    assert.equal(f.workspace.getState().fileContentError, null);
+    assert.equal(f.workspace.getState().activeFile, 'a.txt');
+    assert.equal(f.commitLock.getLockedCommit('/repo'), sha);
+    assert.equal(f.toolbarEl.querySelector('.commit-picker'), picker);
+    assert.equal(picker.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.classList.contains('is-open'), true);
+    assert.equal(menu.children[0].classList.contains('is-selected'), false);
+    assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+    assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+  }
+});
+
 test('toolbar controls survive commit updates and reset on worktree change', async () => {
   const f = fixture();
   f.workspace.updateWorktrees([{ path: '/a' }, { path: '/b' }]);

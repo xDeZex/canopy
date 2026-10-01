@@ -30,10 +30,8 @@ export async function readFileContent(
   return { head, working };
 }
 
-// `git show` exits 128 both when the path has no version at `ref` (new/untracked
-// file, or a ref that predates the file) and when `ref` itself doesn't resolve
-// (e.g. HEAD in a repo with no commits yet). Either way, there's no content to
-// show for that side. Anything else (git missing, output too large) is real.
+// `git show` exits 128 for missing paths or objects, including an unborn HEAD.
+// Explicit locks must confirm path absence before treating this as missing.
 export function isMissingRefSide(err) {
   return err?.code === 128;
 }
@@ -44,10 +42,22 @@ export function isMissingWorkingSide(err) {
 }
 
 async function readRefContent(worktreePath, filePath, ref, runGit) {
+  // Validate explicit locks outside the missing-file catch. An invalid base
+  // is an error, not an empty file; Auto retains its unborn-HEAD behavior.
+  if (ref !== 'HEAD') {
+    const resolved = await runGit(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], worktreePath);
+    ref = resolved.trim();
+  }
   try {
     return await runGit(['show', `${ref}:${filePath}`], worktreePath, { maxBuffer: 1024 * 1024 * 32 });
   } catch (err) {
-    if (isMissingRefSide(err)) return null;
+    if (isMissingRefSide(err)) {
+      if (ref === 'HEAD') return null;
+      // Match show's root-relative paths, preserve unusual names, and keep
+      // path arguments separate from options. Lookup failures remain errors.
+      const entry = await runGit(['ls-tree', '--full-tree', '-z', ref, '--', filePath], worktreePath);
+      if (entry === '') return null;
+    }
     throw err;
   }
 }

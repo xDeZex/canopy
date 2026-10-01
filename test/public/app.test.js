@@ -339,6 +339,81 @@ test('origin/main SSE refresh moves and removes the open dropdown divider withou
   assert.equal(sources.filter((source) => source.url.startsWith('/api/watch?')).length, 1, 'no worktree stream reconnect');
 });
 
+test('an invalid locked base after a history SSE event shows errors and retains the lock until Auto', async (t) => {
+  const { document, window, elements } = browserStub();
+  const sources = [];
+  const urls = [];
+  const sha = 'abcdef1234567890';
+  let invalid = false;
+  let mounts = 0;
+  class EventSource {
+    constructor(url) { this.url = url; sources.push(this); }
+    addEventListener() {}
+    close() {}
+  }
+  const app = await startApp({
+    document, window, EventSource, now: () => 1000,
+    setInterval: () => 1, clearInterval() {},
+    mountDiffEditor: () => { mounts++; return { dispose() {} }; },
+    fetch: async (url) => {
+      urls.push(url);
+      const { pathname, searchParams } = new URL(url, 'http://localhost');
+      if (invalid && searchParams.has('ref')) return { ok: false, status: 500 };
+      const responses = {
+        '/api/worktrees': [{ path: '/a', head: 'old' }],
+        '/api/files': [{ type: 'file', name: 'f.js', path: 'f.js', status: 'modified' }],
+        '/api/commits': invalid ? [{ sha: 'new', message: 'Rewritten history' }] : [{ sha, message: 'Base' }],
+        '/api/file-content': { head: searchParams.has('ref') ? 'locked base' : 'HEAD base', working: 'working' },
+      };
+      return { ok: true, json: async () => responses[pathname] };
+    },
+  });
+  t.after(() => app.dispose());
+  await settle();
+  elements.rail.querySelector('.rail__file').click();
+  await settle();
+  const picker = elements.toolbar.querySelector('.commit-picker');
+  const menu = picker.querySelector('.commit-picker__menu');
+  menu.querySelector('.commit-picker__item-sha').parentElement.click();
+  await settle();
+  picker.querySelector('.commit-picker__trigger').click();
+  const before = urls.length;
+  invalid = true;
+  sources.find((source) => source.url === '/api/watch-worktrees').onmessage({
+    data: JSON.stringify([{ path: '/a', head: 'new' }]),
+  });
+  const mountedWhileLoading = mounts;
+  await settle();
+
+  assert.deepEqual(urls.slice(before), [
+    `/api/files?worktree=%2Fa&ref=${sha}`,
+    '/api/commits?worktree=%2Fa&file=f.js',
+    `/api/file-content?worktree=%2Fa&file=f.js&ref=${sha}`,
+  ], 'failed locked requests never retry with Auto');
+  assert.equal(elements.rail.querySelector('.rail__message').textContent, 'Failed to load files: request failed with status 500');
+  assert.equal(elements.main.children[0].textContent, 'Failed to load file: request failed with status 500');
+  assert.equal(mounts, mountedWhileLoading, 'failed responses do not mount a comparison');
+  assert.equal(elements.main.classList.contains('main--viewer'), false);
+  assert.equal(elements.toolbar.querySelector('.commit-picker'), picker);
+  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'abcdef1');
+  assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+  assert.equal(menu.children[0].classList.contains('is-selected'), false);
+  assert.equal(menu.classList.contains('is-open'), true);
+  assert.equal(elements.toolbar.querySelector('.viewer__filename').textContent, 'f.js');
+
+  const beforeAuto = urls.length;
+  menu.children[0].click();
+  await settle();
+  assert.deepEqual(urls.slice(beforeAuto), [
+    '/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=f.js',
+  ]);
+  assert.equal(picker.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(picker.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  assert.equal(menu.children[0].classList.contains('is-selected'), true);
+  assert.equal(elements.rail.querySelector('.rail__message'), null);
+  assert.equal(mounts, mountedWhileLoading + 1);
+});
+
 test('initial request failure shows the original error without opening a stream', async () => {
   const { document, window, elements } = browserStub();
   let streams = 0;
