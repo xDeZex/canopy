@@ -12,6 +12,7 @@ Functions should preferably be functional: they compute their result from their 
 
 ## Tests
 
+- Think about the testing trophy when deciding on test seams: favour a few static checks at the base, a thin layer of unit tests for pure logic, the bulk of tests as integration tests that cover several units working together through a public seam, and very few end-to-end tests. Pick the seam where a test gives the most confidence about behaviour, not the one closest to each function. Integration tests here wire real units together and fake only the IO edge.
 - Test functions by giving them inputs and checking the outputs. This is the preferred shape for a test.
 - Tests should not exercise external dependencies or IO (filesystem, network, git, the clock, and so on).
 - Where a test can't avoid them, mocking is acceptable. Better still is to write the code so the logic is separate from the IO, which makes mocking unnecessary. If a test needs a mock, consider first whether the code should be restructured.
