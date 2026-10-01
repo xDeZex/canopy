@@ -4,6 +4,7 @@ Use Conventional Commits for commits pushed to `main`.
 
 Before starting a task or exploration, create a dedicated Git worktree from origin/main and move the OpenCode session into it.
 You are allowed to install existing locked dependencies in worktrees.
+Review changes against the commit the worktree started from.
 
 ## Coding standards
 
