@@ -237,12 +237,40 @@ test('changed-files list shows full paths sorted, status-colored, and opens a fi
   ]);
 
   const rows = f.railEl.querySelectorAll('.changed-files__file');
-  assert.deepEqual(rows.map((row) => row.textContent), ['a.txt', 'src/b.js']);
+  assert.deepEqual(rows.map((row) => row.querySelector('.changed-files__path').textContent), ['a.txt', 'src/b.js']);
   assert.equal(rows[0].classList.contains('status-added'), true);
   assert.equal(rows[1].classList.contains('status-deleted'), true);
 
   rows[1].click();
   assert.equal(f.workspace.getState().activeFile, 'src/b.js');
+});
+
+test('changed-file ages appear beside saved files, not deleted or unknown files, and refresh without replacing rows', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/repo' }]);
+  await f.reply(f.requests[0], [
+    { type: 'dir', name: 'src', path: 'src', children: [
+      { type: 'file', name: 'edited.js', path: 'src/edited.js', status: 'modified', mtimeMs: 500 },
+    ] },
+    { type: 'file', name: 'new.txt', path: 'new.txt', status: 'added', mtimeMs: 800 },
+    { type: 'file', name: 'gone.txt', path: 'gone.txt', status: 'deleted', mtimeMs: 100 },
+    { type: 'file', name: 'unknown.txt', path: 'unknown.txt', status: 'modified' },
+  ]);
+  const rows = f.railEl.querySelectorAll('.changed-files__file');
+  assert.deepEqual(rows.map((row) => row.querySelector('.changed-files__path')?.textContent),
+    ['gone.txt', 'new.txt', 'src/edited.js', 'unknown.txt']);
+  assert.equal(rows[0].querySelector('.changed-files__age'), null);
+  assert.equal(rows[1].querySelector('.changed-files__age').textContent, '200ms ago');
+  assert.equal(rows[2].querySelector('.changed-files__age').textContent, '500ms ago');
+  assert.equal(rows[3].querySelector('.changed-files__age'), null);
+  assert.equal(rows[2].querySelector('.changed-files__age').title, `Last saved edit: ${new Date(500).toLocaleString()}`);
+  rows[2].click();
+  const selected = f.railEl.querySelectorAll('.changed-files__file')[2];
+  assert.equal(selected.classList.contains('is-active'), true);
+  f.ui.updateEditTimes(2000);
+  assert.equal(f.railEl.querySelectorAll('.changed-files__file')[2], selected);
+  assert.equal(selected.querySelector('.changed-files__age').textContent, '1500ms ago');
+  assert.equal(f.workspace.getState().activeFile, 'src/edited.js');
 });
 
 test('changed-files list stays visible with an empty state when nothing changed, the tree is empty, or loading failed', async () => {
@@ -271,7 +299,7 @@ test('changed-files list updates when a watcher event refetches the tree', async
 
   f.workspace.remoteChange(['a.txt']);
   await f.reply(f.requests.at(-1), [{ type: 'file', name: 'a.txt', path: 'a.txt', status: 'modified' }]);
-  assert.deepEqual(f.railEl.querySelectorAll('.changed-files__file').map((row) => row.textContent), ['a.txt']);
+  assert.deepEqual(f.railEl.querySelectorAll('.changed-files__file').map((row) => row.querySelector('.changed-files__path').textContent), ['a.txt']);
   assert.equal(f.railEl.querySelector('.changed-files__empty'), null);
 });
 

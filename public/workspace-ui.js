@@ -27,6 +27,9 @@ export function createWorkspaceUI({
       label.textContent = formatEditTime(timestamp, currentTime);
       label.title = timestamp == null ? 'Last saved edit unknown' : `Last saved edit: ${new Date(timestamp).toLocaleString()}`;
     });
+    railEl.querySelectorAll('.changed-files__age').forEach((label) => {
+      label.textContent = formatEditTime(Number(label.dataset.mtimeMs), currentTime);
+    });
   }
 
   function setEditTimes(timestamps) {
@@ -145,7 +148,22 @@ export function createWorkspaceUI({
       empty.textContent = 'No changed files';
       section.append(empty);
     } else {
-      section.append(...changed.map((node) => renderFileRow(node, node.path, 'rail__file changed-files__file')));
+      section.append(...changed.map((node) => {
+        const row = renderFileRow(node, node.path, 'rail__file changed-files__file');
+        const path = document.createElement('span');
+        path.className = 'changed-files__path';
+        path.textContent = node.path;
+        row.replaceChildren(path);
+        if (node.status !== 'deleted' && Number.isFinite(node.mtimeMs)) {
+          const age = document.createElement('span');
+          age.className = 'changed-files__age';
+          age.dataset.mtimeMs = String(node.mtimeMs);
+          age.textContent = formatEditTime(node.mtimeMs, now());
+          age.title = `Last saved edit: ${new Date(node.mtimeMs).toLocaleString()}`;
+          row.append(age);
+        }
+        return row;
+      }));
     }
     return section;
   }

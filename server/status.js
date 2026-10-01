@@ -7,6 +7,8 @@
 // separate directory walk is needed. See `git status --help`.
 
 import { runGit as defaultRunGit } from './git.js';
+import { stat as defaultStat } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export async function getChangedPaths(worktreePath, ref = 'HEAD', runGit = defaultRunGit) {
   if (ref === 'HEAD') {
@@ -24,13 +26,24 @@ export async function getChangedPaths(worktreePath, ref = 'HEAD', runGit = defau
 }
 
 // The tracked files merged with their changed-path statuses, as a nested tree.
-export async function getFileTree(worktreePath, ref = 'HEAD', runGit = defaultRunGit) {
+export async function getFileTree(worktreePath, ref = 'HEAD', runGit = defaultRunGit, stat = defaultStat) {
   const [changedPaths, lsOut] = await Promise.all([
     getChangedPaths(worktreePath, ref, runGit),
     runGit(['ls-files', '-z'], worktreePath),
   ]);
   const trackedPaths = lsOut.split('\0').filter(Boolean);
-  return nestIntoTree(mergeFileStatuses(trackedPaths, changedPaths));
+  const merged = mergeFileStatuses(trackedPaths, changedPaths);
+  const withTimes = await Promise.all(merged.map(async (entry) => {
+    if (entry.status === 'clean' || entry.status === 'deleted') return entry;
+    try {
+      const { mtimeMs } = await stat(join(worktreePath, entry.path));
+      return Number.isFinite(mtimeMs) ? { ...entry, mtimeMs } : entry;
+    } catch {
+      // A file can disappear between git status and stat; keep its status.
+      return entry;
+    }
+  }));
+  return nestIntoTree(withTimes);
 }
 
 // A ref diff never lists untracked files, so they are appended as additions.
@@ -99,7 +112,7 @@ export function listChangedFiles(mergedEntries) {
 export function nestIntoTree(mergedEntries) {
   const root = new Map();
 
-  for (const { path, status } of mergedEntries) {
+  for (const { path, status, mtimeMs } of mergedEntries) {
     const segments = path.split('/');
     let level = root;
     let prefix = '';
@@ -116,7 +129,7 @@ export function nestIntoTree(mergedEntries) {
         level.set(
           key,
           isFile
-            ? { name: segment, type: 'file', path: prefix, status }
+            ? { name: segment, type: 'file', path: prefix, status, ...(mtimeMs != null ? { mtimeMs } : {}) }
             : { name: segment, type: 'dir', path: prefix, childMap: new Map() }
         );
       }

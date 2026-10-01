@@ -295,10 +295,45 @@ test('getFileTree merges tracked files with changed-path statuses', async () => 
     'ls-files': 'README.md\0src/a.js\0',
   });
 
-  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit), [
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, async () => { throw new Error('ENOENT'); }), [
     { name: 'src', type: 'dir', path: 'src', children: [
       { name: 'a.js', type: 'file', path: 'src/a.js', status: 'modified' },
     ] },
     { name: 'README.md', type: 'file', path: 'README.md', status: 'clean' },
+  ]);
+});
+
+test('getFileTree adds saved edit times only to changed files present on disk', async () => {
+  const { runGit } = fakeGit({
+    status: ' M src/edit.js\n?? new.txt\n D old.txt\n',
+    'ls-files': 'clean.txt\0src/edit.js\0old.txt\0',
+  });
+  const checked = [];
+  const stat = async (path) => {
+    checked.push(path);
+    return { mtimeMs: path.endsWith('edit.js') ? 1234 : 5678 };
+  };
+
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat), [
+    { name: 'src', type: 'dir', path: 'src', children: [
+      { name: 'edit.js', type: 'file', path: 'src/edit.js', status: 'modified', mtimeMs: 1234 },
+    ] },
+    { name: 'clean.txt', type: 'file', path: 'clean.txt', status: 'clean' },
+    { name: 'new.txt', type: 'file', path: 'new.txt', status: 'added', mtimeMs: 5678 },
+    { name: 'old.txt', type: 'file', path: 'old.txt', status: 'deleted' },
+  ]);
+  assert.deepEqual(checked.sort(), ['/wt/new.txt', '/wt/src/edit.js']);
+});
+
+test('getFileTree keeps changed files when their edit time cannot be read', async () => {
+  const { runGit } = fakeGit({ status: ' M missing.txt\n?? present.txt\n', 'ls-files': 'missing.txt\0' });
+  const stat = async (path) => {
+    if (path.endsWith('missing.txt')) throw new Error('ENOENT');
+    return { mtimeMs: 900 };
+  };
+
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat), [
+    { name: 'missing.txt', type: 'file', path: 'missing.txt', status: 'modified' },
+    { name: 'present.txt', type: 'file', path: 'present.txt', status: 'added', mtimeMs: 900 },
   ]);
 });

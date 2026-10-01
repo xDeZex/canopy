@@ -295,8 +295,23 @@ body {
 /* Changed-files rows show the full path, so wrap rather than truncate the
    filename off the end. Reuses .rail__file's colors and highlight. */
 .rail__file.changed-files__file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   white-space: normal;
+}
+
+.changed-files__path {
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.changed-files__age {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* ---------- Main content ---------- */
