@@ -21,8 +21,7 @@ const defaultIo = { ...defaultReadIo, mkdir, rename, rm, writeExclusive };
 
 // The shared revision-checked mutation path for the sidecar. IO, ids and the
 // clock are injected; the logic lives in comments.js. Mutations in this process are serialized per worktree;
-// arbitrary external writers are only guarded by the revision recheck (see
-// docs/review-comments.md).
+// arbitrary external writers are only guarded by the revision recheck.
 export function createCommentStore({ io = defaultIo, newId = randomUUID, now = () => new Date() } = {}) {
   const queues = new Map();
 

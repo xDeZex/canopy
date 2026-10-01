@@ -122,3 +122,34 @@ test('range requests validate their end line against the start', () => {
     assert.ok(validateNewThread({ ...request, line: 7, ...bad }), JSON.stringify(bad));
   }
 });
+
+const headerOf = (text) => text.match(/^(?:#.*\n)+/)[0];
+const schemaExample = (header) => header.match(/^# Schema:\n((?:#  .*\n)+)/m)[1].replace(/^# ?/gm, '');
+
+test('a saved sidecar starts with a comment header that states the contract and still parses', () => {
+  const { source, thread: created } = appendThread(null, request, ids);
+  const header = headerOf(source);
+  for (const rule of [/Append a message/, /author: agent/, /reread the file/, /atomically\s+# rename/, /Never edit in place/,
+    /resolved: true only when the same edit also adds an agent response/]) assert.match(header, rule);
+  assert.deepEqual(parseComments(source), { warning: null, threads: [created] });
+});
+
+test('the schema example in the header is a valid version 1 document, so it cannot drift from the validator', () => {
+  const example = schemaExample(headerOf(appendThread(null, request, ids).source));
+  const { warning, threads } = parseComments(example);
+  assert.equal(warning, null);
+  assert.equal(threads.length, 1);
+  assert.deepEqual(Object.keys(threads[0]), ['id', 'file', 'side', 'line_range', 'created_at', 'resolved', 'messages']);
+});
+
+test('a later save keeps the header exactly once', () => {
+  const first = appendThread(null, request, ids).source;
+  const second = appendThread(first, request, { ...ids, threadId: 'thread-two' }).source;
+  assert.equal(second.match(/Canopy review comments/g).length, 1);
+  assert.equal(parseComments(second).threads.length, 2);
+});
+
+test('unknown fields make the whole file refused rather than repaired', () => {
+  assert.match(parseComments(source([thread({ extra: true })])).warning, /schema/);
+  assert.match(parseComments(JSON.stringify({ version: 1, threads: [], extra: 1 })).warning, /schema/);
+});

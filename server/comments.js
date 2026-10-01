@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Document, parseDocument, visit } from 'yaml';
+import { COMMENTS_HEADER } from './comments-header.js';
 
 const CORE_TAGS = new Set(['str', 'int', 'float', 'bool', 'null', 'map', 'seq']
   .map((name) => `tag:yaml.org,2002:${name}`));
@@ -87,7 +88,7 @@ function serialize(data) {
   visit(doc, { Scalar(_key, node) {
     if (typeof node.value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(node.value)) node.type = 'QUOTE_DOUBLE';
   } });
-  return doc.toString();
+  return `${COMMENTS_HEADER}\n${doc.toString()}`;
 }
 
 // Appends a new user thread to the stored sidecar text and returns the new
