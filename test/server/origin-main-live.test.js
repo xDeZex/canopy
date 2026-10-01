@@ -12,6 +12,7 @@ const refSnapshot = (worktrees) => worktrees.map(({ path, head, branch, originMa
 
 function fixture() {
   let origin = 'aaa';
+  let shared = 'aaa';
   let shadow = null;
   let pending = null;
   const delays = [];
@@ -23,6 +24,12 @@ function fixture() {
       if (shadow !== null && args.at(-1) === 'origin/main^{commit}') return `${shadow}\n`;
       if (origin === null) throw new Error('missing ref');
       return `${origin}\n`;
+    }
+    if (args[0] === 'merge-base') {
+      if (shadow !== null && args.at(-1) === 'origin/main') return `${shadow}\n`;
+      if (origin === null) throw new Error('missing ref');
+      if (shared === 'outside-history') throw new Error('no common ancestor');
+      return `${shared}\n`;
     }
     if (args[0] === 'log') return log;
     throw new Error(`Unexpected Git command: ${args}`);
@@ -45,7 +52,7 @@ function fixture() {
   const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
   return {
     request, gitCalls, delays, settle,
-    setOrigin: (sha) => { origin = sha; },
+    setOrigin: (sha, sharedSha = sha) => { origin = sha; shared = sharedSha; },
     setShadow: (sha) => { shadow = sha; },
     async tick() { const callback = pending; pending = null; await callback(); },
   };
@@ -77,7 +84,38 @@ test('local origin/main movement is streamed at normal cadence with unchanged HE
   const commits = JSON.parse((await f.request('/api/commits?worktree=/linked')).body);
   assert.deepEqual(commits.map(({ sha, isOriginMain }) => [sha, isOriginMain]), [['bbb', true], ['aaa', false]]);
   assert.ok(f.gitCalls.every(({ cwd }) => cwd === '/linked'), 'Git resolves the shared ref from the launch worktree');
-  assert.ok(f.gitCalls.every(({ args }) => ['worktree', 'rev-parse', 'log'].includes(args[0])), 'only local read commands');
+  assert.ok(f.gitCalls.every(({ args }) => ['worktree', 'rev-parse', 'merge-base', 'log'].includes(args[0])), 'only local read commands');
+});
+
+test('advanced origin/main tips stream changes even when the latest shared commit stays unchanged', async (t) => {
+  const f = fixture();
+  f.setOrigin('ccc', 'aaa');
+  const response = await f.request('/api/watch-worktrees');
+  const frames = [];
+  t.after(response.stream.subscribe((frame) => frames.push(frame)));
+  await f.settle();
+  const commits = async () => JSON.parse((await f.request('/api/commits?worktree=/linked')).body);
+  const expected = [
+    { sha: 'bbb', message: 'Local', date: '2026-01-02T00:00:00Z', isOriginMain: false },
+    { sha: 'aaa', message: 'Pushed', date: '2026-01-01T00:00:00Z', isOriginMain: true },
+  ];
+  assert.deepEqual(await commits(), expected);
+  f.setOrigin('ddd', 'aaa');
+  await f.tick();
+  assert.deepEqual(await commits(), expected);
+  assert.deepEqual(frames.map((frame) => refSnapshot(JSON.parse(frame.slice(6)))), [
+    [
+      { path: '/linked', head: 'bbb', branch: 'topic', originMainSha: 'ccc' },
+      { path: '/main', head: 'bbb', branch: 'main', originMainSha: 'ccc' },
+    ],
+    [
+      { path: '/linked', head: 'bbb', branch: 'topic', originMainSha: 'ddd' },
+      { path: '/main', head: 'bbb', branch: 'main', originMainSha: 'ddd' },
+    ],
+  ]);
+  await f.tick();
+  assert.equal(frames.length, 2, 'unchanged remote tip does not emit again');
+  assert.deepEqual(f.delays, [2000, 2000, 2000]);
 });
 
 test('a same-named tag cannot replace the local remote-tracking origin/main ref', async () => {
@@ -90,7 +128,7 @@ test('a same-named tag cannot replace the local remote-tracking origin/main ref'
   assert.deepEqual(commits.map(({ sha, isOriginMain }) => [sha, isOriginMain]), [['bbb', true], ['aaa', false]]);
 });
 
-test('ref creation, deletion and out-of-history movement stream changes without inventing a divider', async (t) => {
+test('ref creation, deletion and movement to unrelated history stream changes without inventing a divider', async (t) => {
   const f = fixture();
   f.setOrigin(null);
   const response = await f.request('/api/watch-worktrees');

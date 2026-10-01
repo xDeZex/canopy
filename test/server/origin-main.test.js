@@ -8,7 +8,7 @@ const commits = [
   { sha: 'c1', message: 'pushed', date: '2025-01-01' },
 ];
 
-test('markOriginMain flags only the commit origin/main points at, keeping every commit in order', () => {
+test('markOriginMain flags only the supplied shared commit, keeping every commit in order', () => {
   const marked = markOriginMain(commits, 'c2');
   assert.deepEqual(marked.map((c) => [c.sha, c.isOriginMain === true]), [
     ['c3', false],
@@ -17,7 +17,7 @@ test('markOriginMain flags only the commit origin/main points at, keeping every 
   ]);
 });
 
-test('markOriginMain leaves commits untouched when origin/main is unknown or outside the history', () => {
+test('markOriginMain leaves commits untouched when the shared commit is unknown or outside the history', () => {
   assert.deepEqual(markOriginMain(commits, null), commits);
   assert.deepEqual(markOriginMain(commits, 'elsewhere'), commits);
 });

@@ -13,7 +13,8 @@ import { worktreeDeletionReason } from './worktree-delete.js';
 // Lists the repo's worktrees with the one containing `repoRoot` first. The
 // local remote-tracking ref is shared by linked worktrees; Git resolves it
 // from repoRoot without inspecting .git paths or contacting the remote.
-// Including it in each snapshot lets the existing poll observe ref-only changes.
+// Including the raw tip in each snapshot lets the existing poll observe
+// ref-only changes even when a worktree's latest shared commit stays unchanged.
 export function createListWorktrees(repoRoot, git = runGit) {
   return async () => {
     const [stdout, originSha] = await Promise.all([

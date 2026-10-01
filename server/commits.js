@@ -30,8 +30,8 @@ export function markTouching(commits, touchingSha) {
   return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
 }
 
-// Flags the commit `origin/main` points at (`originSha`) so the client can draw
-// a divider there. When origin/main is unknown or not in the listed history
+// Flags the latest commit shared with `origin/main` (`originSha`) so the client
+// can draw a divider there. When it is unknown or not in the listed history
 // the commits come back unchanged: no marker rather than a wrong one.
 export function markOriginMain(commits, originSha) {
   if (!commits.some((commit) => commit.sha === originSha)) return commits;
@@ -60,12 +60,23 @@ export async function originMainSha(worktreePath, runGit = defaultRunGit) {
   }
 }
 
+// Latest commit shared by HEAD and origin/main, or null when the ref is
+// missing or the histories are unrelated: only the divider is lost.
+async function sharedOriginMainSha(worktreePath, runGit) {
+  try {
+    const stdout = await runGit(['merge-base', 'HEAD', 'refs/remotes/origin/main'], worktreePath);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listCommits(worktreePath, file, runGit = defaultRunGit) {
   try {
     const [stdout, touching, originSha] = await Promise.all([
       runGit(['log', `--pretty=format:${LOG_FORMAT}`], worktreePath),
       file ? shasTouching(worktreePath, file, runGit) : null,
-      originMainSha(worktreePath, runGit),
+      sharedOriginMainSha(worktreePath, runGit),
     ]);
     const commits = parseCommitLog(stdout);
     return markOriginMain(touching ? markTouching(commits, touching) : commits, originSha);

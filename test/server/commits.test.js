@@ -44,7 +44,7 @@ test('markTouching flags only the shas that touched the file, keeping every comm
   ]);
 });
 
-// A fake runGit: `responses` maps a git subcommand ('log', 'rev-parse') to
+// A fake runGit: `responses` maps a git subcommand ('log', 'merge-base') to
 // its stdout, or to an Error to throw. `--literal-pathspecs` is skipped when
 // finding the subcommand. Every call is recorded in `calls`.
 function fakeGit(responses) {
@@ -62,7 +62,7 @@ const sep = '\x1f';
 const twoCommits = `bbb${sep}second${sep}2026-01-02T00:00:00+00:00\naaa${sep}first${sep}2026-01-01T00:00:00+00:00`;
 
 test('listCommits runs git log in the worktree and parses it', async () => {
-  const { runGit, calls } = fakeGit({ log: twoCommits, 'rev-parse': new Error('no origin') });
+  const { runGit, calls } = fakeGit({ log: twoCommits, 'merge-base': new Error('no origin') });
   const commits = await listCommits('/wt', null, runGit);
 
   assert.deepEqual(commits.map((c) => c.sha), ['bbb', 'aaa']);
@@ -71,7 +71,7 @@ test('listCommits runs git log in the worktree and parses it', async () => {
 });
 
 test('listCommits marks commits touching a file, using literal pathspecs', async () => {
-  const { runGit } = fakeGit({ log: twoCommits, 'rev-parse': new Error('no origin') });
+  const { runGit } = fakeGit({ log: twoCommits, 'merge-base': new Error('no origin') });
   // The file filter is the `--follow` call; it answers with just the shas.
   const commits = await listCommits('/wt', 'a.txt', async (args, cwd) =>
     args.includes('--follow') ? 'aaa\n' : runGit(args, cwd));
@@ -100,15 +100,47 @@ test('listCommits still lists every commit, unmarked, when the file filter fails
   assert.ok(commits.every((c) => !('touchesFile' in c)));
 });
 
-test('listCommits flags the origin/main commit', async () => {
-  const { runGit } = fakeGit({ log: twoCommits, 'rev-parse': 'aaa\n' });
+test('listCommits flags the latest shared commit when origin/main is an ancestor', async () => {
+  const { runGit } = fakeGit({ log: twoCommits, 'merge-base': 'aaa\n' });
   const commits = await listCommits('/wt', null, runGit);
 
   assert.deepEqual(commits.map((c) => c.isOriginMain), [false, true]);
+});
+
+test('listCommits marks the latest shared commit when origin/main advances beyond the worktree history', async () => {
+  const { runGit, calls } = fakeGit({ log: twoCommits, 'rev-parse': 'ccc\n', 'merge-base': 'aaa\n' });
+  const commits = await listCommits('/wt', null, runGit);
+
+  assert.deepEqual(commits, [
+    { sha: 'bbb', message: 'second', date: '2026-01-02T00:00:00+00:00', isOriginMain: false },
+    { sha: 'aaa', message: 'first', date: '2026-01-01T00:00:00+00:00', isOriginMain: true },
+  ]);
+  assert.ok(calls.some(({ args, cwd }) =>
+    cwd === '/wt' && args.join(' ') === 'merge-base HEAD refs/remotes/origin/main'));
 });
 
 test('listCommits returns no commits when git log fails (repo with no commits)', async () => {
   const { runGit } = fakeGit({ log: new Error('does not have any commits yet') });
 
   assert.deepEqual(await listCommits('/wt', null, runGit), []);
+});
+
+test('listCommits keeps every commit without a divider when origin/main is missing', async () => {
+  const { runGit } = fakeGit({ log: twoCommits, 'merge-base': new Error('missing ref') });
+
+  assert.deepEqual(await listCommits('/wt', null, runGit), [
+    { sha: 'bbb', message: 'second', date: '2026-01-02T00:00:00+00:00' },
+    { sha: 'aaa', message: 'first', date: '2026-01-01T00:00:00+00:00' },
+  ]);
+});
+
+test('listCommits preserves file marking without a divider when origin/main has unrelated history', async () => {
+  const { runGit } = fakeGit({ log: twoCommits, 'merge-base': new Error('no common ancestor') });
+  const commits = await listCommits('/wt', 'a.txt', async (args, cwd) =>
+    args.includes('--follow') ? 'aaa\n' : runGit(args, cwd));
+
+  assert.deepEqual(commits, [
+    { sha: 'bbb', message: 'second', date: '2026-01-02T00:00:00+00:00', touchesFile: false },
+    { sha: 'aaa', message: 'first', date: '2026-01-01T00:00:00+00:00', touchesFile: true },
+  ]);
 });
