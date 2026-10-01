@@ -171,6 +171,19 @@ body {
   background: var(--bg-0);
 }
 
+@keyframes tab-flash {
+  from { background: var(--accent); }
+  to { background: transparent; }
+}
+
+.tabs__tab.is-flashing {
+  animation: tab-flash 1s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabs__tab.is-flashing { animation: none; }
+}
+
 .tabs__branch {
   font-weight: 600;
 }

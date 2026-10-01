@@ -800,3 +800,23 @@ test('selecting a file or switching mode moves no toolbar element: nothing is hi
   assert.notEqual(diffToggle.hidden, true);
   assert.equal(diffToggle.classList.contains('is-concealed'), true);
 });
+
+test('a worktree tab flashes when its edit time advances, not on initial seeding', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }, { path: '/b' }]);
+  const [a, b] = f.tabsEl.children;
+  f.ui.setEditTimes({ '/a': 500, '/b': 800 });
+  assert.equal(a.classList.contains('is-flashing'), false);
+  f.ui.setEditTimes({ '/a': 900, '/b': 800 });
+  assert.equal(a.classList.contains('is-flashing'), true);
+  assert.equal(b.classList.contains('is-flashing'), false);
+});
+
+test('a flashing tab keeps flashing after the tabs re-render', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }]);
+  f.ui.setEditTimes({ '/a': 500 });
+  f.ui.setEditTimes({ '/a': 900 });
+  f.ui.renderTabs();
+  assert.equal(f.tabsEl.children[0].classList.contains('is-flashing'), true);
+});

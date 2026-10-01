@@ -1,5 +1,6 @@
 import { changedFiles } from './changed-files.js';
 import { renderCommentIndex } from './comments-view.js';
+import { updatedWorktreePaths } from './tab-flash.js';
 
 function commitDivergence(commits, lockedSha) {
   const originIndex = commits.findIndex((commit) => commit.isOriginMain);
@@ -29,6 +30,7 @@ export function createWorkspaceUI({
   let toolbarCommitsError = null;
   let toolbarLockedSha = null;
   let editTimes = {};
+  const flashingPaths = new Set();
   let deletionBusy = false;
   let deletionMessage = '';
   let commentIndex = null;
@@ -55,9 +57,8 @@ export function createWorkspaceUI({
   }
 
   function updateEditTimes(currentTime = now()) {
-    const { worktrees } = workspace.getState();
-    tabsEl.querySelectorAll('.tabs__tab').forEach((tab, index) => {
-      const timestamp = editTimes[worktrees[index]?.path];
+    tabsEl.querySelectorAll('.tabs__tab').forEach((tab) => {
+      const timestamp = editTimes[tab.dataset.path];
       const label = tab.querySelector('.tabs__edit-time');
       label.textContent = formatEditTime(timestamp, currentTime);
       label.title = timestamp == null ? 'Last saved edit unknown' : `Last saved edit: ${new Date(timestamp).toLocaleString()}`;
@@ -68,9 +69,31 @@ export function createWorkspaceUI({
     updateCommitTimes(currentTime);
   }
 
+  // Restart the flash animation on the tab of each worktree that was just saved to.
+  // Flashing paths are remembered so a tab re-render keeps the flash running.
+  function flashTab(tab, path) {
+    flashingPaths.add(path);
+    tab.classList.remove('is-flashing');
+    void tab.offsetWidth;
+    tab.classList.add('is-flashing');
+    tab.addEventListener('animationend', (event) => {
+      if (event.target !== tab) return;
+      flashingPaths.delete(path);
+      tab.classList.remove('is-flashing');
+    }, { once: true });
+  }
+
+  function flashTabs(paths) {
+    tabsEl.querySelectorAll('.tabs__tab').forEach((tab) => {
+      if (paths.includes(tab.dataset.path)) flashTab(tab, tab.dataset.path);
+    });
+  }
+
   function setEditTimes(timestamps) {
+    const updated = updatedWorktreePaths(editTimes, timestamps);
     editTimes = timestamps;
     updateEditTimes();
+    flashTabs(updated);
   }
 
   function updateTabScrollAffordance() {
@@ -112,10 +135,12 @@ export function createWorkspaceUI({
 
         const tab = document.createElement('button');
         tab.type = 'button';
+        tab.dataset.path = worktree.path;
         tab.className = `tabs__tab${isActive ? ' is-active' : ''}`;
         tab.setAttribute('role', 'tab');
         tab.setAttribute('aria-selected', String(isActive));
         tab.append(branch, pathLabel, editTime);
+        if (flashingPaths.has(worktree.path)) flashTab(tab, worktree.path);
         tab.addEventListener('click', () => workspace.selectWorktree(worktree.path));
         return tab;
       })
