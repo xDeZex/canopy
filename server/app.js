@@ -8,6 +8,7 @@ import { createFanOut } from './fan-out.js';
 import { createRequestHandler } from './handle-request.js';
 import { createActivityFeed } from './worktree-activity.js';
 import { createWorktreeDeletion } from './worktree-delete.js';
+import { createCommentLoader } from './comment-loader.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -23,6 +24,7 @@ export function createApp({
   getFileTree,
   getFileContent,
   listCommits,
+  getComments = createCommentLoader(),
   watchWorktree = defaultDeps.watchWorktree,
   watchWorktreeList,
   activityFeed,
@@ -49,6 +51,7 @@ export function createApp({
     getTree,
     getContent,
     getCommits,
+    getComments,
     watchWorktree,
     subscribeToWorktreeChanges,
     subscribeToActivity: (callback, options) => activity.subscribe(callback, options),

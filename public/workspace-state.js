@@ -28,6 +28,10 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   let treeRequest = 0;
   let contentRequest = 0;
   let commitsRequest = 0;
+  let commentsRequest = 0;
+  let comments = { threads: [], warning: null };
+  let mainView = 'file';
+  let selectedThreadId = null;
 
   async function fetchJson(url) {
     const res = await request(url);
@@ -41,6 +45,8 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   }
 
   function clearFile() {
+    mainView = 'file';
+    selectedThreadId = null;
     activeFile = null;
     fileContent = null;
     fileContentError = null;
@@ -54,6 +60,8 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     // Invalidate outstanding requests even if a previous path is reselected.
     treeRequest++;
     commitsRequest++;
+    commentsRequest++;
+    comments = { threads: [], warning: null };
     fileTree = [];
     fileTreeError = null;
     fileStatusByPath = new Map();
@@ -65,6 +73,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     onChange('rail');
     loadFileTree();
     loadCommits();
+    loadComments();
     return true;
   }
 
@@ -95,6 +104,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     }
     treeResolved = true;
     onChange('rail');
+    if (comments?.threads?.length) onChange('comments');
     if (activeFile && !statusOnly) {
       const previousMode = viewModeStore.getMode();
       // A missing file or failed tree has no status; default to Diff rather
@@ -154,12 +164,60 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     onChange('main');
   }
 
+  async function loadComments() {
+    const generation = ++commentsRequest;
+    const path = activePath;
+    if (!path) return;
+    let next;
+    try {
+      next = await fetchJson(`/api/comments?worktree=${encodeURIComponent(path)}`);
+    } catch (err) {
+      next = { threads: [], warning: `Failed to load comments: ${err.message}` };
+    }
+    if (generation !== commentsRequest) return;
+    if (JSON.stringify(next) === JSON.stringify(comments)) return;
+    comments = next;
+    const selected = (comments?.threads ?? []).find((thread) => thread.id === selectedThreadId);
+    if (!selected) selectedThreadId = null;
+    else if (!Object.hasOwn(selected, 'file')) return showGeneralComments();
+    else if (selected.file !== activeFile) return selectFile(selected.file, selected.id);
+    onChange('comments');
+  }
+
+  function showGeneralComments() {
+    mainView = 'general';
+    selectedThreadId = null;
+    onChange('comments');
+  }
+
+  function selectFile(file, threadId = null) {
+    const returningToFile = mainView !== 'file' || selectedThreadId !== null;
+    mainView = 'file';
+    selectedThreadId = threadId;
+    if (file === activeFile) {
+      if (returningToFile || threadId) onChange('comments');
+      return;
+    }
+    activeFile = file;
+    contentRequest++;
+    if (treeResolved && file) viewModeStore.seed(fileStatusByPath.get(file));
+    fileContent = null;
+    fileContentError = null;
+    // Marks belong to the previous file; drop them until this file's commits load.
+    commits = commits.map(({ touchesFile, ...commit }) => commit);
+    onChange('rail');
+    onChange('toolbar');
+    onChange('main');
+    loadCommits();
+    return loadFileContent();
+  }
+
   return {
     viewModeStore,
     commitLock,
     getState() {
       return { worktrees, activePath, activeFile, fileTree, fileTreeError, fileContent,
-        fileContentError, commits, commitsError };
+        fileContentError, commits, commitsError, comments, mainView, selectedThreadId };
     },
     updateWorktrees(nextWorktrees) {
       const previousActive = worktrees.find((worktree) => worktree.path === activePath);
@@ -187,24 +245,20 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       return knownPaths;
     },
     selectWorktree: switchWorktree,
-    selectFile(file) {
-      if (file === activeFile) return;
-      activeFile = file;
-      contentRequest++;
-      if (treeResolved && file) viewModeStore.seed(fileStatusByPath.get(file));
-      fileContent = null;
-      fileContentError = null;
-      // Marks belong to the previous file; drop them until this file's commits load.
-      commits = commits.map(({ touchesFile, ...commit }) => commit);
-      onChange('rail');
-      onChange('toolbar');
-      onChange('main');
-      loadCommits();
-      return loadFileContent();
+    selectFile,
+    selectThread(id) {
+      const thread = comments.threads.find((thread) => thread.id === id);
+      if (!thread) return;
+      if (!Object.hasOwn(thread, 'file')) return showGeneralComments();
+      return selectFile(thread.file, id);
     },
+    showGeneralComments,
     // A reconnect has no paths: reconcile the tree and any selected content.
     remoteChange(paths = null) {
       loadFileTree();
+      // Any file event can change an anchor's availability; reconnects also
+      // reconcile ignored sidecars that the filesystem watcher did not see.
+      loadComments();
       if (activeFile && (paths === null || paths.includes(activeFile))) loadFileContent();
     },
     // Index changes affect API statuses, not the selected comparison or its
@@ -215,5 +269,6 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     loadFileTree,
     loadCommits,
     loadFileContent,
+    loadComments,
   };
 }

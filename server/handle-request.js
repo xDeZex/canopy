@@ -32,6 +32,7 @@ export function createRequestHandler({
   getTree,
   getContent,
   getCommits,
+  getComments,
   watchWorktree,
   subscribeToWorktreeChanges,
   subscribeToActivity,
@@ -92,6 +93,14 @@ export function createRequestHandler({
 
     if (pathname === '/api/worktrees') {
       return json(200, await getWorktrees());
+    }
+
+    if (pathname === '/api/comments') {
+      const { worktreePath, error } = await resolveWorktree();
+      if (error) return error;
+      const response = json(200, await getComments(worktreePath));
+      response.headers['Cache-Control'] = 'no-store';
+      return response;
     }
 
     if (pathname === '/api/files') {

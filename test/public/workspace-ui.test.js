@@ -32,12 +32,14 @@ function fixture({ now = () => 1000, relativeTime = () => 'recently', treeExpand
   // File-scoped commit refetches (issued on file selection) are tracked apart
   // so tests can keep addressing tree/content requests by position.
   const fileCommitRequests = [];
+  const commentRequests = [];
   let ui;
   const workspace = createWorkspaceStore({
     commitLock, viewModeStore,
     fetch(url) {
       const isFileCommits = url.startsWith('/api/commits') && url.includes('&file=');
-      return new Promise((resolve) => { (isFileCommits ? fileCommitRequests : requests).push({ url, resolve }); });
+      const target = url.startsWith('/api/comments') ? commentRequests : isFileCommits ? fileCommitRequests : requests;
+      return new Promise((resolve) => { target.push({ url, resolve }); });
     },
     onActivePathChanged() {},
     onChange(part) {
@@ -47,6 +49,7 @@ function fixture({ now = () => 1000, relativeTime = () => 'recently', treeExpand
       }
       if (part === 'toolbar') ui.renderToolbar();
       if (part === 'rail') ui.renderRail();
+      if (part === 'comments') ui.refreshComments();
     },
   });
   ui = createWorkspaceUI({
@@ -68,8 +71,24 @@ function fixture({ now = () => 1000, relativeTime = () => 'recently', treeExpand
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ui, workspace, commitLock, viewModeStore, autoScrollStore, navCalls, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, reply, clickOn, documentListeners };
+  return { ui, workspace, commitLock, viewModeStore, autoScrollStore, navCalls, tabsEl, railEl, toolbarEl, requests, fileCommitRequests, commentRequests, reply, clickOn, documentListeners };
 }
+
+test('sidebar comments refresh and navigate even with an empty file tree', async () => {
+  const f = fixture();
+  f.workspace.updateWorktrees([{ path: '/a' }]);
+  f.railEl.querySelector('.comment-index__button').click();
+  assert.equal(f.workspace.getState().mainView, 'general');
+  await f.reply(f.commentRequests[0], { threads: [{ id: 't', file: 'missing.js', line_range: { start: 2, end: 4 }, messages: [{ text: 'Hidden from sidebar' }] }], warning: null });
+  const buttons = f.railEl.querySelectorAll('.comment-index__button');
+  assert.deepEqual(buttons.map((button) => button.textContent), ['Comments without a file', 'missing.js:2–4']);
+  buttons[1].click();
+  assert.equal(f.workspace.getState().activeFile, 'missing.js');
+  assert.equal(f.workspace.getState().selectedThreadId, 't');
+  const mounted = f.railEl.querySelectorAll('.comment-index__button')[1];
+  mounted.click();
+  assert.equal(f.railEl.querySelectorAll('.comment-index__button')[1], mounted, 'same-file reveals preserve the focused sidebar button');
+});
 
 test('Wrap button toggles the file viewer setting in both Diff and File modes', () => {
   const f = fixture();

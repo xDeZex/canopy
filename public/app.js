@@ -74,6 +74,7 @@ export async function startApp({
       }
       if (part === 'rail') ui.renderRail();
       if (part === 'main') viewer.render();
+      if (part === 'comments') { ui.refreshComments(); viewer.refreshComments(); }
       if (part === 'toolbar') ui.renderToolbar();
     },
   });
@@ -242,6 +243,7 @@ export async function startApp({
     railResizer.dispose();
     doc.removeEventListener('keydown', onKeyDown);
     liveUpdates.dispose();
+    viewer.dispose();
     cancel(editTimer);
   };
 

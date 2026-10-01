@@ -45,6 +45,66 @@ class EventSourceStub {
   close() {}
 }
 
+test('sidebar to main navigation retains File preference, same-file mounts and refresh cleanup', async () => {
+  const browser = browserStub();
+  const anchored = { id: 't', file: 'a.js', side: 'modified', line_range: { start: 1, end: 2 },
+    created_at: '2026-10-01T12:00:00Z', resolved: false,
+    messages: [{ id: 'm', author: 'user', text: 'Anchored full text', created_at: '2026-10-01T12:00:00Z' }] };
+  const { file, side, line_range, ...general } = { ...anchored, id: 'g', messages: [{ ...anchored.messages[0], text: 'General full text' }] };
+  let threads = [anchored, general];
+  const sources = [];
+  class EventSource extends EventSourceStub {
+    constructor(url) { super(); this.url = url; sources.push(this); }
+  }
+  const mounts = [];
+  const reveals = [];
+  const updates = [];
+  let disposals = 0;
+  const app = await startApp({ ...browser, EventSource, setInterval: () => 1, clearInterval() {},
+    fetch: async (url) => ({ ok: true, json: async () => {
+      if (url === '/api/worktrees') return [{ path: '/a' }];
+      if (url.startsWith('/api/files')) return [{ type: 'file', name: 'a.js', path: 'a.js', status: 'clean' }];
+      if (url.startsWith('/api/file-content')) return { head: 'one\ntwo', working: 'one\ntwo' };
+      if (url.startsWith('/api/comments')) return { threads, warning: null };
+      return [];
+    } }),
+    mountEditor: async (_container, options) => {
+      mounts.push(options);
+      return { dispose() { disposals++; }, revealThread: (id) => reveals.push(id), updateThreads: (next) => updates.push(next) };
+    },
+    mountDiffEditor() { assert.fail('navigation must retain File preference'); },
+  });
+  try {
+    await settle();
+    const buttons = () => browser.elements.rail.querySelectorAll('.comment-index__button');
+    buttons()[0].click();
+    assert.equal(browser.elements.main.querySelector('.review-thread__text').textContent, 'General full text');
+    buttons()[1].click();
+    await settle();
+    assert.equal(mounts.length, 1);
+    assert.deepEqual(reveals, ['t']);
+    buttons()[1].click();
+    assert.equal(mounts.length, 1);
+    browser.elements.rail.querySelector('.rail__file').click();
+    await settle();
+    assert.equal(mounts.length, 1, 'picking the already-open file returns/stays in the editor without remount');
+    threads = [general];
+    sources.find((source) => source.url.startsWith('/api/watch?')).onmessage({ data: JSON.stringify({ paths: ['.canopy/comments.yaml'] }) });
+    await settle();
+    assert.deepEqual(updates.at(-1), []);
+    assert.equal(buttons().length, 1);
+    buttons()[0].click();
+    assert.equal(disposals, 1);
+    threads = [];
+    sources.find((source) => source.url.startsWith('/api/watch?')).onmessage({ data: JSON.stringify({ paths: ['.canopy/comments.yaml'] }) });
+    await settle();
+    assert.match(browser.elements.main.querySelector('.empty').textContent, /No comments without a file/);
+    browser.elements.rail.querySelector('.rail__file').click();
+    await settle();
+    assert.equal(mounts.length, 2);
+  } finally { app.dispose(); }
+});
+
 test('toolbar ignore preference persists, reconnects live observation, and is available without an active worktree', async () => {
   const saved = new Map();
   const storage = { getItem: (key) => saved.get(key), setItem: (key, value) => saved.set(key, value) };
@@ -706,7 +766,7 @@ test('comparison lock, locked HEAD refresh and working-file edits still update t
     .onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });
   await flushApp();
   assert.deepEqual(urls.slice(beforeEdit), [
-    '/api/files?worktree=%2Fa&ref=older', '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
+    '/api/files?worktree=%2Fa&ref=older', '/api/comments?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
   ]);
   assert.equal(controllers.at(-1).options.modified, 'edited disk');
   assert.equal(controllers.length, 4);
@@ -900,7 +960,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   assert.equal(controllers.at(-1).disposed, true);
   assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
   assert.equal(aSource.closed, true);
-  assert.deepEqual(urls.slice(beforeSwitch), ['/api/files?worktree=%2Fb', '/api/commits?worktree=%2Fb']);
+  assert.deepEqual(urls.slice(beforeSwitch), ['/api/files?worktree=%2Fb', '/api/commits?worktree=%2Fb', '/api/comments?worktree=%2Fb']);
   api.content = { head: 'b base', working: 'b disk' };
   elements.rail.querySelector('.rail__file').click();
   await flushApp();
@@ -910,7 +970,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   const beforeRemoval = urls.length;
   await updateWorktrees([api.worktrees[0]]);
   assert.equal(bSource.closed, true);
-  assert.deepEqual(urls.slice(beforeRemoval), ['/api/files?worktree=%2Fa&ref=older', '/api/commits?worktree=%2Fa']);
+  assert.deepEqual(urls.slice(beforeRemoval), ['/api/files?worktree=%2Fa&ref=older', '/api/commits?worktree=%2Fa', '/api/comments?worktree=%2Fa']);
   assert.equal(elements.tabs.children[0]['aria-selected'], 'true');
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older', 'surviving worktree retains its lock');
   assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
@@ -920,7 +980,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   assert.deepEqual(elements.tabs.children, []);
   const beforeReadd = urls.length;
   await updateWorktrees([{ path: '/a', branch: 're-added', head: 'aaa' }]);
-  assert.deepEqual(urls.slice(beforeReadd), ['/api/files?worktree=%2Fa', '/api/commits?worktree=%2Fa']);
+  assert.deepEqual(urls.slice(beforeReadd), ['/api/files?worktree=%2Fa', '/api/commits?worktree=%2Fa', '/api/comments?worktree=%2Fa']);
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD', 'removed worktree locks are pruned');
   const beforeStaleEvent = urls.length;
   aSource.onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });

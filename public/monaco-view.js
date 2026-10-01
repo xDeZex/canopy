@@ -3,6 +3,7 @@
 // no-build-step approach, same version validated in prototype/ui-layout's
 // throwaway UI (variant D). The mounted controller is tested with a Monaco
 // stub; Monaco's rendering itself is left to manual/visual verification.
+import { renderConversation } from './comments-view.js';
 
 let loaderReady = null;
 
@@ -41,12 +42,132 @@ const DIFF_MODE_OPTIONS = {
   collapsed: { renderSideBySide: false, hideUnchangedRegions: { enabled: true } },
 };
 
+// Shared public code-editor seam for File and the modified pane of expanded
+// Diff. Collapsed Diff never enters this adapter, including after unfolding.
+function createThreadZones(getEditor, { enabled = true, contentAvailable = true, document, ResizeObserver }) {
+  let zones = [];
+  let disposed = false;
+  let snapshot = null;
+  const threadsById = new Map();
+  let foldingDisabled = false;
+  function clearZones(accessor) {
+    for (const zone of zones) {
+      zone.observer?.disconnect();
+      accessor.removeZone(zone.id);
+    }
+    zones = [];
+    threadsById.clear();
+  }
+  return {
+    updateThreads(threads) {
+      if (disposed || !enabled) return;
+      const nextSnapshot = JSON.stringify(threads);
+      if (nextSnapshot === snapshot || (!threads.length && snapshot === null)) return;
+      snapshot = nextSnapshot;
+      const editor = getEditor();
+      // Public folding option prevents native manual folds from relocating a
+      // conversation onto a fold boundary. No folding state or cursor access.
+      const disableFolding = threads.length > 0;
+      if (disableFolding !== foldingDisabled) {
+        editor.updateOptions({ folding: !disableFolding });
+        foldingDisabled = disableFolding;
+      }
+      const count = editor.getModel().getLineCount();
+      const valid = threads.filter((thread) => {
+        const { start, end } = thread.line_range ?? {};
+        return contentAvailable && !thread.unavailable && thread.side === 'modified' &&
+          Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 1 && end >= start && end <= count;
+      });
+      const groups = new Map();
+      for (const thread of valid) {
+        const end = thread.line_range.end;
+        if (!groups.has(end)) groups.set(end, []);
+        groups.get(end).push(thread);
+      }
+      editor.changeViewZones((accessor) => {
+        clearZones(accessor);
+        for (const [end, conversations] of groups) {
+          const node = document.createElement('div');
+          node.className = 'review-zone';
+          const rail = document.createElement('div');
+          rail.className = 'review-zone__rail';
+          const articles = conversations.map((thread) => renderConversation(document, thread));
+          rail.replaceChildren(...articles);
+          node.replaceChildren(rail);
+          node.addEventListener('mousedown', (event) => event.stopPropagation());
+          node.addEventListener('keydown', (event) => event.stopPropagation());
+          const entry = { id: null, top: null };
+          // Monaco 0.45's deletion/alignment zones default to ordinal 10000.
+          // Sorting by ordinal puts this rail directly after the exact anchor,
+          // even when native zones are replaced asynchronously (and at EOF).
+          const zone = { afterLineNumber: end, ordinal: -1, domNode: node, heightInPx: 120, suppressMouseDown: false,
+            onDomNodeTop(top) {
+              if (disposed) return;
+              const absoluteTop = top + editor.getScrollTop();
+              entry.top = absoluteTop >= 0 ? absoluteTop : null;
+            },
+          };
+          entry.id = accessor.addZone(zone);
+          entry.resize = () => {
+            if (disposed || !zones.includes(entry)) return;
+            const measuredHeight = rail.getBoundingClientRect().height;
+            // Offscreen native zones are display:none, not empty conversations.
+            if (measuredHeight <= 0) return;
+            const height = Math.ceil(measuredHeight) + 16;
+            if (height === zone.heightInPx) return;
+            zone.heightInPx = height;
+            editor.changeViewZones((accessor) => accessor.layoutZone(entry.id));
+          };
+          zones.push(entry);
+          conversations.forEach((thread, index) => threadsById.set(thread.id, { thread, article: articles[index], node, entry }));
+          if (ResizeObserver) {
+            entry.observer = new ResizeObserver(entry.resize);
+            entry.observer.observe(rail);
+          }
+        }
+      });
+    },
+    revealThread(id) {
+      const target = threadsById.get(id);
+      if (disposed || !target) return false;
+      const editor = getEditor();
+      const { thread, article, node, entry } = target;
+      const end = thread.line_range.end;
+      // Monaco 0.45's bottom-for-line query uses column 1, so it stops at the
+      // first wrapped segment. The last column plus line height reaches the
+      // exact zone boundary, also at EOF, without including following zones.
+      const anchorTop = editor.getTopForPosition(end, editor.getModel().getLineMaxColumn(end));
+      const anchorBottom = anchorTop + editor.getOption(monaco.editor.EditorOption.lineHeight);
+      // Offscreen native zones are display:none. First expose this zone, then
+      // force public rendering before measuring the chosen article, not the
+      // whole (possibly enormous) code range or the first shared-end thread.
+      editor.setScrollTop(anchorBottom);
+      editor.render();
+      entry.resize();
+      editor.render();
+      const bounds = article.getBoundingClientRect();
+      const articleTop = (entry.top ?? anchorBottom) + bounds.top - node.getBoundingClientRect().top;
+      const layout = editor.getLayoutInfo();
+      const viewport = layout.height - layout.horizontalScrollbarHeight;
+      const contextFits = articleTop + bounds.height - anchorTop <= viewport - 16;
+      editor.setScrollTop(Math.max(0, (contextFits ? anchorTop : articleTop) - 8));
+      return true;
+    },
+    dispose() {
+      disposed = true;
+      threadsById.clear();
+      if (zones.length) getEditor().changeViewZones(clearZones);
+    },
+  };
+}
+
 // Mounts a full-file diff: HEAD content vs on-disk content. `mode` selects
 // the rendering (see DIFF_RENDER_MODES above); defaults to 'inline'. With
 // `autoScroll`, the viewport moves to the first change once Monaco has
 // computed the diff (#24).
 // Returns a controller with disposal, hunk navigation, and viewport scrolling.
-export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false }) {
+export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false,
+  threads = [], document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
@@ -69,6 +190,11 @@ export async function mountDiffEditor(container, { original, modified, language,
   const originalModel = monaco.editor.createModel(original ?? '', language);
   const modifiedModel = monaco.editor.createModel(modified ?? '', language);
   editor.setModel({ original: originalModel, modified: modifiedModel });
+  let disposed = false;
+  const threadZones = createThreadZones(() => editor.getModifiedEditor(), {
+    enabled: mode !== 'collapsed', contentAvailable: modified !== null, document, ResizeObserver,
+  });
+  threadZones.updateThreads(threads);
 
   // Monaco may still be computing the diff immediately after setModel().
   // Start at the first/last hunk and keep navigation local to this mount;
@@ -127,6 +253,7 @@ export async function mountDiffEditor(container, { original, modified, language,
 
   let pendingAutoScroll = autoScroll;
   const diffUpdated = editor.onDidUpdateDiff(() => {
+    if (disposed) return;
     clearMarkers();
     currentLine = null;
     currentChange = null;
@@ -137,12 +264,20 @@ export async function mountDiffEditor(container, { original, modified, language,
   });
 
   return {
+    updateThreads: threadZones.updateThreads,
+    revealThread(id) {
+      if (!threadZones.revealThread(id)) return false;
+      pendingAutoScroll = false;
+      return true;
+    },
     nextChange() { navigate(1); },
     prevChange() { navigate(-1); },
     scrollUp() { scroll(editor.getModifiedEditor(), -1); },
     scrollDown() { scroll(editor.getModifiedEditor(), 1); },
     dispose() {
+      disposed = true;
       diffUpdated.dispose();
+      threadZones.dispose();
       editor.dispose();
       originalModel.dispose();
       modifiedModel.dispose();
@@ -157,7 +292,8 @@ function scroll(editor, direction) {
 
 // Mounts a plain read-only full-file view (File mode). Returns a
 // controller with `dispose()`, `scrollUp()` and `scrollDown()`; no hunks to navigate.
-export async function mountEditor(container, { content, language, wrap = false }) {
+export async function mountEditor(container, { content, language, wrap = false, threads = [],
+  document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
   await ensureLoader();
 
   const editor = monaco.editor.create(container, {
@@ -170,10 +306,15 @@ export async function mountEditor(container, { content, language, wrap = false }
     wordWrap: wrap ? 'on' : 'off',
   });
 
+  const threadZones = createThreadZones(() => editor, { contentAvailable: content !== null, document, ResizeObserver });
+  threadZones.updateThreads(threads);
   return {
+    updateThreads: threadZones.updateThreads,
+    revealThread: threadZones.revealThread,
     scrollUp() { scroll(editor, -1); },
     scrollDown() { scroll(editor, 1); },
     dispose() {
+      threadZones.dispose();
       editor.dispose();
     },
   };

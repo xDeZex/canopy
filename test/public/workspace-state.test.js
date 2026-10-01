@@ -16,6 +16,7 @@ function fixture(savedMode = null) {
   // File-scoped commit refetches (issued on file selection) are tracked apart
   // so tree/content tests can keep addressing `requests` by position.
   const fileCommitRequests = [];
+  const commentRequests = [];
   const changes = [];
   const watches = [];
   const commitLock = createCommitLockStore();
@@ -24,6 +25,10 @@ function fixture(savedMode = null) {
     commitLock, viewModeStore,
     fetch(url) {
       const pending = deferred();
+      if (url.startsWith('/api/comments')) {
+        commentRequests.push({ url, ...pending });
+        return pending.promise;
+      }
       const isFileCommits = url.startsWith('/api/commits') && url.includes('&file=');
       (isFileCommits ? fileCommitRequests : requests).push({ url, ...pending });
       return pending.promise;
@@ -35,11 +40,110 @@ function fixture(savedMode = null) {
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { store, requests, fileCommitRequests, changes, watches, commitLock, viewModeStore, reply };
+  return { store, requests, fileCommitRequests, commentRequests, changes, watches, commitLock, viewModeStore, reply };
 }
 
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
 const list = (paths) => paths.map((path) => ({ path }));
+
+test('comment navigation distinguishes general from unavailable anchors, preserves same-file content and clears removed selections', async () => {
+  const f = fixture('file');
+  f.store.updateWorktrees(list(['/a', '/b']));
+  const anchored = { id: 't', file: 'one', unavailable: 'missing', line_range: { start: 4, end: 8 } };
+  await f.reply(f.commentRequests[0], { threads: [anchored, { id: 'general' }], warning: null });
+  f.store.selectThread('t');
+  assert.equal(f.store.getState().activeFile, 'one');
+  assert.equal(f.store.getState().selectedThreadId, 't');
+  assert.equal(f.store.getState().mainView, 'file');
+  await f.reply(f.requests[2], { head: '', working: 'content' });
+  const content = f.store.getState().fileContent;
+  const count = f.requests.length;
+  f.changes.length = 0;
+  f.store.selectThread('t');
+  assert.equal(f.store.getState().fileContent, content);
+  assert.equal(f.requests.length, count);
+  assert.deepEqual(f.changes, ['comments']);
+  f.store.showGeneralComments();
+  assert.equal(f.store.getState().mainView, 'general');
+  assert.equal(f.viewModeStore.getMode(), 'file');
+  f.store.selectFile('one');
+  assert.equal(f.store.getState().mainView, 'file');
+  assert.equal(f.store.getState().selectedThreadId, null);
+  assert.equal(f.store.getState().fileContent, content);
+  f.store.selectThread('t');
+  f.store.loadComments();
+  await f.reply(f.commentRequests.at(-1), { threads: [], warning: null });
+  assert.equal(f.store.getState().selectedThreadId, null);
+  f.store.showGeneralComments();
+  f.store.selectWorktree('/b');
+  assert.equal(f.store.getState().mainView, 'file');
+  assert.equal(f.store.getState().selectedThreadId, null);
+});
+
+test('refreshing a selected thread follows changed file attachment without accepting stale file content', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  const anchored = { id: 't', file: 'one', line_range: { start: 1, end: 2 } };
+  await f.reply(f.commentRequests[0], { threads: [anchored], warning: null });
+  f.store.selectThread('t');
+  const oldContent = f.requests[2];
+  f.store.loadComments();
+  await f.reply(f.commentRequests.at(-1), { threads: [{ ...anchored, file: 'two' }], warning: null });
+  assert.equal(f.store.getState().activeFile, 'two');
+  assert.equal(f.store.getState().selectedThreadId, 't');
+  await f.reply(oldContent, { head: '', working: 'stale one' });
+  assert.equal(f.store.getState().fileContent, null);
+  await f.reply(f.requests.at(-1), { head: '', working: 'current two' });
+  f.store.loadComments();
+  await f.reply(f.commentRequests.at(-1), { threads: [{ id: 't' }], warning: null });
+  assert.equal(f.store.getState().mainView, 'general');
+  assert.equal(f.store.getState().selectedThreadId, null);
+});
+
+test('comments load per worktree and reject old responses after switch away/back, reload and reconnect', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a', '/b']));
+  assert.equal(f.commentRequests[0].url, '/api/comments?worktree=%2Fa');
+  await f.reply(f.commentRequests[0], { threads: [{ id: 'a' }], warning: null });
+  assert.deepEqual(f.store.getState().comments.threads, [{ id: 'a' }]);
+  f.store.loadComments();
+  const oldA = f.commentRequests.at(-1);
+  f.store.selectWorktree('/b');
+  assert.deepEqual(f.store.getState().comments, { threads: [], warning: null });
+  const oldB = f.commentRequests.at(-1);
+  f.store.selectWorktree('/a');
+  const oldReturn = f.commentRequests.at(-1);
+  f.store.remoteChange();
+  const reconnect = f.commentRequests.at(-1);
+  f.store.remoteChange(['.canopy/comments.yaml']);
+  await f.reply(f.commentRequests.at(-1), { threads: [{ id: 'latest' }], warning: 'warning' });
+  f.changes.length = 0;
+  await f.reply(oldA, { threads: [{ id: 'stale' }], warning: null });
+  oldB.reject(new Error('old error'));
+  await f.reply(oldReturn, { threads: [], warning: null });
+  await f.reply(reconnect, { threads: [], warning: null });
+  assert.deepEqual(f.store.getState().comments, { threads: [{ id: 'latest' }], warning: 'warning' });
+  assert.deepEqual(f.changes, []);
+  f.store.updateWorktrees([]);
+  assert.deepEqual(f.store.getState().comments, { threads: [], warning: null });
+});
+
+test('tree arrival reconciles conversation visibility and current comment failures remain visible until reload', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.commentRequests[0], { threads: [{ id: 't', file: 'a.js' }], warning: null });
+  f.changes.length = 0;
+  await f.reply(f.requests[0], tree('a.js'));
+  assert.deepEqual(f.changes, ['rail', 'comments']);
+  const pending = f.store.loadComments();
+  f.commentRequests.at(-1).reject(new Error('offline'));
+  await pending;
+  assert.match(f.store.getState().comments.warning, /offline/);
+  const reload = f.store.loadComments();
+  await f.reply(f.commentRequests.at(-1), { threads: [], warning: null });
+  await reload;
+  assert.deepEqual(f.store.getState().comments, { threads: [], warning: null });
+});
 
 test('identical refreshed content preserves its identity and does not notify the mounted viewer', async () => {
   const f = fixture('diff');

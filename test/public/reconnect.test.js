@@ -56,6 +56,7 @@ async function fixture() {
         '/api/files': snapshots.tree,
         '/api/file-content': snapshots.content,
         '/api/commits': [{ sha: 'locked', message: 'base', date: '2026-01-01' }],
+        '/api/comments': { threads: [], warning: null },
       };
       if (pathname === '/api/file-content' && snapshots.content.head === null && snapshots.content.working === null) {
         return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
@@ -93,6 +94,7 @@ test('reconnect recovers missed edits, additions and removals while preserving l
   await settle();
   assert.deepEqual(f.requests.slice(before), [
     '/api/files?worktree=%2Fa&ref=locked',
+    '/api/comments?worktree=%2Fa',
     '/api/file-content?worktree=%2Fa&file=open.txt&ref=locked',
   ]);
   for (const selector of ['.rail__tree', '.changed-files']) {

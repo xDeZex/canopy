@@ -26,6 +26,23 @@ function request(method, url) {
 
 const run = (url, method = 'GET', overrides) => makeHandler(overrides)(request(method, url));
 
+test('comments route is read-only, membership-scoped and ignores arbitrary sidecar/file/ref parameters', async () => {
+  const calls = [];
+  const handler = makeHandler({ getComments: async (path) => { calls.push(path); return { threads: [], warning: 'Invalid YAML' }; } });
+  for (const [url, method, status] of [
+    ['/api/comments', 'GET', 400], ['/api/comments?worktree=/unknown', 'GET', 404],
+    ['/api/comments?worktree=/linked', 'POST', 404],
+  ]) assert.equal((await handler(request(method, url))).status, status);
+  assert.deepEqual(calls, []);
+  const result = await handler(request('GET', '/api/comments?worktree=/linked&file=/etc/passwd&ref=other'));
+  assert.equal(result.status, 200);
+  assert.deepEqual(JSON.parse(result.body), { threads: [], warning: 'Invalid YAML' });
+  assert.equal(result.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(calls, ['/linked']);
+  const head = await handler(request('HEAD', '/api/comments?worktree=/linked'));
+  assert.equal(head.body, undefined);
+});
+
 test('deletion preview and confirmed DELETE validate exact membership, origin and custom confirmation header', async () => {
   const calls = [];
   const handler = makeHandler({ worktreeDeletion: {

@@ -1,4 +1,5 @@
 import { changedFiles } from './changed-files.js';
+import { renderCommentIndex } from './comments-view.js';
 
 function commitDivergence(commits, lockedSha) {
   const originIndex = commits.findIndex((commit) => commit.isOriginMain);
@@ -30,6 +31,21 @@ export function createWorkspaceUI({
   let editTimes = {};
   let deletionBusy = false;
   let deletionMessage = '';
+  let commentIndex = null;
+  let commentsSnapshot = null;
+
+  function refreshComments() {
+    const { activePath, comments } = workspace.getState();
+    const snapshot = JSON.stringify([activePath, comments]);
+    if (snapshot === commentsSnapshot) return;
+    commentsSnapshot = snapshot;
+    const next = renderCommentIndex(document, comments ?? {}, {
+      onSelectThread: (id) => workspace.selectThread(id),
+      onGeneralComments: () => workspace.showGeneralComments(),
+    });
+    if (commentIndex) commentIndex.replaceChildren(...next.children);
+    else commentIndex = next;
+  }
 
   function updateCommitTimes(currentTime = now()) {
     const currentDate = new Date(currentTime);
@@ -196,6 +212,7 @@ export function createWorkspaceUI({
   // the tree is empty or failed to load.
   function renderRail() {
     const { fileTree, fileTreeError } = workspace.getState();
+    refreshComments();
     if (fileTreeError || fileTree.length === 0) {
       const message = document.createElement('p');
       message.className = 'empty rail__message';
@@ -203,13 +220,13 @@ export function createWorkspaceUI({
       const tree = document.createElement('div');
       tree.className = 'rail__tree';
       tree.append(message);
-      railEl.replaceChildren(tree, renderChangedFiles());
+      railEl.replaceChildren(tree, renderChangedFiles(), commentIndex);
       return;
     }
     const tree = document.createElement('div');
     tree.className = 'rail__tree';
     tree.append(...fileTree.map((node) => renderNode(node, 0)));
-    railEl.replaceChildren(tree, renderChangedFiles());
+    railEl.replaceChildren(tree, renderChangedFiles(), commentIndex);
   }
 
   // Re-fetch the tree regardless of whether a file is open; the selected
@@ -526,5 +543,5 @@ export function createWorkspaceUI({
     renderToolbar();
   }
 
-  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus, selectComparisonCommit, setEditTimes, updateEditTimes, setDeletionState };
+  return { renderTabs, renderRail, refreshComments, renderToolbar, renderError, closeMenus, selectComparisonCommit, setEditTimes, updateEditTimes, setDeletionState };
 }

@@ -67,11 +67,11 @@ test('switching ignore mode replaces both streams immediately, clears activity a
     '/api/watch?worktree=%2Fa&ignoreGitignore=false', '/api/watch-activity?ignoreGitignore=false',
   ]);
   assert.deepEqual(f.activity, [{ '/a': 500 }, {}]);
-  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=open']);
+  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa', '/api/comments?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=open']);
   file.open();
   file.message({ paths: ['open'] });
   activity.message({ '/a': 1000 });
-  assert.equal(f.requests.length, before + 2);
+  assert.equal(f.requests.length, before + 3);
   f.sources[4].message({ '/a': 100 });
   assert.deepEqual(f.activity.at(-1), { '/a': 100 }, 'new snapshot may be earlier than previous mode');
   f.liveUpdates.setIgnoreGitignore(false);
@@ -94,10 +94,10 @@ test('file stream reconnect refreshes tree and selected content without paths or
   assert.equal(f.requests.length, before, 'initial open uses the already requested workspace');
   source.open();
   assert.deepEqual(f.requests.slice(before), [
-    '/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=open',
+    '/api/files?worktree=%2Fa', '/api/comments?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=open',
   ]);
   source.open();
-  assert.deepEqual(f.requests.slice(before + 2), f.requests.slice(before, before + 2));
+  assert.deepEqual(f.requests.slice(before + 3), f.requests.slice(before, before + 3));
   assert.equal(f.sources.length, 1, 'EventSource owns reconnection, with no replacement stream');
 });
 
@@ -108,7 +108,7 @@ test('reconnect without selection fetches only tree and old opens stay stale thr
   old.open();
   const before = f.requests.length;
   old.open();
-  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa']);
+  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa', '/api/comments?worktree=%2Fa']);
   old.onClose = () => old.open();
   f.workspace.selectWorktree('/b');
   const current = f.sources[1];
@@ -117,7 +117,7 @@ test('reconnect without selection fetches only tree and old opens stay stale thr
   old.open();
   assert.equal(f.requests.length, switched, 'closing and old streams cannot reconcile the new worktree');
   current.open();
-  assert.deepEqual(f.requests.slice(switched), ['/api/files?worktree=%2Fb']);
+  assert.deepEqual(f.requests.slice(switched), ['/api/files?worktree=%2Fb', '/api/comments?worktree=%2Fb']);
   f.workspace.selectWorktree('/a');
   const returned = f.requests.length;
   old.open();
@@ -195,8 +195,8 @@ test('same active path does not reopen; events from closed file streams are igno
   old.message({ paths: ['old.txt'] });
   assert.equal(f.requests.length, before);
   current.message({ paths: ['current.txt'] });
-  assert.equal(f.requests.length, before + 1);
-  assert.equal(f.requests.at(-1), '/api/files?worktree=%2Fb');
+  assert.equal(f.requests.length, before + 2);
+  assert.equal(f.requests.at(-1), '/api/comments?worktree=%2Fb');
 
   f.liveUpdates.dispose();
   f.liveUpdates.dispose();
@@ -204,7 +204,7 @@ test('same active path does not reopen; events from closed file streams are igno
   current.message({ paths: ['later.txt'] });
   f.liveUpdates.connectActive('/a');
   f.liveUpdates.connectWorktrees();
-  assert.equal(f.requests.length, before + 1);
+  assert.equal(f.requests.length, before + 2);
   assert.equal(f.sources.length, 2, 'disposed wiring cannot reconnect');
 });
 
@@ -243,7 +243,7 @@ test('a closing source cannot deliver a change during re-scoping or after return
   old.onClose = () => old.message({ paths: ['during-close.txt'] });
   const before = f.requests.length;
   f.workspace.selectWorktree('/b');
-  assert.equal(f.requests.length, before + 2, 'only the fallback tree and commits were fetched');
+  assert.equal(f.requests.length, before + 3, 'only the fallback tree, commits and comments were fetched');
   f.workspace.selectWorktree('/a');
   const afterReturn = f.requests.length;
   old.message({ paths: ['after-return.txt'] });
