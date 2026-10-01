@@ -51,7 +51,7 @@ export function createApp({
     getCommits,
     watchWorktree,
     subscribeToWorktreeChanges,
-    subscribeToActivity: (callback) => activity.subscribe(callback),
+    subscribeToActivity: (callback, options) => activity.subscribe(callback, options),
     readStatic: readFile,
     publicDir: PUBLIC_DIR,
     worktreeDeletion: worktreeDeletion ?? createWorktreeDeletion(repoRoot),

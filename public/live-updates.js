@@ -1,7 +1,7 @@
 // Owns the SSE connections: repo-wide worktree list and edit activity streams,
 // plus a file stream scoped to the active worktree. The workspace store owns
 // selection and fetching.
-export function createLiveUpdates({ workspace, treeExpansion, EventSource, onActivity }) {
+export function createLiveUpdates({ workspace, treeExpansion, EventSource, onActivity, ignoreGitignore = true }) {
   let activeSource = null;
   let activePath = null;
   let worktreesSource = null;
@@ -16,7 +16,7 @@ export function createLiveUpdates({ workspace, treeExpansion, EventSource, onAct
     previous?.close();
     if (!worktreePath) return;
 
-    const source = new EventSource(`/api/watch?worktree=${encodeURIComponent(worktreePath)}`);
+    const source = new EventSource(`/api/watch?worktree=${encodeURIComponent(worktreePath)}&ignoreGitignore=${ignoreGitignore}`);
     activeSource = source;
     let opened = false;
     source.onopen = () => {
@@ -53,7 +53,7 @@ export function createLiveUpdates({ workspace, treeExpansion, EventSource, onAct
 
   function connectActivity() {
     if (disposed || activitySource) return;
-    const source = new EventSource('/api/watch-activity');
+    const source = new EventSource(`/api/watch-activity?ignoreGitignore=${ignoreGitignore}`);
     activitySource = source;
     source.onmessage = (event) => {
       if (disposed || source !== activitySource) return;
@@ -72,5 +72,24 @@ export function createLiveUpdates({ workspace, treeExpansion, EventSource, onAct
     activitySource = null;
   }
 
-  return { connectActive, connectWorktrees, connectActivity, dispose };
+  function setIgnoreGitignore(enabled) {
+    if (disposed || enabled === ignoreGitignore) return;
+    ignoreGitignore = enabled;
+    const path = activePath;
+    const previousActive = activeSource;
+    const previousActivity = activitySource;
+    activeSource = null;
+    activitySource = null;
+    activePath = null;
+    previousActive?.close();
+    previousActivity?.close();
+    onActivity({});
+    connectActive(path);
+    connectActivity();
+    // Files ignored in the previous mode may have changed while unobserved.
+    // Re-fetch, but never change their visibility or the current selection.
+    if (path) workspace.remoteChange();
+  }
+
+  return { connectActive, connectWorktrees, connectActivity, setIgnoreGitignore, dispose };
 }

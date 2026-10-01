@@ -1,0 +1,71 @@
+import path from 'node:path';
+import { readFileSync, lstatSync } from 'node:fs';
+import ignore from 'ignore';
+
+// Kept for callers of the original bookkeeping predicate. Watch policies apply
+// it only to paths relative to their worktree, never to parent directories.
+export const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
+
+// Evaluate already-loaded ancestor rules in order, without filesystem access
+// or policy-cache mutation. Later negations override earlier exclusions.
+function excludedByAncestors(parts, isDirectory, ancestors) {
+  return ancestors.reduce((excluded, { depth, rules }) => {
+    const candidate = parts.slice(depth).join('/') + (isDirectory ? '/' : '');
+    const result = rules.test(candidate);
+    if (result.ignored) return true;
+    if (result.unignored) return false;
+    return excluded;
+  }, false);
+}
+
+// Chokidar calls ignored before descending into directories. Load only the
+// ancestor rules needed for that decision, and cache them for this watch's
+// lifetime; restarting observation reloads edited .gitignore files.
+export function createWatchPolicy(worktreePath, {
+  ignoreGitignore = true, readFile = readFileSync, stat = lstatSync,
+} = {}) {
+  const root = path.resolve(worktreePath);
+  const rules = new Map();
+  const reported = new Set();
+  // Missing paths are normal during deletes. Genuine IO failures are reported
+  // once and fail open; they are not watcher failures that invalidate activity.
+  function report(file, err) {
+    if (['ENOENT', 'ENOTDIR'].includes(err.code) || reported.has(file)) return;
+    reported.add(file);
+    console.error('canopy: watch policy error', file, err);
+  }
+  function rulesAt(directory) {
+    if (!rules.has(directory)) {
+      const file = path.join(root, directory, '.gitignore');
+      let contents = '';
+      try {
+        if (stat(file).isFile()) contents = readFile(file, 'utf8');
+      }
+      catch (err) { report(file, err); }
+      rules.set(directory, ignore({ ignorecase: false }).add(contents));
+    }
+    return rules.get(directory);
+  }
+
+  return (filePath, stats) => {
+    const normalized = filePath.replaceAll('\\', '/');
+    const relative = path.relative(root, path.resolve(root, normalized)).split(path.sep).join('/');
+    if (!relative || relative === '..' || relative.startsWith('../')) return false;
+    if (IGNORE_GIT_DIR.test(relative)) return true;
+    if (!ignoreGitignore) return false;
+    if (typeof stats?.isDirectory !== 'function') {
+      const file = path.join(root, relative);
+      try { stats = stat(file); }
+      catch (err) { report(file, err); }
+    }
+    const parts = relative.split('/');
+    const ancestors = [];
+    for (let index = 0; index < parts.length; index++) {
+      const directory = parts.slice(0, index).join('/');
+      ancestors.push({ depth: index, rules: rulesAt(directory) });
+      const isDirectory = index < parts.length - 1 || stats?.isDirectory?.() === true;
+      if (excludedByAncestors(parts.slice(0, index + 1), isDirectory, ancestors)) return true;
+    }
+    return false;
+  };
+}

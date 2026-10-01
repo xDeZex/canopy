@@ -1,30 +1,33 @@
 import chokidar from 'chokidar';
 import { pollWorktrees } from './worktree-watch.js';
+import { createWatchPolicy, IGNORE_GIT_DIR } from './watch-policy.js';
 
-// Git's administrative files aren't saved working-tree edits. Everything else,
-// including generated and dependency files, can be edited and must be observed.
+// Legacy bookkeeping predicate; each live watcher uses its worktree policy.
 export function activityIgnored(filePath) {
-  return /(^|[/\\])\.git([/\\]|$)/.test(filePath);
+  return IGNORE_GIT_DIR.test(filePath);
 }
 
 // Seed from the newest existing file mtime during chokidar's initial scan.
 // Subsequent add/change/unlink events are saved edits, including external edits.
-export function watchActivity(worktreePath, onChange, { watch = chokidar.watch, now = Date.now, onError } = {}) {
+export function watchActivity(worktreePath, onChange, {
+  watch = chokidar.watch, now = Date.now, onError, ignoreGitignore = true, readFile, stat,
+} = {}) {
+  const ignored = createWatchPolicy(worktreePath, { ignoreGitignore, readFile, stat });
   let ready = false;
   let closed = false;
   let latest = null;
   let scanFailed = false;
   const watcher = watch(worktreePath, {
-    cwd: worktreePath, ignored: activityIgnored, ignoreInitial: false,
+    cwd: worktreePath, ignored, ignoreInitial: false,
     alwaysStat: true, followSymlinks: false,
   });
-  watcher.on('add', (_path, stats) => {
-    if (closed) return;
+  watcher.on('add', (filePath, stats) => {
+    if (closed || ignored(filePath, stats)) return;
     if (ready) onChange(now());
     else if (!scanFailed && Number.isFinite(stats?.mtimeMs)) latest = Math.max(latest ?? -Infinity, stats.mtimeMs);
   });
   for (const event of ['change', 'unlink']) {
-    watcher.on(event, () => { if (!closed) onChange(now()); });
+    watcher.on(event, (filePath, stats) => { if (!closed && !ignored(filePath, stats)) onChange(now()); });
   }
   watcher.once('ready', () => {
     if (closed) return;
@@ -41,62 +44,75 @@ export function watchActivity(worktreePath, onChange, { watch = chokidar.watch, 
   return { close() { closed = true; return watcher.close(); } };
 }
 
-// One shared poll and one watcher per known non-bare worktree, only while
-// clients are connected. Each subscriber gets the current snapshot on joining.
+// One shared list poll; each observation mode owns its timestamps and watchers.
+// Clients with the same mode share observation, never timestamps across modes.
 export function createActivityFeed(getWorktrees, { poll = pollWorktrees, watchActivity: watch = watchActivity } = {}) {
-  const subscribers = new Set();
-  const watchers = new Map();
-  let timestamps = {};
+  const modes = new Map();
   let polling = null;
-  let initialized = false;
+  let worktrees = null;
 
-  function publish() {
-    for (const subscriber of subscribers) subscriber(timestamps);
+  function publish(mode) {
+    for (const subscriber of mode.subscribers) subscriber(mode.timestamps);
   }
 
-  function updateWorktrees(worktrees) {
+  function updateMode(mode, ignoreGitignore) {
+    const { watchers } = mode;
     const paths = new Set(worktrees.filter((wt) => !wt.bare).map((wt) => wt.path));
-    const next = Object.fromEntries([...paths].map((path) => [path, timestamps[path] ?? null]));
+    const next = Object.fromEntries([...paths].map((path) => [path, mode.timestamps[path] ?? null]));
     for (const [path, watcher] of watchers) {
       if (paths.has(path)) continue;
-      watcher.close();
       watchers.delete(path);
+      watcher.close();
     }
-    timestamps = next;
-    initialized = true;
-    publish();
+    mode.timestamps = next;
+    publish(mode);
     for (const path of paths) {
       if (watchers.has(path)) continue;
       const watcher = watch(path, (time) => {
-        if (!Object.hasOwn(timestamps, path) || watchers.get(path) !== watcher) return;
-        timestamps = { ...timestamps, [path]: Math.max(timestamps[path] ?? -Infinity, time) };
-        publish();
-      }, { onError: () => {
-        if (!Object.hasOwn(timestamps, path) || watchers.get(path) !== watcher) return;
-        timestamps = { ...timestamps, [path]: null };
-        publish();
+        if (!Object.hasOwn(mode.timestamps, path) || watchers.get(path) !== watcher) return;
+        mode.timestamps = { ...mode.timestamps, [path]: Math.max(mode.timestamps[path] ?? -Infinity, time) };
+        publish(mode);
+      }, { ignoreGitignore, onError: () => {
+        if (!Object.hasOwn(mode.timestamps, path) || watchers.get(path) !== watcher) return;
+        mode.timestamps = { ...mode.timestamps, [path]: null };
+        publish(mode);
       } });
       watchers.set(path, watcher);
     }
   }
 
   return {
-    subscribe(callback) {
-      subscribers.add(callback);
-      if (!polling) polling = poll(getWorktrees, updateWorktrees, {
+    subscribe(callback, { ignoreGitignore = true } = {}) {
+      if (!modes.has(ignoreGitignore)) modes.set(ignoreGitignore, {
+        subscribers: new Set(), watchers: new Map(), timestamps: {},
+      });
+      const mode = modes.get(ignoreGitignore);
+      const wasIdle = mode.subscribers.size === 0;
+      mode.subscribers.add(callback);
+      if (worktrees) {
+        if (wasIdle) updateMode(mode, ignoreGitignore);
+        else callback(mode.timestamps);
+      }
+      if (!polling) polling = poll(getWorktrees, (next) => {
+        worktrees = next;
+        for (const [filter, state] of modes) {
+          if (state.subscribers.size) updateMode(state, filter);
+        }
+      }, {
         onError: (err) => console.error('canopy: activity worktree poll error', err),
       });
-      if (initialized) callback(timestamps);
       return () => {
-        subscribers.delete(callback);
-        if (subscribers.size) return;
-        polling.close();
+        mode.subscribers.delete(callback);
+        if (mode.subscribers.size) return;
+        const closing = [...mode.watchers.values()];
+        mode.watchers.clear();
+        for (const watcher of closing) watcher.close();
+        if ([...modes.values()].some((state) => state.subscribers.size)) return;
+        polling?.close();
         polling = null;
-        for (const watcher of watchers.values()) watcher.close();
-        watchers.clear();
         // Preserve observed deletions across SSE reconnects; an initial scan
         // cannot recover the timestamp of a file that no longer exists.
-        initialized = false;
+        worktrees = null;
       };
     },
   };

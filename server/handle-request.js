@@ -42,6 +42,7 @@ export function createRequestHandler({
   return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:' }) {
     const isReadable = method === 'GET' || method === 'HEAD';
     const includeBody = method !== 'HEAD';
+    const ignoreGitignore = searchParams.get('ignoreGitignore') !== 'false';
     const json = (status, body) => jsonResponse(status, body, { includeBody });
 
     // Reject missing and unknown worktrees before any route operates on a
@@ -115,6 +116,7 @@ export function createRequestHandler({
       // needs (see server/watcher.js's header comment).
       return sseResponse(includeBody, (write) => {
         const watcher = watchWorktree(worktreePath, (paths) => write(formatChangeEvent(paths)), {
+          ignoreGitignore,
           onStatusChange: () => write('event: status-invalidated\ndata: {}\n\n'),
         });
         return () => watcher.close();
@@ -136,7 +138,7 @@ export function createRequestHandler({
 
     if (pathname === '/api/watch-activity') {
       return sseResponse(includeBody, (write) => subscribeToActivity(
-        (timestamps) => write(`data: ${JSON.stringify(timestamps)}\n\n`)
+        (timestamps) => write(`data: ${JSON.stringify(timestamps)}\n\n`), { ignoreGitignore }
       ));
     }
 

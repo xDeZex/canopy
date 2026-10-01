@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { watchWorktree, IGNORE_GIT_DIR } from '../../server/watcher.js';
+import { watchActivity } from '../../server/worktree-activity.js';
 
 // A stand-in for a chokidar watcher: tests emit 'add'/'change'/'unlink'
 // themselves, and time only moves when `fire()` runs the pending timer.
@@ -11,6 +12,8 @@ function fakeWatch() {
   return {
     watcher,
     options: {
+      readFile: () => '',
+      stat: () => ({ isDirectory: () => false, isFile: () => true }),
       watch: (path, chokidarOptions) => {
         watcher.watchedWith = { path, chokidarOptions };
         return watcher;
@@ -236,13 +239,82 @@ test('paths under .git are ignored, other paths are not', () => {
   watchWorktree('/wt', recorder(), fake.options);
   const ignored = fake.watcher.watchedWith.chokidarOptions.ignored;
 
-  assert.equal(ignored, IGNORE_GIT_DIR);
+  assert.equal(ignored('.git/index'), true);
   for (const path of ['.git', '.git/index', 'sub/.git/HEAD', '.git\\index']) {
     assert.equal(IGNORE_GIT_DIR.test(path), true, path);
   }
   for (const path of ['a.txt', '.gitignore', '.github/workflows/ci.yml', 'my.git/file']) {
     assert.equal(IGNORE_GIT_DIR.test(path), false, path);
   }
+});
+
+test('gitignore policy prunes dependencies and guards emitted events without losing saved edits', () => {
+  const fake = fakeWatch();
+  const onChange = recorder();
+  watchWorktree('/linked', onChange, { ...fake.options,
+    readFile: (file) => file === '/linked/.gitignore' ? 'deps/\n*.log\n!keep.log\n' : '',
+    stat: () => ({ isDirectory: () => false, isFile: () => true }),
+  });
+  const ignored = fake.watcher.watchedWith.chokidarOptions.ignored;
+  assert.equal(ignored('/linked/deps', { isDirectory: () => true }), true);
+  for (const event of ['add', 'change', 'unlink']) {
+    fake.watcher.emit(event, 'deps/package/file');
+    fake.watcher.emit(event, 'error.log');
+    fake.watcher.emit(event, '.git/index');
+  }
+  assert.equal(fake.hasPending(), false);
+  fake.watcher.emit('change', 'keep.log');
+  fake.watcher.emit('add', 'src/new.js');
+  fake.watcher.emit('unlink', 'src/old.js');
+  fake.fire();
+  assert.deepEqual(onChange.calls, [['keep.log', 'src/new.js', 'src/old.js']]);
+});
+
+test('active and activity watchers observe directory symlinks as links, not ignored target directories', () => {
+  const active = fakeWatch();
+  const activity = fakeWatch();
+  const edits = recorder();
+  const timestamps = [];
+  const options = {
+    readFile: (file) => file === '/wt/.gitignore' ? 'linked/\ndeps/\n' : '',
+    stat: (file) => ({ isDirectory: () => file === '/wt/deps', isSymbolicLink: () => file === '/wt/linked', isFile: () => file.endsWith('/.gitignore') }),
+  };
+  watchWorktree('/wt', edits, { ...active.options, ...options });
+  watchActivity('/wt', (time) => timestamps.push(time), { ...activity.options, ...options });
+  for (const fake of [active, activity]) {
+    const watchOptions = fake.watcher.watchedWith.chokidarOptions;
+    assert.equal(watchOptions.followSymlinks, false, 'never traverse symlink targets');
+    assert.equal(watchOptions.ignored('/wt/linked'), false);
+    assert.equal(watchOptions.ignored('/wt/deps'), true);
+  }
+  active.watcher.emit('add', 'linked');
+  activity.watcher.emit('add', 'linked', { mtimeMs: 500 });
+  activity.watcher.emit('add', 'deps/file', { mtimeMs: 9000 });
+  activity.watcher.emit('ready');
+  active.fire();
+  assert.deepEqual(edits.calls, [['linked']]);
+  assert.deepEqual(timestamps, [500]);
+});
+
+test('rule and path stat failures are logged without escaping watcher events or suppressing edits', (t) => {
+  t.mock.method(console, 'error', () => {});
+  const fake = fakeWatch();
+  const edits = recorder();
+  watchWorktree('/wt', edits, { ...fake.options,
+    stat: (file) => {
+      if (file.endsWith('/.gitignore')) return { isFile: () => true };
+      throw Object.assign(new Error('cannot stat edit'), { code: 'EACCES' });
+    },
+    readFile: () => { throw Object.assign(new Error('cannot read rules'), { code: 'EACCES' }); },
+  });
+  const ignored = fake.watcher.watchedWith.chokidarOptions.ignored;
+  assert.equal(ignored('/wt/edit.txt'), false);
+  for (const event of ['add', 'change', 'unlink']) {
+    assert.doesNotThrow(() => fake.watcher.emit(event, 'edit.txt'));
+  }
+  fake.fire();
+  assert.deepEqual(edits.calls, [['edit.txt']]);
+  assert.equal(console.error.mock.callCount(), 2, 'each failed path and rule file is reported once');
 });
 
 test('close() cancels a pending report and closes the underlying watcher', async () => {

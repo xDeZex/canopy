@@ -9,6 +9,7 @@ import { createWorkspaceUI } from './workspace-ui.js';
 import { mountDiffEditor, mountEditor, languageForPath, DIFF_RENDER_MODES } from './monaco-view.js';
 import { createViewModeStore } from './view-mode.js';
 import { createAutoScrollStore } from './auto-scroll.js';
+import { createWatchPreferenceStore } from './watch-preference.js';
 import { createCommitLockStore } from './commit-lock.js';
 import { formatRelativeTime } from './relative-time.js';
 import { formatEditTime } from './edit-time.js';
@@ -53,6 +54,7 @@ export async function startApp({
   const viewModeStore = createViewModeStore(storage);
   const getWrap = () => wrap ?? (viewModeStore.getMode() === 'file' || diffRenderMode !== 'side-by-side');
   const autoScrollStore = createAutoScrollStore(storage);
+  const watchPreference = createWatchPreferenceStore(storage);
   const commitLock = createCommitLockStore();
   const treeExpansion = createTreeExpansionStore();
   let viewer;
@@ -105,6 +107,12 @@ export async function startApp({
 
   function onAutoScrollChanged(enabled) {
     autoScrollStore.setEnabled(enabled);
+    ui.renderToolbar();
+  }
+
+  function onIgnoreGitignoreChanged(enabled) {
+    watchPreference.setEnabled(enabled);
+    liveUpdates.setIgnoreGitignore(enabled);
     ui.renderToolbar();
   }
 
@@ -171,12 +179,14 @@ export async function startApp({
     DIFF_RENDER_MODES, onViewModeChanged, onDiffRenderModeChanged,
     onAutoScrollChanged, onNextChange: () => viewer.nextChange(), onPrevChange: () => viewer.prevChange(),
     getWrap, onWrapChanged,
+    getIgnoreGitignore: () => watchPreference.isEnabled(), onIgnoreGitignoreChanged,
     onToggleHelp: toggleHelp,
     onDeleteWorktree,
     getDiffRenderMode: () => diffRenderMode,
     document: doc, window: browserWindow,
   });
   liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: EventSourceClass,
+    ignoreGitignore: watchPreference.isEnabled(),
     onActivity: (timestamps) => ui.setEditTimes(timestamps) });
   let editTimer = null;
 

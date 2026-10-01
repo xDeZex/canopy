@@ -55,6 +55,27 @@ test('deletion preview and confirmed DELETE validate exact membership, origin an
   assert.deepEqual(calls, [{ path: '/linked', confirmation: 'signed-snapshot' }]);
 });
 
+test('both observation routes forward the browser ignore mode, defaulting on', async () => {
+  for (const [query, expected] of [['', true], ['&ignoreGitignore=true', true], ['&ignoreGitignore=false', false]]) {
+    const observed = [];
+    const handler = makeHandler({
+      watchWorktree: (_path, _change, options) => {
+        observed.push(options.ignoreGitignore);
+        return { close() {} };
+      },
+      subscribeToActivity: (_change, options) => {
+        observed.push(options.ignoreGitignore);
+        return () => {};
+      },
+    });
+    for (const route of ['/api/watch', '/api/watch-activity']) {
+      const response = await handler(request('GET', `${route}?worktree=/linked${query}`));
+      response.stream.subscribe(() => {})();
+    }
+    assert.deepEqual(observed, [expected, expected]);
+  }
+});
+
 test('/api/worktrees responds with the listed worktrees as JSON', async () => {
   const res = await run('/api/worktrees');
   assert.equal(res.status, 200);

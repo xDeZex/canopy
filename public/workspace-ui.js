@@ -12,6 +12,7 @@ export function createWorkspaceUI({
   onAutoScrollChanged, onNextChange, onPrevChange, onToggleHelp,
   getWrap, onWrapChanged,
   onDeleteWorktree,
+  getIgnoreGitignore = () => true, onIgnoreGitignoreChanged,
   document, window,
 }) {
   let toolbarPath = null;
@@ -393,6 +394,18 @@ export function createWorkspaceUI({
     return button;
   }
 
+  function renderIgnoreButton() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'view-toggle__btn watch-ignore';
+    button.textContent = 'Ignore .gitignore paths';
+    button.title = 'Exclude .gitignore paths from live file updates and saved edit times; files remain visible';
+    button.classList.toggle('is-active', getIgnoreGitignore());
+    button.setAttribute('aria-pressed', String(getIgnoreGitignore()));
+    button.addEventListener('click', () => onIgnoreGitignoreChanged(!getIgnoreGitignore()));
+    return button;
+  }
+
   function createToolbar() {
     const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
@@ -413,7 +426,7 @@ export function createWorkspaceUI({
     const deletionStatus = document.createElement('span');
     deletionStatus.className = 'viewer__deletion-status';
     deletionStatus.setAttribute('role', 'status');
-    right.append(renderChangeNav(), renderDiffModeToggle(), renderWrapButton(), renderDeleteButton(), deletionStatus, renderHelpButton());
+    right.append(renderChangeNav(), renderDiffModeToggle(), renderWrapButton(), renderIgnoreButton(), renderDeleteButton(), deletionStatus, renderHelpButton());
     toolbar.append(left, toggle, right);
     return toolbar;
   }
@@ -422,9 +435,9 @@ export function createWorkspaceUI({
   // Only a worktree change replaces them.
   function renderToolbar() {
     const { activePath, activeFile, commits, commitsError, worktrees } = workspace.getState();
-    toolbarEl.hidden = !activePath;
+    toolbarEl.hidden = false;
     if (!activePath) {
-      toolbarEl.replaceChildren();
+      toolbarEl.replaceChildren(renderIgnoreButton());
       toolbarPath = null;
       toolbarCommits = null;
       return;
@@ -468,6 +481,9 @@ export function createWorkspaceUI({
     const deletionStatus = toolbarEl.querySelector('.viewer__deletion-status');
     deletionStatus.textContent = deletionMessage;
     deletionStatus.hidden = !deletionMessage;
+    const ignoreButton = toolbarEl.querySelector('.watch-ignore');
+    ignoreButton.classList.toggle('is-active', getIgnoreGitignore());
+    ignoreButton.setAttribute('aria-pressed', String(getIgnoreGitignore()));
   }
 
   function renderError(_err) {

@@ -10,6 +10,7 @@ test('initial files seed latest mtime without reporting startup as an edit; edit
   let time = 1000;
   const changes = [];
   watchActivity('/a', (stamp) => changes.push(stamp), {
+    readFile: () => '', stat: () => ({ isDirectory: () => false, isFile: () => true }),
     watch: (_path, opts) => { options = opts; return emitter; }, now: () => time,
   });
   assert.equal(options.ignoreInitial, false);
@@ -30,6 +31,80 @@ test('initial files seed latest mtime without reporting startup as an edit; edit
   assert.equal(activityIgnored('/a/.github/workflows/ci.yml'), false);
 });
 
+test('excluded initial mtimes and later events never count as activity, in either mode', () => {
+  for (const ignoreGitignore of [true, false]) {
+    const emitter = Object.assign(new EventEmitter(), { close() {} });
+    const changes = [];
+    let options;
+    watchActivity('/linked', (time) => changes.push(time), {
+      ignoreGitignore, now: () => 1000,
+      readFile: (file) => file === '/linked/.gitignore' ? 'deps/\n' : '',
+      stat: () => ({ isDirectory: () => false, isFile: () => true }),
+      watch: (_path, opts) => { options = opts; return emitter; },
+    });
+    assert.equal(options.ignored('/linked/deps', { isDirectory: () => true }), ignoreGitignore);
+    emitter.emit('add', '.git/index', { mtimeMs: 9000 });
+    emitter.emit('add', 'deps/bundle', { mtimeMs: 500 });
+    emitter.emit('add', 'src/file', { mtimeMs: 100 });
+    emitter.emit('ready');
+    assert.deepEqual(changes, [ignoreGitignore ? 100 : 500]);
+    for (const event of ['add', 'change', 'unlink']) {
+      emitter.emit(event, '.git/index');
+      emitter.emit(event, 'deps/bundle');
+      emitter.emit(event, 'src/file');
+    }
+    assert.deepEqual(changes, [ignoreGitignore ? 100 : 500, ...Array(ignoreGitignore ? 3 : 6).fill(1000)]);
+  }
+});
+
+test('mtime-only initial stats use the same directory and symlink classification as the scan predicate', () => {
+  const emitter = Object.assign(new EventEmitter(), { close() {} });
+  const changes = [];
+  let options;
+  watchActivity('/a', (stamp) => changes.push(stamp), {
+    readFile: (file) => file === '/a/.gitignore' ? 'deps/\nlinked/\n' : '',
+    stat: (file) => ({
+      isFile: () => file.endsWith('/.gitignore'),
+      isDirectory: () => file === '/a/deps',
+      isSymbolicLink: () => file === '/a/linked',
+    }),
+    watch: (_path, opts) => { options = opts; return emitter; },
+  });
+  assert.equal(options.ignored('/a/deps'), true);
+  assert.equal(options.ignored('/a/linked'), false);
+  emitter.emit('add', 'deps', { mtimeMs: 9000 });
+  emitter.emit('add', 'linked', { mtimeMs: 500 });
+  emitter.emit('ready');
+  assert.deepEqual(changes, [500]);
+});
+
+test('policy IO diagnostics preserve initial and later activity without signaling a failed watcher', (t) => {
+  t.mock.method(console, 'error', () => {});
+  for (const operation of ['read', 'stat']) {
+    const emitter = Object.assign(new EventEmitter(), { close() {} });
+    const changes = [];
+    const errors = [];
+    watchActivity('/a', (stamp) => changes.push(stamp), {
+      now: () => 1000, onError: (err) => errors.push(err),
+      stat: (file) => {
+        if (file === '/a/.gitignore' && operation === 'read') return { isFile: () => true };
+        throw Object.assign(new Error('cannot stat path'), { code: 'EACCES' });
+      },
+      readFile: () => { throw Object.assign(new Error('cannot read rules'), { code: 'EISDIR' }); },
+      watch: () => emitter,
+    });
+    emitter.emit('add', 'saved.txt', { mtimeMs: 500 });
+    emitter.emit('ready');
+    assert.deepEqual(changes, [500]);
+    for (const event of ['add', 'change', 'unlink']) {
+      assert.doesNotThrow(() => emitter.emit(event, 'saved.txt'));
+    }
+    assert.deepEqual(changes, [500, 1000, 1000, 1000]);
+    assert.deepEqual(errors, [], 'rule configuration failure is not a scan failure');
+  }
+  assert.equal(console.error.mock.callCount(), 4, 'one diagnostic per failed path and cached rule file');
+});
+
 test('watcher errors report failure and invalidate an incomplete initial scan', (t) => {
   t.mock.method(console, 'error', () => {});
   const emitter = new EventEmitter();
@@ -37,6 +112,7 @@ test('watcher errors report failure and invalidate an incomplete initial scan', 
   const changes = [];
   const errors = [];
   watchActivity('/a', (stamp) => changes.push(stamp), {
+    readFile: () => '', stat: () => ({ isDirectory: () => false, isFile: () => true }),
     watch: () => emitter, onError: (err) => errors.push(err),
   });
   emitter.emit('add', 'old', { mtimeMs: 500 });
@@ -110,4 +186,47 @@ test('activity feed tracks every non-bare worktree, retains timestamps on list c
   listChanged([{ path: '/b' }, { path: '/c' }]);
   assert.deepEqual(afterReconnect.at(-1), { '/b': 500, '/c': null });
   closeAgain();
+});
+
+test('activity modes have independent snapshots and watchers but share worktree polling', () => {
+  let listChanged;
+  let polls = 0;
+  let pollClosed = 0;
+  const watchers = [];
+  const feed = createActivityFeed(() => [], {
+    poll: (_list, callback) => { polls++; listChanged = callback; return { close: () => pollClosed++ }; },
+    watchActivity: (path, change, options) => {
+      const watcher = { path, change, ...options, closed: false, close() { this.closed = true; } };
+      watchers.push(watcher);
+      return watcher;
+    },
+  });
+  const filtered = [];
+  const all = [];
+  const closeFiltered = feed.subscribe((snapshot) => filtered.push(snapshot));
+  listChanged([{ path: '/linked' }]);
+  const closeAll = feed.subscribe((snapshot) => all.push(snapshot), { ignoreGitignore: false });
+  assert.equal(polls, 1);
+  assert.equal(watchers.length, 2);
+  assert.equal(watchers[0].ignoreGitignore, true);
+  assert.equal(watchers[1].ignoreGitignore, false);
+  watchers[0].change(100);
+  watchers[1].change(900);
+  assert.deepEqual(filtered.at(-1), { '/linked': 100 });
+  assert.deepEqual(all.at(-1), { '/linked': 900 });
+  watchers[0].close = function () { this.closed = true; this.change(5000); };
+  closeFiltered();
+  assert.equal(watchers[0].closed, true);
+  assert.equal(watchers[1].closed, false);
+  const returned = [];
+  const closeReturned = feed.subscribe((snapshot) => returned.push(snapshot));
+  assert.deepEqual(returned.at(-1), { '/linked': 100 });
+  watchers[0].change(5000);
+  watchers[0].onError(new Error('stale'));
+  assert.deepEqual(returned.at(-1), { '/linked': 100 });
+  closeAll();
+  assert.equal(pollClosed, 0);
+  closeReturned();
+  assert.equal(pollClosed, 1);
+  assert.ok(watchers.every((watcher) => watcher.closed));
 });

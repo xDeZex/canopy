@@ -9,12 +9,13 @@
 import chokidar from 'chokidar';
 import path from 'node:path';
 import { runGit as defaultRunGit } from './git.js';
+import { createWatchPolicy } from './watch-policy.js';
+export { IGNORE_GIT_DIR } from './watch-policy.js';
 
 const DEFAULT_DEBOUNCE_MS = 150;
 
 // Keep bookkeeping out of file-edit notifications. The resolved index is
 // observed separately: it invalidates status, not HEAD-versus-disk content.
-export const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
 
 // `watch`, `setTimer` and `clearTimer` default to chokidar and the real
 // timers; they exist so tests can drive events and time by hand.
@@ -22,8 +23,10 @@ export function watchWorktree(
   worktreePath,
   onChange,
   { debounceMs = DEFAULT_DEBOUNCE_MS, watch = chokidar.watch, setTimer = setTimeout,
-    clearTimer = clearTimeout, runGit = defaultRunGit, onStatusChange } = {},
+    clearTimer = clearTimeout, runGit = defaultRunGit, onStatusChange,
+    ignoreGitignore = true, readFile, stat } = {},
 ) {
+  const ignored = createWatchPolicy(worktreePath, { ignoreGitignore, readFile, stat });
   const changedPaths = new Set();
   let timer = null;
   let statusTimer = null;
@@ -39,6 +42,7 @@ export function watchWorktree(
   };
 
   const schedule = (relativePath) => {
+    if (closed || ignored(relativePath)) return;
     changedPaths.add(relativePath);
     clearTimer(timer);
     timer = setTimer(flush, debounceMs);
@@ -76,8 +80,9 @@ export function watchWorktree(
 
   const watcher = watch(worktreePath, {
     cwd: worktreePath,
-    ignored: IGNORE_GIT_DIR,
+    ignored,
     ignoreInitial: true,
+    followSymlinks: false,
   });
 
   watcher.on('add', schedule);

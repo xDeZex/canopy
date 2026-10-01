@@ -45,6 +45,47 @@ class EventSourceStub {
   close() {}
 }
 
+test('toolbar ignore preference persists, reconnects live observation, and is available without an active worktree', async () => {
+  const saved = new Map();
+  const storage = { getItem: (key) => saved.get(key), setItem: (key, value) => saved.set(key, value) };
+  async function launch(worktrees) {
+    const browser = browserStub();
+    browser.window.localStorage = storage;
+    const sources = [];
+    class EventSource {
+      constructor(url) { this.url = url; this.closed = false; sources.push(this); }
+      addEventListener() {}
+      close() { this.closed = true; }
+    }
+    const app = await startApp({
+      ...browser, EventSource,
+      fetch: async (url) => ({ ok: true, json: async () => url === '/api/worktrees' ? worktrees : [] }),
+      now: () => 1000, setInterval: () => 1, clearInterval: () => {},
+    });
+    return { ...browser, app, sources };
+  }
+  const first = await launch([{ path: '/linked' }]);
+  const toggle = first.elements.toolbar.querySelector('.watch-ignore');
+  assert.ok(toggle);
+  assert.equal(toggle.textContent, 'Ignore .gitignore paths');
+  assert.equal(toggle['aria-pressed'], 'true');
+  assert.ok(first.sources.find((source) => source.url === '/api/watch-activity?ignoreGitignore=true'));
+  toggle.click();
+  assert.equal(toggle['aria-pressed'], 'false');
+  assert.ok(first.sources.find((source) => source.url === '/api/watch?worktree=%2Flinked&ignoreGitignore=false'));
+  assert.ok(first.sources.find((source) => source.url === '/api/watch-activity?ignoreGitignore=false'));
+  assert.equal(first.sources.filter((source) => source.closed).length, 2);
+  first.app.dispose();
+  const second = await launch([]);
+  const emptyToggle = second.elements.toolbar.querySelector('.watch-ignore');
+  assert.equal(second.elements.toolbar.hidden, false);
+  assert.equal(emptyToggle['aria-pressed'], 'false');
+  emptyToggle.click();
+  assert.equal(second.elements.toolbar.querySelector('.watch-ignore')['aria-pressed'], 'true');
+  assert.equal(second.sources.at(-1).url, '/api/watch-activity?ignoreGitignore=true');
+  second.app.dispose();
+});
+
 test('index startup reconciliation and later operations update both rails without reloading content or closing menus', async () => {
   const { document, window, elements } = browserStub();
   const watched = new Map();
@@ -79,6 +120,7 @@ test('index startup reconciliation and later operations update both rails withou
     getCommits: async () => [{ sha: 'unchanged', message: 'same commit', date: '2026-01-01' }],
     watchWorktree: (path, onChange, options) => watchWorktree(path, onChange, {
       ...options, runGit,
+      readFile: () => '', stat: () => ({ isDirectory: () => false, isFile: () => true }),
       watch: (target) => {
         const watcher = Object.assign(new EventEmitter(), { close: async () => {} });
         watched.set(target, watcher);
@@ -224,9 +266,9 @@ test('startup renders an empty workspace and opens the repo-wide stream after lo
       },
     });
     assert.deepEqual(urls, ['/api/worktrees']);
-    assert.deepEqual(sources.map((source) => source.url), ['/api/watch-worktrees', '/api/watch-activity']);
+    assert.deepEqual(sources.map((source) => source.url), ['/api/watch-worktrees', '/api/watch-activity?ignoreGitignore=true']);
     assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
-    assert.equal(elements.toolbar.hidden, true);
+    assert.equal(elements.toolbar.hidden, false);
     sources[0].onmessage({ data: '[]' });
     assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
     app.dispose();
@@ -253,7 +295,7 @@ test('activity stream updates inactive tabs and elapsed labels tick without repl
     clearInterval: (id) => { cleared = id; },
   });
   const tab = elements.tabs.children[1];
-  sources.find((source) => source.url === '/api/watch-activity').onmessage({ data: JSON.stringify({ '/a': null, '/b': 940_000 }) });
+  sources.find((source) => source.url === '/api/watch-activity?ignoreGitignore=true').onmessage({ data: JSON.stringify({ '/a': null, '/b': 940_000 }) });
   assert.equal(tab.querySelector('.tabs__edit-time').textContent, '1m ago');
   tick();
   assert.equal(elements.tabs.children[1], tab);
@@ -302,7 +344,7 @@ test('commit ages share the single app interval across repeated menu opens and d
     const children = [...menu.children];
     const label = menu.querySelector('.commit-picker__item-time');
     const tab = elements.tabs.children[0];
-    sources.find((source) => source.url === '/api/watch-activity').onmessage({ data: JSON.stringify({ '/a': timestamp }) });
+    sources.find((source) => source.url === '/api/watch-activity?ignoreGitignore=true').onmessage({ data: JSON.stringify({ '/a': timestamp }) });
     assert.equal(label.textContent, 'just now');
     trigger.click();
     const requests = urls.length;
@@ -660,7 +702,7 @@ test('comparison lock, locked HEAD refresh and working-file edits still update t
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
   const beforeEdit = urls.length;
   api.content = { head: 'older base', working: 'edited disk' };
-  sources.find((source) => source.url === '/api/watch?worktree=%2Fa')
+  sources.find((source) => source.url === '/api/watch?worktree=%2Fa&ignoreGitignore=true')
     .onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });
   await flushApp();
   assert.deepEqual(urls.slice(beforeEdit), [
@@ -686,7 +728,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   assert.equal(controllers.at(-1).options.modified, 'g disk');
   elements.toolbar.querySelector('.commit-picker__menu').querySelectorAll('.commit-picker__item').at(-1).click();
   await flushApp();
-  const aSource = sources.find((source) => source.url === '/api/watch?worktree=%2Fa');
+  const aSource = sources.find((source) => source.url === '/api/watch?worktree=%2Fa&ignoreGitignore=true');
   const beforeSwitch = urls.length;
   elements.tabs.children[1].click();
   await flushApp();
@@ -699,7 +741,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   await flushApp();
   assert.equal(controllers.at(-1).options.original, 'b base');
   assert.equal(controllers.at(-1).options.modified, 'b disk');
-  const bSource = sources.find((source) => source.url === '/api/watch?worktree=%2Fb');
+  const bSource = sources.find((source) => source.url === '/api/watch?worktree=%2Fb&ignoreGitignore=true');
   const beforeRemoval = urls.length;
   await updateWorktrees([api.worktrees[0]]);
   assert.equal(bSource.closed, true);
@@ -709,7 +751,7 @@ test('file and worktree selection refresh viewers and active removal falls back 
   assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
   await updateWorktrees([]);
   assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
-  assert.equal(elements.toolbar.hidden, true);
+  assert.equal(elements.toolbar.hidden, false);
   assert.deepEqual(elements.tabs.children, []);
   const beforeReadd = urls.length;
   await updateWorktrees([{ path: '/a', branch: 're-added', head: 'aaa' }]);

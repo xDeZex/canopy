@@ -46,6 +46,44 @@ function fixture() {
   return { sources, requests, activity, workspace, treeExpansion, liveUpdates, list };
 }
 
+test('switching ignore mode replaces both streams immediately, clears activity and reconciles files', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees(f.list('/a'));
+  f.workspace.selectFile('open');
+  f.liveUpdates.connectWorktrees();
+  f.liveUpdates.connectActivity();
+  const [file, repo, activity] = f.sources;
+  assert.equal(file.url, '/api/watch?worktree=%2Fa&ignoreGitignore=true');
+  assert.equal(activity.url, '/api/watch-activity?ignoreGitignore=true');
+  activity.message({ '/a': 500 });
+  file.onClose = () => file.message({ paths: ['open'] });
+  activity.onClose = () => activity.message({ '/a': 900 });
+  const before = f.requests.length;
+  f.liveUpdates.setIgnoreGitignore(false);
+  assert.equal(file.closeCount, 1);
+  assert.equal(activity.closeCount, 1);
+  assert.equal(repo.closeCount, 0);
+  assert.deepEqual(f.sources.slice(3).map((source) => source.url), [
+    '/api/watch?worktree=%2Fa&ignoreGitignore=false', '/api/watch-activity?ignoreGitignore=false',
+  ]);
+  assert.deepEqual(f.activity, [{ '/a': 500 }, {}]);
+  assert.deepEqual(f.requests.slice(before), ['/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=open']);
+  file.open();
+  file.message({ paths: ['open'] });
+  activity.message({ '/a': 1000 });
+  assert.equal(f.requests.length, before + 2);
+  f.sources[4].message({ '/a': 100 });
+  assert.deepEqual(f.activity.at(-1), { '/a': 100 }, 'new snapshot may be earlier than previous mode');
+  f.liveUpdates.setIgnoreGitignore(false);
+  assert.equal(f.sources.length, 5, 'unchanged mode does not reconnect');
+  f.liveUpdates.setIgnoreGitignore(true);
+  f.sources[4].message({ '/a': 2000 });
+  assert.deepEqual(f.activity.at(-1), {});
+  f.liveUpdates.dispose();
+  f.liveUpdates.setIgnoreGitignore(false);
+  assert.equal(f.sources.length, 7, 'disposed mode changes cannot reopen');
+});
+
 test('file stream reconnect refreshes tree and selected content without paths or worktree replay', () => {
   const f = fixture();
   f.workspace.updateWorktrees([{ path: '/a', head: 'unchanged' }]);
@@ -96,7 +134,7 @@ test('activity stream opens once, forwards snapshots and ignores delivery during
   const f = fixture();
   f.liveUpdates.connectActivity();
   const activitySource = f.sources[0];
-  assert.equal(activitySource.url, '/api/watch-activity');
+  assert.equal(activitySource.url, '/api/watch-activity?ignoreGitignore=true');
   f.liveUpdates.connectActivity();
   assert.equal(f.sources.length, 1);
   activitySource.message({ '/a': 123, '/b': null });
@@ -116,20 +154,20 @@ test('removed active worktree falls back and re-scopes the file watch; expansion
   f.liveUpdates.connectWorktrees();
   const first = f.sources[0];
   const repo = f.sources[1];
-  assert.equal(first.url, '/api/watch?worktree=%2Fa');
+  assert.equal(first.url, '/api/watch?worktree=%2Fa&ignoreGitignore=true');
   assert.equal(repo.url, '/api/watch-worktrees');
 
   f.workspace.selectWorktree('/b');
   const second = f.sources[2];
   assert.equal(first.closeCount, 1);
-  assert.equal(second.url, '/api/watch?worktree=%2Fb');
+  assert.equal(second.url, '/api/watch?worktree=%2Fb&ignoreGitignore=true');
   f.treeExpansion.toggle('/a', 'src');
   f.treeExpansion.toggle('/b', 'src');
 
   repo.message(f.list('/a'));
   assert.equal(f.workspace.getState().activePath, '/a');
   assert.equal(second.closeCount, 1);
-  assert.equal(f.sources[3].url, '/api/watch?worktree=%2Fa');
+  assert.equal(f.sources[3].url, '/api/watch?worktree=%2Fa&ignoreGitignore=true');
   assert.equal(f.treeExpansion.isExpanded('/a', 'src'), true);
   assert.equal(f.treeExpansion.isExpanded('/b', 'src'), false);
   assert.equal(repo.closeCount, 0);
@@ -142,7 +180,7 @@ test('removed active worktree falls back and re-scopes the file watch; expansion
   assert.equal(repo.closeCount, 0, 'repo-wide watch remains open even without worktrees');
   repo.message(f.list('/new path'));
   assert.equal(f.workspace.getState().activePath, '/new path');
-  assert.equal(f.sources[4].url, '/api/watch?worktree=%2Fnew%20path');
+  assert.equal(f.sources[4].url, '/api/watch?worktree=%2Fnew%20path&ignoreGitignore=true');
 });
 
 test('same active path does not reopen; events from closed file streams are ignored', () => {

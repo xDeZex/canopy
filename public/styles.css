@@ -459,7 +459,8 @@ body {
   color: #fff;
 }
 
-.viewer__wrap {
+.viewer__wrap,
+.watch-ignore {
   border: 1px solid var(--border);
   border-radius: 4px;
 }

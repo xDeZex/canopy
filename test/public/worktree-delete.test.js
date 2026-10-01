@@ -50,6 +50,12 @@ test('toolbar deletion works without a file, confirms fresh risks, cancels, then
     const button = elements.toolbar.querySelector('.viewer__delete-worktree');
     assert.ok(button);
     assert.equal(button.disabled, false);
+    const ignoreButton = elements.toolbar.querySelector('.watch-ignore');
+    assert.equal(ignoreButton['aria-pressed'], 'true');
+    ignoreButton.click();
+    assert.equal(ignoreButton['aria-pressed'], 'false');
+    assert.equal(elements.toolbar.querySelector('.viewer__delete-worktree'), button);
+    assert.equal(button.disabled, false);
     button.click();
     await settle();
     assert.match(messages[0], /\/linked/);
@@ -71,6 +77,7 @@ test('toolbar deletion works without a file, confirms fresh risks, cancels, then
     const protectedButton = elements.toolbar.querySelector('.viewer__delete-worktree');
     assert.equal(protectedButton.disabled, true);
     assert.match(protectedButton.title, /Main worktree/);
+    assert.equal(elements.toolbar.querySelector('.watch-ignore')['aria-pressed'], 'false');
   } finally { app.dispose(); }
 });
 
