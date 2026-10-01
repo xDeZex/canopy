@@ -114,7 +114,7 @@ export async function mountDiffEditor(container, { original, modified, language,
 }
 
 // Mounts a plain read-only full-file view (File mode). Returns a
-// controller with `dispose()` only; File mode has no hunks to navigate.
+// controller with `dispose()`, `scrollUp()` and `scrollDown()`; no hunks to navigate.
 export async function mountEditor(container, { content, language, wrap = false }) {
   await ensureLoader();
 
@@ -128,7 +128,14 @@ export async function mountEditor(container, { content, language, wrap = false }
     wordWrap: wrap ? 'on' : 'off',
   });
 
+  function scroll(direction) {
+    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    editor.setScrollTop(editor.getScrollTop() + direction * 10 * lineHeight);
+  }
+
   return {
+    scrollUp() { scroll(-1); },
+    scrollDown() { scroll(1); },
     dispose() {
       editor.dispose();
     },

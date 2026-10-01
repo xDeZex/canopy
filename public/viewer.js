@@ -69,10 +69,12 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
     void mount();
   }
 
-  // File mode and unmounted views have no change navigation: a no-op.
+  // Missing capabilities and unmounted views are a no-op; scrolling is File-only.
   return {
     render,
     nextChange: () => currentView?.nextChange?.(),
     prevChange: () => currentView?.prevChange?.(),
+    scrollUp: () => { if (getViewMode() === 'file') currentView?.scrollUp?.(); },
+    scrollDown: () => { if (getViewMode() === 'file') currentView?.scrollDown?.(); },
   };
 }

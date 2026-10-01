@@ -16,6 +16,25 @@ test('s and f step back and forward through changed files', () => {
   assert.equal(press('f', { target: { tagName: 'INPUT', readOnly: false } }), null);
 });
 
+test('e and d scroll up and down with the same typing and modifier guards', () => {
+  assert.deepEqual(press('e'), { type: 'scroll-up' });
+  assert.deepEqual(press('d'), { type: 'scroll-down' });
+  for (const key of ['e', 'd']) {
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+      assert.equal(press(key, { [modifier]: true }), null);
+    }
+    for (const target of [
+      { tagName: 'INPUT', readOnly: false },
+      { tagName: 'TEXTAREA', readOnly: false },
+      { tagName: 'SELECT' },
+      { tagName: 'DIV', isContentEditable: true },
+    ]) assert.equal(press(key, { target }), null);
+  }
+  assert.deepEqual(press('e', { target: { tagName: 'TEXTAREA', readOnly: true } }), { type: 'scroll-up' });
+  assert.equal(press('E'), null);
+  assert.equal(press('D'), null);
+});
+
 test('digits 1-9 select the worktree at that position', () => {
   assert.deepEqual(press('1'), { type: 'select-worktree', index: 0 });
   assert.deepEqual(press('9'), { type: 'select-worktree', index: 8 });

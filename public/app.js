@@ -204,6 +204,8 @@ export async function startApp({
     switch (action.type) {
       case 'next-change': return viewer.nextChange();
       case 'prev-change': return viewer.prevChange();
+      case 'scroll-up': return viewer.scrollUp();
+      case 'scroll-down': return viewer.scrollDown();
       case 'next-file': return stepFile(1);
       case 'prev-file': return stepFile(-1);
       case 'select-worktree': {

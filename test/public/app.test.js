@@ -831,6 +831,61 @@ test('j and l step the mounted diff to the previous and next change', async () =
   assert.deepEqual(navigated, ['prev', 'next'], 'modifiers and typing leave the keys alone');
 });
 
+test('e and d scroll the File view once per keydown, preserving guards and leaving diff modes alone', async (t) => {
+  const { document, window, elements, pressKey } = browserStub();
+  const scrolled = [];
+  const controller = (mode) => ({
+    dispose() {},
+    scrollUp: () => scrolled.push(`${mode}:up`),
+    scrollDown: () => scrolled.push(`${mode}:down`),
+  });
+  const app = await startApp({
+    document, window, EventSource: EventSourceStub, fetch: fakeFetch(),
+    mountDiffEditor: async () => controller('diff'),
+    mountEditor: async () => controller('file'),
+  });
+  t.after(() => app.dispose());
+  pressKey('e');
+  pressKey('d');
+  await settle();
+  elements.rail.querySelector('.rail__file').click();
+  await settle();
+  for (const button of elements.toolbar.querySelector('.view-toggle--diff').querySelectorAll('.view-toggle__btn')) {
+    button.click();
+    await settle();
+    pressKey('e');
+    pressKey('d');
+  }
+  assert.deepEqual(scrolled, []);
+
+  elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn')[1].click();
+  await settle();
+  let prevented = 0;
+  const readOnlyEvent = { target: { tagName: 'TEXTAREA', readOnly: true }, preventDefault: () => prevented++ };
+  pressKey('e', readOnlyEvent);
+  pressKey('d', readOnlyEvent);
+  pressKey('d', { ...readOnlyEvent, repeat: true });
+  assert.deepEqual(scrolled, ['file:up', 'file:down', 'file:down']);
+  assert.equal(prevented, 3);
+
+  for (const key of ['e', 'd']) {
+    for (const extra of [
+      { ctrlKey: true }, { metaKey: true }, { altKey: true },
+      { target: { tagName: 'INPUT', readOnly: false } },
+      { target: { tagName: 'TEXTAREA', readOnly: false } },
+      { target: { tagName: 'SELECT' } },
+      { target: { tagName: 'DIV', isContentEditable: true } },
+    ]) pressKey(key, { preventDefault: () => prevented++, ...extra });
+  }
+  assert.deepEqual(scrolled, ['file:up', 'file:down', 'file:down']);
+  assert.equal(prevented, 3, 'guarded keys retain their native behavior');
+
+  elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn')[0].click();
+  await settle();
+  pressKey('d');
+  assert.deepEqual(scrolled, ['file:up', 'file:down', 'file:down']);
+});
+
 test('rail divider keyboard and viewport resizing leave the editor mounted and dispose disables resizing', async () => {
   const { document, window, elements } = browserStub();
   let mounts = 0;

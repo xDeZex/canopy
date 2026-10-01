@@ -74,6 +74,36 @@ test('File mode controller does not expose change navigation', async () => {
   view.dispose();
 });
 
+test('File mode scrolls ten configured line heights from the current viewport in either direction', async () => {
+  let scrollTop = 500;
+  let lineHeight = 23;
+  const positions = [];
+  globalThis.window = { monaco: true };
+  globalThis.monaco = {
+    editor: {
+      EditorOption: { lineHeight: 67 },
+      create: () => ({
+        getScrollTop: () => scrollTop,
+        getOption(option) {
+          assert.equal(option, 67);
+          return lineHeight;
+        },
+        setScrollTop(position) { positions.push(position); scrollTop = position; },
+        dispose() {},
+      }),
+    },
+  };
+  const view = await mountEditor({}, { content: 'plain', wrap: true });
+  view.scrollUp();
+  view.scrollDown();
+  view.scrollDown();
+  scrollTop = 1000; // Mouse scrolling can move the viewport between shortcuts.
+  lineHeight = 19; // Read Monaco's current configuration, not a cached pixel step.
+  view.scrollUp();
+  assert.deepEqual(positions, [270, 500, 730, 810]);
+  view.dispose();
+});
+
 test('diff viewer uses Monaco diff word wrap when requested', async () => {
   let options;
   globalThis.window = { monaco: true };

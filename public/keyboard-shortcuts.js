@@ -17,6 +17,8 @@ export function shortcutAction({ key, ctrlKey, metaKey, altKey, target }) {
   if (key === 'l') return { type: 'next-change' };
   if (key === 's') return { type: 'prev-file' };
   if (key === 'f') return { type: 'next-file' };
+  if (key === 'e') return { type: 'scroll-up' };
+  if (key === 'd') return { type: 'scroll-down' };
   if (/^[1-9]$/.test(key)) return { type: 'select-worktree', index: Number(key) - 1 };
   if (key === '?') return { type: 'toggle-help' };
   if (key === 'Escape') return { type: 'close' };
