@@ -200,6 +200,18 @@ export async function startApp({
     workspace.selectFile(files[next].path);
   }
 
+  function stepCommit(direction) {
+    const { activePath, commits } = workspace.getState();
+    if (!activePath || !commits.length) return;
+    const lockedSha = commitLock.getLockedCommit(activePath);
+    // Auto is a separate stop above the newest locked commit, even at HEAD.
+    const current = lockedSha === null ? -1 : commits.findIndex((commit) => commit.sha === lockedSha);
+    if (lockedSha !== null && current === -1) return;
+    const next = current + direction;
+    if (next < -1 || next >= commits.length) return;
+    ui.selectComparisonCommit(activePath, next === -1 ? null : commits[next].sha);
+  }
+
   function onShortcut(action) {
     switch (action.type) {
       case 'next-change': return viewer.nextChange();
@@ -208,6 +220,8 @@ export async function startApp({
       case 'scroll-down': return viewer.scrollDown();
       case 'next-file': return stepFile(1);
       case 'prev-file': return stepFile(-1);
+      case 'older-commit': return stepCommit(1);
+      case 'newer-commit': return stepCommit(-1);
       case 'select-worktree': {
         const worktree = workspace.getState().worktrees[action.index];
         return worktree && workspace.selectWorktree(worktree.path);

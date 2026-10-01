@@ -718,6 +718,171 @@ test('comparison lock, locked HEAD refresh and working-file edits still update t
   assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
 });
 
+test('r locks HEAD from Auto, then steps to older commits without wrapping or filtering by file touches', async (t) => {
+  const { elements, api, urls, controllers, pressKey, updateWorktrees } = await viewerApp(t);
+  api.commits = [{ sha: 'aaa', message: 'HEAD', touchesFile: true },
+    { sha: 'older', message: 'older', touchesFile: false }];
+  await updateWorktrees([{ ...api.worktrees[0], originMainSha: 'older' }, api.worktrees[1]]);
+  api.content = { head: 'HEAD base', working: 'new' };
+  let before = urls.length;
+  pressKey('r');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), [
+    '/api/files?worktree=%2Fa&ref=aaa', '/api/file-content?worktree=%2Fa&file=f.js&ref=aaa',
+  ]);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+  assert.equal(controllers.at(-1).options.original, 'HEAD base');
+  api.content = { head: 'older base', working: 'new' };
+  before = urls.length;
+  pressKey('r');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), [
+    '/api/files?worktree=%2Fa&ref=older', '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
+  ]);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  assert.equal(controllers.at(-1).options.original, 'older base');
+  before = urls.length;
+  pressKey('r');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), [], 'oldest commit is a stop, not a wrap to Auto');
+});
+
+test('w steps from a picked older commit to locked HEAD, then Auto, and stops there', async (t) => {
+  const { elements, api, urls, controllers, pressKey } = await viewerApp(t);
+  elements.toolbar.querySelector('.commit-picker__menu').querySelectorAll('.commit-picker__item').at(-1).click();
+  await flushApp();
+  api.content = { head: 'HEAD base', working: 'new' };
+  let before = urls.length;
+  pressKey('w');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), [
+    '/api/files?worktree=%2Fa&ref=aaa', '/api/file-content?worktree=%2Fa&file=f.js&ref=aaa',
+  ]);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(controllers.at(-1).options.original, 'HEAD base');
+  api.content = { head: 'Auto base', working: 'new' };
+  before = urls.length;
+  pressKey('w');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), [
+    '/api/files?worktree=%2Fa', '/api/file-content?worktree=%2Fa&file=f.js',
+  ]);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  assert.equal(controllers.at(-1).options.original, 'Auto base');
+  before = urls.length;
+  pressKey('w');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), [], 'Auto is the newest stop');
+});
+
+test('comparison shortcuts work without an open file and keep each worktree lock independent', async (t) => {
+  const { elements, pressKey, urls } = await viewerApp(t);
+  pressKey('r');
+  pressKey('r');
+  await flushApp();
+  pressKey('2');
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  const before = urls.length;
+  pressKey('r');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), ['/api/files?worktree=%2Fb&ref=aaa']);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
+  pressKey('1');
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  pressKey('w');
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  pressKey('w');
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  pressKey('2');
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+});
+
+test('comparison shortcuts preserve typing and modifier guards and accept the read-only editor input', async (t) => {
+  const { elements, pressKey, urls } = await viewerApp(t);
+  let prevented = 0;
+  const before = urls.length;
+  for (const key of ['w', 'r']) {
+    for (const extra of [
+      { ctrlKey: true }, { metaKey: true }, { altKey: true },
+      { target: { tagName: 'INPUT', readOnly: false } },
+      { target: { tagName: 'TEXTAREA', readOnly: false } },
+      { target: { tagName: 'SELECT' } },
+      { target: { tagName: 'DIV', isContentEditable: true } },
+    ]) pressKey(key, { preventDefault: () => prevented++, ...extra });
+  }
+  await flushApp();
+  assert.deepEqual(urls.slice(before), []);
+  assert.equal(prevented, 0);
+  elements.toolbar.querySelector('.commit-picker__trigger').click();
+  const readOnlyEvent = { target: { tagName: 'TEXTAREA', readOnly: true }, preventDefault: () => prevented++ };
+  pressKey('r', readOnlyEvent);
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__menu').classList.contains('is-open'), false);
+  pressKey('w', readOnlyEvent);
+  await flushApp();
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  assert.equal(prevented, 2);
+});
+
+test('comparison shortcuts retain an unknown locked SHA rather than guessing a new base', async (t) => {
+  const { elements, api, urls, pressKey, updateWorktrees } = await viewerApp(t);
+  pressKey('r');
+  await flushApp();
+  api.commits = [{ sha: 'other', message: 'rewritten history' }];
+  await updateWorktrees([{ ...api.worktrees[0], originMainSha: 'other' }, api.worktrees[1]]);
+  const before = urls.length;
+  pressKey('w');
+  pressKey('r');
+  await flushApp();
+  assert.deepEqual(urls.slice(before), []);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'aaa');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'locked');
+});
+
+test('comparison shortcuts safely do nothing while commits load, are empty or fail', async (t) => {
+  const browser = browserStub();
+  const urls = [];
+  let resolveCommits;
+  const pendingCommits = new Promise((resolve) => { resolveCommits = resolve; });
+  const app = await startApp({
+    ...browser, EventSource: EventSourceStub,
+    setInterval: () => 17, clearInterval() {},
+    fetch: async (url) => {
+      urls.push(url);
+      if (url === '/api/worktrees') return { ok: true, json: async () => [{ path: '/a' }, { path: '/b' }] };
+      if (url === '/api/commits?worktree=%2Fa') return { ok: true, json: async () => pendingCommits };
+      if (url.startsWith('/api/commits')) return { ok: false, status: 503 };
+      return { ok: true, json: async () => [] };
+    },
+  });
+  t.after(() => app.dispose());
+  const assertNoReload = async () => {
+    const before = urls.length;
+    browser.pressKey('r');
+    browser.pressKey('w');
+    await flushApp();
+    assert.deepEqual(urls.slice(before), []);
+    assert.equal(browser.elements.toolbar.querySelector('.commit-picker__trigger-label').textContent, 'since last commit');
+  };
+  await assertNoReload();
+  resolveCommits([]);
+  await flushApp();
+  await assertNoReload();
+  browser.pressKey('2');
+  await flushApp();
+  assert.ok(browser.elements.toolbar.querySelector('.commit-picker__item--error'));
+  await assertNoReload();
+});
+
 test('file and worktree selection refresh viewers and active removal falls back before clearing the workspace', async (t) => {
   const { elements, api, sources, controllers, updateWorktrees, urls } = await viewerApp(t);
   api.content = { head: 'g base', working: 'g disk' };
@@ -794,7 +959,7 @@ test('? toggles the shortcut help, Escape closes it, and typing in a field is ig
   assert.equal(elements['shortcut-help'].hidden, true);
 });
 
-test('worktree and change shortcuts do nothing without worktrees, and dispose removes the key listener', async () => {
+test('worktree, change and comparison shortcuts do nothing without worktrees, and dispose removes the key listener', async () => {
   const { document, window, keydownListeners, pressKey } = browserStub();
   const app = await startApp({
     document, window,
@@ -804,6 +969,8 @@ test('worktree and change shortcuts do nothing without worktrees, and dispose re
   pressKey('1');
   pressKey('j');
   pressKey('l');
+  pressKey('w');
+  pressKey('r');
   assert.equal(keydownListeners.size, 1);
   app.dispose();
   assert.equal(keydownListeners.size, 0);

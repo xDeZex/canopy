@@ -16,6 +16,25 @@ test('s and f step back and forward through changed files', () => {
   assert.equal(press('f', { target: { tagName: 'INPUT', readOnly: false } }), null);
 });
 
+test('w and r select newer and older comparison commits with the same guards', () => {
+  assert.deepEqual(press('w'), { type: 'newer-commit' });
+  assert.deepEqual(press('r'), { type: 'older-commit' });
+  for (const key of ['w', 'r']) {
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+      assert.equal(press(key, { [modifier]: true }), null);
+    }
+    for (const target of [
+      { tagName: 'INPUT', readOnly: false },
+      { tagName: 'TEXTAREA', readOnly: false },
+      { tagName: 'SELECT' },
+      { tagName: 'DIV', isContentEditable: true },
+    ]) assert.equal(press(key, { target }), null);
+  }
+  assert.deepEqual(press('r', { target: { tagName: 'TEXTAREA', readOnly: true } }), { type: 'older-commit' });
+  assert.equal(press('W'), null);
+  assert.equal(press('R'), null);
+});
+
 test('e and d scroll up and down with the same typing and modifier guards', () => {
   assert.deepEqual(press('e'), { type: 'scroll-up' });
   assert.deepEqual(press('d'), { type: 'scroll-down' });

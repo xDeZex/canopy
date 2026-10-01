@@ -221,7 +221,14 @@ export function createWorkspaceUI({
     if (activeFile) workspace.loadFileContent();
   }
 
-  function renderCommitMenuItem(commit, isSelected, menu, activePath) {
+  function selectComparisonCommit(activePath, sha) {
+    if (sha === null) commitLock.setAuto(activePath);
+    else commitLock.lockCommit(activePath, sha);
+    closeMenus();
+    onCommitLockChanged();
+  }
+
+  function renderCommitMenuItem(commit, isSelected, activePath) {
     const item = document.createElement('div');
     item.className = [
       'commit-picker__item',
@@ -245,9 +252,7 @@ export function createWorkspaceUI({
 
     item.append(shaEl, messageEl, timeEl);
     item.addEventListener('click', () => {
-      commitLock.lockCommit(activePath, commit.sha);
-      menu.classList.remove('is-open');
-      onCommitLockChanged();
+      selectComparisonCommit(activePath, commit.sha);
     });
     return item;
   }
@@ -270,12 +275,10 @@ export function createWorkspaceUI({
     autoItem.className = `commit-picker__item${lockedSha ? '' : ' is-selected'}`;
     autoItem.textContent = 'Auto (since last commit)';
     autoItem.addEventListener('click', () => {
-      commitLock.setAuto(activePath);
-      menu.classList.remove('is-open');
-      onCommitLockChanged();
+      selectComparisonCommit(activePath, null);
     });
     const commitItems = commits.flatMap((commit) => {
-      const item = renderCommitMenuItem(commit, commit.sha === lockedSha, menu, activePath);
+      const item = renderCommitMenuItem(commit, commit.sha === lockedSha, activePath);
       if (!commit.isOriginMain) return [item];
       const divider = document.createElement('div');
       divider.className = 'commit-picker__divider';
@@ -523,5 +526,5 @@ export function createWorkspaceUI({
     renderToolbar();
   }
 
-  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus, setEditTimes, updateEditTimes, setDeletionState };
+  return { renderTabs, renderRail, renderToolbar, renderError, closeMenus, selectComparisonCommit, setEditTimes, updateEditTimes, setDeletionState };
 }
