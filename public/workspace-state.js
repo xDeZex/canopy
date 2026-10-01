@@ -1,5 +1,6 @@
 import { collectFiles } from './collect-files.js';
 import { pickActiveWorktree } from './worktree-select.js';
+import { commentsAfterLoad } from './comments-after-load.js';
 
 // Ref metadata belongs to the commit picker, not the tabs or mounted viewer.
 function worktreeDetailsEqual(a, b) {
@@ -114,7 +115,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     // The file's base side moves with its old path, so a pairing found after
     // it was opened needs its content read again.
     if (activeFile && activeFile === openFile && fileInfoByPath.get(activeFile)?.oldPath !== previousOldPath) loadFileContent();
-    if (comments?.threads?.length) onChange('comments');
+    if (comments?.threads?.length) onChange('comments-refresh');
     if (activeFile && !statusOnly) {
       const previousMode = viewModeStore.getMode();
       // A missing file or failed tree has no status; default to Diff rather
@@ -185,13 +186,14 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       next = { threads: [], warning: `Failed to load comments: ${err.message}` };
     }
     if (generation !== commentsRequest) return;
+    next = commentsAfterLoad(comments, next);
     if (JSON.stringify(next) === JSON.stringify(comments)) return;
     comments = next;
     const selected = (comments?.threads ?? []).find((thread) => thread.id === selectedThreadId);
     if (!selected) selectedThreadId = null;
     else if (!Object.hasOwn(selected, 'file')) return showGeneralComments();
     else if (selected.file !== activeFile) return selectFile(selected.file, selected.id);
-    onChange('comments');
+    onChange('comments-refresh');
   }
 
   // Saves one new thread (a single line, or through `endLine`) against the

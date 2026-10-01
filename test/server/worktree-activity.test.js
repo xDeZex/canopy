@@ -230,3 +230,17 @@ test('activity modes have independent snapshots and watchers but share worktree 
   assert.equal(pollClosed, 1);
   assert.ok(watchers.every((watcher) => watcher.closed));
 });
+
+test('a gitignored comments sidecar never counts as worktree activity', () => {
+  const emitter = new EventEmitter();
+  emitter.close = () => {};
+  const changes = [];
+  watchActivity('/a', (stamp) => changes.push(stamp), {
+    readFile: (file) => file === '/a/.gitignore' ? '.canopy/\n' : '',
+    stat: () => ({ isDirectory: () => false, isFile: () => true }),
+    watch: () => emitter, now: () => 5,
+  });
+  emitter.emit('ready');
+  emitter.emit('change', '.canopy/comments.yaml');
+  assert.deepEqual(changes, []);
+});

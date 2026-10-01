@@ -75,6 +75,7 @@ export async function startApp({
       if (part === 'rail') ui.renderRail();
       if (part === 'main') viewer.render();
       if (part === 'comments') { ui.refreshComments(); viewer.refreshComments(); }
+      if (part === 'comments-refresh') { ui.refreshComments(); viewer.refreshComments({ reveal: false }); }
       if (part === 'toolbar') ui.renderToolbar();
     },
   });

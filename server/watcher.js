@@ -26,7 +26,7 @@ export function watchWorktree(
     clearTimer = clearTimeout, runGit = defaultRunGit, onStatusChange,
     ignoreGitignore = true, readFile, stat } = {},
 ) {
-  const ignored = createWatchPolicy(worktreePath, { ignoreGitignore, readFile, stat });
+  const ignored = createWatchPolicy(worktreePath, { ignoreGitignore, observeSidecar: true, readFile, stat });
   const changedPaths = new Set();
   let timer = null;
   let statusTimer = null;

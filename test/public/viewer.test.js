@@ -517,3 +517,21 @@ test('a failed save is recorded on the draft so a remounted composer still shows
   f.viewer.render();
   assert.deepEqual(f.calls[1].options.composer.draft, { line: 2, endLine: 2, text: 'mine', error: 'Comments changed' });
 });
+
+test('a live comments refresh updates the zones without revealing the selected thread', async () => {
+  const f = fixture();
+  f.setState({ activeFile: 'a.js', selectedThreadId: 't', fileTree: [{ type: 'file', path: 'a.js' }],
+    fileContent: { head: '', working: 'one\ntwo' }, comments: { threads: [reviewThread()], warning: null } });
+  const updates = [];
+  const reveals = [];
+  f.viewer.render();
+  f.calls[0].resolve({ dispose() {}, updateThreads: (threads) => updates.push(threads), revealThread: (id) => reveals.push(id) });
+  await f.calls[0].promise;
+  assert.deepEqual(reveals, ['t'], 'mounting the selection reveals it');
+  f.viewer.refreshComments({ reveal: false });
+  assert.equal(updates.length, 2, 'zones are refreshed');
+  assert.deepEqual(reveals, ['t'], 'the refresh does not scroll');
+  f.viewer.refreshComments();
+  assert.deepEqual(reveals, ['t', 't'], 'navigation still reveals');
+  f.viewer.dispose();
+});

@@ -349,3 +349,22 @@ test('a watcher error is logged, not thrown, and rejects ready', async (t) => {
   await assert.rejects(watcher.ready, /directory vanished/);
   assert.equal(console.error.mock.callCount(), 1);
 });
+
+test('a gitignored comments sidecar is reported, its siblings are not, and close disposes the watcher', async () => {
+  for (const ignoreGitignore of [true, false]) {
+    const files = fakeWatch();
+    const onChange = recorder();
+    const watcher = watchWorktree('/wt', onChange, {
+      ...files.options, ignoreGitignore,
+      readFile: (file) => file === '/wt/.gitignore' ? '.canopy/\n' : '',
+    });
+    const { ignored } = files.watcher.watchedWith.chokidarOptions;
+    assert.equal(ignored('.canopy', { isDirectory: () => true }), false);
+    files.watcher.emit('change', '.canopy/comments.yaml');
+    files.watcher.emit('change', '.canopy/other.yaml');
+    files.fire();
+    assert.deepEqual(onChange.calls, [ignoreGitignore ? ['.canopy/comments.yaml'] : ['.canopy/comments.yaml', '.canopy/other.yaml']]);
+    await watcher.close();
+    assert.equal(files.watcher.closed, true);
+  }
+});

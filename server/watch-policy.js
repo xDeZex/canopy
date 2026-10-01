@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readFileSync, lstatSync } from 'node:fs';
 import ignore from 'ignore';
+import { SIDECAR } from './sidecar-path.js';
 
 // Kept for callers of the original bookkeeping predicate. Watch policies apply
 // it only to paths relative to their worktree, never to parent directories.
@@ -22,7 +23,7 @@ function excludedByAncestors(parts, isDirectory, ancestors) {
 // ancestor rules needed for that decision, and cache them for this watch's
 // lifetime; restarting observation reloads edited .gitignore files.
 export function createWatchPolicy(worktreePath, {
-  ignoreGitignore = true, readFile = readFileSync, stat = lstatSync,
+  ignoreGitignore = true, observeSidecar = false, readFile = readFileSync, stat = lstatSync,
 } = {}) {
   const root = path.resolve(worktreePath);
   const rules = new Map();
@@ -52,6 +53,9 @@ export function createWatchPolicy(worktreePath, {
     const relative = path.relative(root, path.resolve(root, normalized)).split(path.sep).join('/');
     if (!relative || relative === '..' || relative.startsWith('../')) return false;
     if (IGNORE_GIT_DIR.test(relative)) return true;
+    // Conversations are edited by agents and may be gitignored; a content
+    // watcher opts in to always observing the sidecar and its directory.
+    if (observeSidecar && (relative === SIDECAR || relative === path.posix.dirname(SIDECAR))) return false;
     if (!ignoreGitignore) return false;
     if (typeof stats?.isDirectory !== 'function') {
       const file = path.join(root, relative);

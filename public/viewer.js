@@ -23,16 +23,17 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
   function needsConversation(comments) {
     return getState().mainView === 'general' || Boolean(selectedThread(comments)?.unavailable);
   }
-  function updateEditor(comments) {
+  // Navigation reveals the selected thread; a live refresh must not move the reader.
+  function updateEditor(comments, { reveal = true } = {}) {
     currentView?.updateThreads?.(inlineThreads(comments));
     const selected = selectedThread(comments);
-    if (selected && !selected.unavailable) currentView?.revealThread?.(selected.id);
+    if (reveal && selected && !selected.unavailable) currentView?.revealThread?.(selected.id);
   }
-  function refreshComments() {
+  function refreshComments({ reveal = true } = {}) {
     if (disposed) return;
     const comments = currentComments();
     if (showingConversation || needsConversation(comments)) render({ preserveError: true });
-    else updateEditor(comments);
+    else updateEditor(comments, { reveal });
   }
 
   function render({ preserveError = false } = {}) {

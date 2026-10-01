@@ -142,3 +142,24 @@ test('missing and deleted paths retain cached root and nested ignore decisions w
   }
   assert.equal(console.error.mock.callCount(), 0);
 });
+
+test('the comments sidecar and its directory stay watched even when gitignored', () => {
+  for (const ignoreGitignore of [true, false]) {
+    const ignored = createWatchPolicy('/wt', {
+      ignoreGitignore, observeSidecar: true,
+      readFile: (file) => file === '/wt/.gitignore' ? '.canopy/\n*.yaml\n' : '',
+      stat: () => ({ isDirectory: () => false, isFile: () => true }),
+    });
+    assert.equal(ignored('.canopy', { isDirectory: () => true }), false);
+    assert.equal(ignored('.canopy/comments.yaml'), false);
+    assert.equal(ignored('.canopy/other.yaml'), ignoreGitignore, 'siblings keep the normal rules');
+  }
+});
+
+test('without observeSidecar a gitignored sidecar follows the normal rules', () => {
+  const ignored = createWatchPolicy('/wt', {
+    readFile: (file) => file === '/wt/.gitignore' ? '.canopy/\n' : '',
+    stat: () => ({ isDirectory: () => false, isFile: () => true }),
+  });
+  assert.equal(ignored('.canopy/comments.yaml'), true);
+});

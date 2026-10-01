@@ -36,7 +36,7 @@ Each message has exactly `{id, author: user|agent, text, created_at}`. IDs and I
 
 Relative anchor paths cannot contain empty/dot/traversal segments, absolute paths, colons, backslashes or control characters. All symlinked path components are conservatively rejected, even links staying inside the worktree. Anchors are checked for regular-file availability; only the fixed sidecar is read by this endpoint. General conversations cause no anchor-path IO. Valid inline anchors require a selectable file and current modified content. There is **no content-staleness detection or anchor migration** when content or comparison refs change.
 
-Existing file events and SSE reconnects reload conversations; unchanged payloads do not remount the editor. External sidecar edits are observed when the existing watcher includes `.canopy/comments.yaml`. If the sidecar/directory is ignored while **Ignore .gitignore paths** is on, those edits may not generate events: **reload the page, switch away/back, or turn ignore observation off** to reread it. Atomic sidecar replacement is handled like other add/change/unlink events; edited ignore rules still require restarting Canopy per the README.
+Existing file events and SSE reconnects reload conversations; unchanged payloads do not remount the editor. External sidecar edits refresh without a reload: the watcher always observes `.canopy/` and `.canopy/comments.yaml`, even when they are gitignored and regardless of **Ignore .gitignore paths**. Atomic sidecar replacement is handled like other add/change/unlink events. A malformed or partial write keeps the last valid conversation on display with a visible warning, and the next valid write clears it. A missing sidecar is a valid no-threads state, not a warning. Edited ignore rules still require restarting Canopy per the README.
 
 ## Public Monaco integration and filesystem limits
 
@@ -60,3 +60,12 @@ See [review-comments.md](review-comments.md) for the contract. In a disposable r
 - Conflict: with the page open, change the sidecar externally (for example append a thread in an editor and save). Then save a new comment in Canopy: you must see a visible error that the comments changed, the composer must keep your text, and the new external thread should appear. Saving again then succeeds.
 - Corrupt `comments.yaml` (for example `threads: [`) and save: expect a refusal and the file left as is.
 - Deleted files and the original side must offer no composer. Long comments, wrapping, and a draft surviving a live file update (edit the file on disk while the composer is open) should be checked too.
+
+## Live refresh demo (USER only)
+
+Agents do not browser-verify this. In a disposable registered worktree whose `.gitignore` ignores `.canopy/`, with **Ignore .gitignore paths** both on and off, select the worktree and open `public/app.js`, then change the sidecar from a terminal using the atomic temp-file-and-rename workflow in [review-comments.md](review-comments.md):
+
+- **Message:** copy `docs/fixtures/comments.yaml` to `.canopy/comments.yaml` (via a temp file and `mv`). Threads appear without a reload. Append an `author: agent` message to a thread the same way: it shows in chronological order, and the thread stays unresolved.
+- **Resolution:** set `resolved: true` on a thread while adding an agent response. It switches to the grey, struck-through **Resolved** styling. Set it back to `false` and confirm it reopens.
+- **Recovery:** write `threads: [` directly to the file. The last valid conversation stays visible with a warning. Then write valid YAML: the warning clears. Remove the file: no threads and no warning.
+- **Isolation:** with two worktrees holding different sidecars, switch between them while editing either; no conversation from one appears in the other.

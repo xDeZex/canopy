@@ -40,6 +40,10 @@ Canopy saves new threads with `author: user`, equal `start` and `end`, `side: mo
 
 Replies reopen a thread: a new message does not change `resolved`. Set `resolved: true` only when the same edit also adds an agent response.
 
+## Live refresh
+
+Canopy watches the sidecar of the selected worktree and refreshes messages and `resolved` state without a page reload. This holds when `.canopy/` is gitignored and regardless of the ignore-gitignored setting. If a write is malformed or partial, the last valid conversation stays visible with a warning until the next valid write; a missing file is the normal no-threads state. Switching worktrees shows only that worktree's file.
+
 ## Revision checks and what they do not cover
 
 Canopy sends each client the revision (a hash of the exact file bytes, or `absent`) with the comments it loaded. A save carries that revision; Canopy rereads the file, and if it differs, rejects the save visibly (HTTP 409), reloads the latest comments and keeps your draft so you can review and save again. Saves inside Canopy are serialized per worktree.

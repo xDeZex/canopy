@@ -65,6 +65,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
     onChange(part) {
       if (['render', 'main'].includes(part)) viewer.render();
       if (part === 'comments') viewer.refreshComments();
+      if (part === 'comments-refresh') viewer.refreshComments({ reveal: false });
     },
   });
   viewer = createViewer({ mainEl: element(), document, getState: workspace.getState,

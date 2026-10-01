@@ -105,7 +105,7 @@ test('refreshing a selected thread follows changed file attachment without accep
   assert.equal(f.store.getState().selectedThreadId, null);
 });
 
-test('comments load per worktree and reject old responses after switch away/back, reload and reconnect', async () => {
+test('comments load per worktree and reject old responses after switch away/back, reload and reconnect; a warning payload carries no threads', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a', '/b']));
   assert.equal(f.commentRequests[0].url, '/api/comments?worktree=%2Fa');
@@ -121,13 +121,13 @@ test('comments load per worktree and reject old responses after switch away/back
   f.store.remoteChange();
   const reconnect = f.commentRequests.at(-1);
   f.store.remoteChange(['.canopy/comments.yaml']);
-  await f.reply(f.commentRequests.at(-1), { threads: [{ id: 'latest' }], warning: 'warning' });
+  await f.reply(f.commentRequests.at(-1), { threads: [], warning: 'warning' });
   f.changes.length = 0;
   await f.reply(oldA, { threads: [{ id: 'stale' }], warning: null });
   oldB.reject(new Error('old error'));
   await f.reply(oldReturn, { threads: [], warning: null });
   await f.reply(reconnect, { threads: [], warning: null });
-  assert.deepEqual(f.store.getState().comments, { threads: [{ id: 'latest' }], warning: 'warning' });
+  assert.deepEqual(f.store.getState().comments, { threads: [], warning: 'warning' });
   assert.deepEqual(f.changes, []);
   f.store.updateWorktrees([]);
   assert.deepEqual(f.store.getState().comments, { threads: [], warning: null });
@@ -139,7 +139,7 @@ test('tree arrival reconciles conversation visibility and current comment failur
   await f.reply(f.commentRequests[0], { threads: [{ id: 't', file: 'a.js' }], warning: null });
   f.changes.length = 0;
   await f.reply(f.requests[0], tree('a.js'));
-  assert.deepEqual(f.changes, ['rail', 'comments']);
+  assert.deepEqual(f.changes, ['rail', 'comments-refresh']);
   const pending = f.store.loadComments();
   f.commentRequests.at(-1).reject(new Error('offline'));
   await pending;
@@ -862,4 +862,53 @@ test('saving explains an unreadable sidecar instead of claiming comments are loa
   await f.reply(f.commentRequests[0], { threads: [], warning: 'Cannot load comments: Symlink', revision: null });
   await assert.rejects(f.store.addComment({ file: 'one', line: 3, text: 'Why?' }), /Symlink/);
   assert.deepEqual(f.postRequests, []);
+});
+
+test('a malformed external write keeps the last valid conversation with a warning until a valid write recovers', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  const thread = { id: 't', file: 'a.js', resolved: false };
+  await f.reply(f.commentRequests[0], { threads: [thread], warning: null, revision: 'r1' });
+  f.store.remoteChange(['.canopy/comments.yaml']);
+  await f.reply(f.commentRequests.at(-1), { threads: [], warning: 'Cannot load comments: bad', revision: null });
+  assert.deepEqual(f.store.getState().comments, { threads: [thread], warning: 'Cannot load comments: bad', revision: null });
+  f.store.remoteChange(['.canopy/comments.yaml']);
+  const resolved = { ...thread, resolved: true };
+  await f.reply(f.commentRequests.at(-1), { threads: [resolved], warning: null, revision: 'r2' });
+  assert.deepEqual(f.store.getState().comments, { threads: [resolved], warning: null, revision: 'r2' });
+});
+
+test('malformed data from the previous worktree never shows in the new one', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a', '/b']));
+  await f.reply(f.commentRequests[0], { threads: [{ id: 'a-thread' }], warning: null });
+  f.store.remoteChange();
+  const staleA = f.commentRequests.at(-1);
+  f.store.selectWorktree('/b');
+  await f.reply(f.commentRequests.at(-1), { threads: [{ id: 'b-thread' }], warning: null });
+  await f.reply(staleA, { threads: [], warning: 'Cannot load comments: bad' });
+  assert.deepEqual(f.store.getState().comments, { threads: [{ id: 'b-thread' }], warning: null });
+});
+
+test('a failed comments load keeps the last valid conversation with the failure warning', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  const thread = { id: 't' };
+  await f.reply(f.commentRequests[0], { threads: [thread], warning: null });
+  f.store.remoteChange();
+  f.commentRequests.at(-1).reject(new Error('offline'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.store.getState().comments, { threads: [thread], warning: 'Failed to load comments: offline' });
+});
+
+test('a live comments load reports a refresh, not a selection change, so the viewer does not scroll', async () => {
+  const f = fixture('diff');
+  f.store.updateWorktrees(list(['/a']));
+  const thread = { id: 't', file: 'a.js', resolved: false };
+  await f.reply(f.commentRequests[0], { threads: [thread], warning: null });
+  f.changes.length = 0;
+  f.store.remoteChange(['.canopy/comments.yaml']);
+  await f.reply(f.commentRequests.at(-1), { threads: [{ ...thread, resolved: true }], warning: null });
+  assert.ok(f.changes.includes('comments-refresh'));
+  assert.ok(!f.changes.includes('comments'));
 });

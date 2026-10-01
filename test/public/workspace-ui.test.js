@@ -50,7 +50,7 @@ function fixture({ now = () => 1000, relativeTime = () => 'recently', treeExpand
       }
       if (part === 'toolbar') ui.renderToolbar();
       if (part === 'rail') ui.renderRail();
-      if (part === 'comments') ui.refreshComments();
+      if (part === 'comments' || part === 'comments-refresh') ui.refreshComments();
     },
   });
   ui = createWorkspaceUI({
