@@ -170,7 +170,8 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
         const nextActive = worktrees.find((worktree) => worktree.path === activePath);
         const nextHead = nextActive?.head;
         const originChanged = previousOrigin !== nextActive?.originMainSha;
-        if (detailsChanged || !originChanged) onChange('render');
+        // Tabs and controls need metadata, but the mounted viewer does not.
+        if (detailsChanged) onChange('metadata');
         if (previousHead !== nextHead) {
           loadFileTree();
           loadCommits();

@@ -65,10 +65,10 @@ export async function startApp({
     fetch: (url) => request(url),
     onActivePathChanged: (path) => liveUpdates.connectActive(path),
     onChange: (part) => {
-      if (part === 'render') {
+      if (part === 'render' || part === 'metadata') {
         ui.renderTabs();
         ui.renderToolbar();
-        viewer.render();
+        if (part === 'render') viewer.render();
       }
       if (part === 'rail') ui.renderRail();
       if (part === 'main') viewer.render();
@@ -186,6 +186,11 @@ export async function startApp({
   }
 
   treeExpansion.pruneToKnownWorktrees(workspace.updateWorktrees(worktrees));
+  if (!workspace.getState().activePath) {
+    ui.renderTabs();
+    ui.renderToolbar();
+    viewer.render();
+  }
   liveUpdates.connectWorktrees();
   liveUpdates.connectActivity();
   editTimer = schedule(() => ui.updateEditTimes(), 30_000);

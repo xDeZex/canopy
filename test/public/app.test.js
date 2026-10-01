@@ -414,6 +414,237 @@ test('an invalid locked base after a history SSE event shows errors and retains 
   assert.equal(mounts, mountedWhileLoading + 1);
 });
 
+const flushApp = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+async function viewerApp(t) {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 });
+  const browser = browserStub();
+  const sources = [];
+  const urls = [];
+  const controllers = [];
+  const api = {
+    worktrees: [{ path: '/a', branch: 'main', head: 'aaa' }, { path: '/b', branch: 'topic', head: 'bbb' }],
+    files: ['f.js', 'g.js'].map((path) => ({ type: 'file', name: path, path, status: 'modified' })),
+    commits: [{ sha: 'aaa', message: 'first' }, { sha: 'older', message: 'older' }],
+    content: { head: 'old', working: 'new' },
+  };
+  class EventSource {
+    constructor(url) { this.url = url; sources.push(this); }
+    addEventListener() {}
+    close() { this.closed = true; }
+  }
+  const mount = (_container, options) => {
+    const controller = {
+      options, disposed: false,
+      state: { scrollTop: 0, cursor: 1, selection: [1, 1], change: 0 },
+      dispose() { this.disposed = true; },
+      nextChange() { this.state.change++; },
+      prevChange() { this.state.change--; },
+    };
+    controllers.push(controller);
+    return controller;
+  };
+  const app = await startApp({
+    ...browser, EventSource, mountDiffEditor: mount, mountEditor: mount,
+    languageForPath: () => 'javascript', now: () => 1000,
+    setInterval: () => 17, clearInterval() {},
+    fetch: async (url) => {
+      urls.push(url);
+      const key = new URL(url, 'http://localhost').pathname.slice('/api/'.length);
+      return { ok: true, json: async () => api[key === 'file-content' ? 'content' : key] };
+    },
+  });
+  t.after(() => app.dispose());
+  await flushApp();
+  browser.elements.rail.querySelector('.rail__file').click();
+  await flushApp();
+  const updateWorktrees = async (worktrees) => {
+    api.worktrees = worktrees;
+    sources.find((source) => source.url === '/api/watch-worktrees')
+      .onmessage({ data: JSON.stringify(worktrees) });
+    await flushApp();
+  };
+  return { ...browser, api, sources, urls, controllers, updateWorktrees };
+}
+
+test('unrelated worktree additions and removals and branch labels preserve the active viewer and navigation', async (t) => {
+  const { elements, api, sources, urls, controllers, updateWorktrees, pressKey } = await viewerApp(t);
+  const controller = controllers[0];
+  Object.assign(controller.state, { scrollTop: 420, cursor: 12, selection: [8, 12] });
+  pressKey('l');
+  const editor = elements.main.children[0];
+  const rail = elements.rail.children[0];
+  const menu = elements.toolbar.querySelector('.commit-picker__menu');
+  elements.toolbar.querySelector('.commit-picker__trigger').click();
+  const before = urls.length;
+  const active = api.worktrees[0];
+  const inactive = api.worktrees[1];
+  for (const [worktrees, labels] of [
+    [[active, inactive, { path: '/c', branch: 'new', head: 'ccc' }], ['main', 'topic', 'new']],
+    [[active, { path: '/c', branch: 'new', head: 'ccc' }], ['main', 'new']],
+    [[{ ...active, branch: 'renamed' }, { path: '/c', branch: 'new', head: 'ccc' }], ['renamed', 'new']],
+  ]) {
+    await updateWorktrees(worktrees);
+    assert.deepEqual(elements.tabs.querySelectorAll('.tabs__branch').map((label) => label.textContent), labels);
+    assert.equal(elements.tabs.children[0]['aria-selected'], 'true');
+    assert.equal(controllers.length, 1, 'metadata must not mount another editor');
+    assert.equal(controller.disposed, false);
+    assert.equal(elements.main.children[0], editor);
+    assert.equal(elements.rail.children[0], rail);
+    assert.equal(elements.toolbar.querySelector('.commit-picker__menu'), menu);
+    assert.equal(menu.classList.contains('is-open'), true);
+    assert.deepEqual(controller.state, { scrollTop: 420, cursor: 12, selection: [8, 12], change: 1 });
+  }
+  assert.deepEqual(urls.slice(before), [], 'metadata does not reload workspace resources');
+  assert.equal(sources.filter((source) => source.url.startsWith('/api/watch?')).length, 1);
+  pressKey('l');
+  elements.toolbar.querySelectorAll('.change-nav__step')[0].click();
+  assert.equal(controller.state.change, 1, 'shortcuts and toolbar still navigate the original controller');
+});
+
+test('repeated identical worktree snapshots preserve both Diff and File controllers', async (t) => {
+  const { elements, api, controllers, updateWorktrees, urls } = await viewerApp(t);
+  for (const mode of ['diff', 'file']) {
+    if (mode === 'file') {
+      elements.toolbar.querySelector('.view-toggle--mode').querySelectorAll('.view-toggle__btn')[1].click();
+      await flushApp();
+    }
+    const controller = controllers.at(-1);
+    Object.assign(controller.state, { scrollTop: 99, cursor: 7, selection: [3, 7], change: 2 });
+    const editor = elements.main.children[0];
+    const tab = elements.tabs.children[0];
+    const counts = { mounts: controllers.length, disposals: controllers.filter((view) => view.disposed).length };
+    const before = urls.length;
+    for (let i = 0; i < 3; i++) await updateWorktrees(api.worktrees);
+    assert.equal(elements.main.children[0], editor);
+    assert.equal(elements.tabs.children[0], tab);
+    assert.deepEqual({ mounts: controllers.length, disposals: controllers.filter((view) => view.disposed).length }, counts);
+    assert.deepEqual(controller.state, { scrollTop: 99, cursor: 7, selection: [3, 7], change: 2 });
+    assert.deepEqual(urls.slice(before), []);
+    if (mode === 'file') {
+      await updateWorktrees([{ ...api.worktrees[0], branch: 'file-mode-label' }, api.worktrees[1]]);
+      assert.equal(elements.tabs.querySelector('.tabs__branch').textContent, 'file-mode-label');
+      assert.equal(controllers.at(-1), controller);
+      assert.equal(controller.disposed, false);
+      assert.equal(elements.main.children[0], editor);
+    }
+  }
+});
+
+test('active HEAD changes refresh tree, commits and displayed content only when the new content arrives', async (t) => {
+  const { elements, api, controllers, updateWorktrees, urls } = await viewerApp(t);
+  const controller = controllers[0];
+  const editor = elements.main.children[0];
+  let resolveContent;
+  api.content = new Promise((resolve) => { resolveContent = resolve; });
+  api.files = [{ type: 'file', name: 'f.js', path: 'f.js', status: 'clean' }];
+  api.commits = [{ sha: 'new-head', message: 'new commit' }];
+  const before = urls.length;
+  await updateWorktrees([{ ...api.worktrees[0], head: 'new-head' }, api.worktrees[1]]);
+  assert.deepEqual(urls.slice(before), [
+    '/api/files?worktree=%2Fa', '/api/commits?worktree=%2Fa&file=f.js',
+    '/api/file-content?worktree=%2Fa&file=f.js',
+  ]);
+  assert.equal(elements.rail.querySelector('.rail__file').classList.contains('status-clean'), true);
+  assert.equal(elements.rail.querySelector('.rail__file').classList.contains('is-active'), true);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__item-sha').textContent, 'new-hea');
+  assert.equal(elements.main.children[0], editor, 'metadata does not briefly remount the previous content');
+  assert.equal(controller.disposed, false);
+  assert.equal(controllers.length, 1);
+  resolveContent({ head: 'new base', working: 'new working content' });
+  await flushApp();
+  assert.equal(controller.disposed, true);
+  assert.equal(controllers.length, 2);
+  assert.equal(controllers[1].options.original, 'new base');
+  assert.equal(controllers[1].options.modified, 'new working content');
+});
+
+test('comparison lock, locked HEAD refresh and working-file edits still update the displayed diff', async (t) => {
+  const { elements, api, sources, controllers, updateWorktrees, urls } = await viewerApp(t);
+  api.content = { head: 'older base', working: 'new' };
+  const beforeLock = urls.length;
+  elements.toolbar.querySelector('.commit-picker__menu').querySelectorAll('.commit-picker__item').at(-1).click();
+  await flushApp();
+  assert.deepEqual(urls.slice(beforeLock), [
+    '/api/files?worktree=%2Fa&ref=older', '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
+  ]);
+  assert.equal(controllers[0].disposed, true);
+  assert.equal(controllers.at(-1).options.original, 'older base');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  const beforeHead = urls.length;
+  api.content = { head: 'older base', working: 'post-commit disk' };
+  await updateWorktrees([{ ...api.worktrees[0], head: 'new-head' }, api.worktrees[1]]);
+  assert.deepEqual(urls.slice(beforeHead), [
+    '/api/files?worktree=%2Fa&ref=older', '/api/commits?worktree=%2Fa&file=f.js',
+    '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
+  ]);
+  assert.equal(controllers.at(-1).options.original, 'older base');
+  assert.equal(controllers.at(-1).options.modified, 'post-commit disk');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older');
+  const beforeEdit = urls.length;
+  api.content = { head: 'older base', working: 'edited disk' };
+  sources.find((source) => source.url === '/api/watch?worktree=%2Fa')
+    .onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });
+  await flushApp();
+  assert.deepEqual(urls.slice(beforeEdit), [
+    '/api/files?worktree=%2Fa&ref=older', '/api/file-content?worktree=%2Fa&file=f.js&ref=older',
+  ]);
+  assert.equal(controllers.at(-1).options.modified, 'edited disk');
+  assert.equal(controllers.length, 4);
+  assert.equal(controllers.filter((view) => view.disposed).length, 3);
+  api.content = { head: 'current HEAD base', working: 'edited disk' };
+  elements.toolbar.querySelector('.commit-picker__menu').querySelectorAll('.commit-picker__item')[0].click();
+  await flushApp();
+  assert.equal(controllers.at(-1).options.original, 'current HEAD base');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD');
+});
+
+test('file and worktree selection refresh viewers and active removal falls back before clearing the workspace', async (t) => {
+  const { elements, api, sources, controllers, updateWorktrees, urls } = await viewerApp(t);
+  api.content = { head: 'g base', working: 'g disk' };
+  elements.rail.querySelectorAll('.rail__file').find((row) => row.title === 'g.js').click();
+  await flushApp();
+  assert.equal(controllers[0].disposed, true);
+  assert.equal(elements.toolbar.querySelector('.viewer__filename').textContent, 'g.js');
+  assert.equal(controllers.at(-1).options.modified, 'g disk');
+  elements.toolbar.querySelector('.commit-picker__menu').querySelectorAll('.commit-picker__item').at(-1).click();
+  await flushApp();
+  const aSource = sources.find((source) => source.url === '/api/watch?worktree=%2Fa');
+  const beforeSwitch = urls.length;
+  elements.tabs.children[1].click();
+  await flushApp();
+  assert.equal(controllers.at(-1).disposed, true);
+  assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
+  assert.equal(aSource.closed, true);
+  assert.deepEqual(urls.slice(beforeSwitch), ['/api/files?worktree=%2Fb', '/api/commits?worktree=%2Fb']);
+  api.content = { head: 'b base', working: 'b disk' };
+  elements.rail.querySelector('.rail__file').click();
+  await flushApp();
+  assert.equal(controllers.at(-1).options.original, 'b base');
+  assert.equal(controllers.at(-1).options.modified, 'b disk');
+  const bSource = sources.find((source) => source.url === '/api/watch?worktree=%2Fb');
+  const beforeRemoval = urls.length;
+  await updateWorktrees([api.worktrees[0]]);
+  assert.equal(bSource.closed, true);
+  assert.deepEqual(urls.slice(beforeRemoval), ['/api/files?worktree=%2Fa&ref=older', '/api/commits?worktree=%2Fa']);
+  assert.equal(elements.tabs.children[0]['aria-selected'], 'true');
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'older', 'surviving worktree retains its lock');
+  assert.equal(elements.main.children[0].textContent, 'Select a file to view its diff.');
+  await updateWorktrees([]);
+  assert.equal(elements.main.children[0].textContent, 'No worktrees found.');
+  assert.equal(elements.toolbar.hidden, true);
+  assert.deepEqual(elements.tabs.children, []);
+  const beforeReadd = urls.length;
+  await updateWorktrees([{ path: '/a', branch: 're-added', head: 'aaa' }]);
+  assert.deepEqual(urls.slice(beforeReadd), ['/api/files?worktree=%2Fa', '/api/commits?worktree=%2Fa']);
+  assert.equal(elements.toolbar.querySelector('.commit-picker__trigger-sha').textContent, 'HEAD', 'removed worktree locks are pruned');
+  const beforeStaleEvent = urls.length;
+  aSource.onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });
+  bSource.onmessage({ data: JSON.stringify({ paths: ['f.js'] }) });
+  await flushApp();
+  assert.equal(urls.length, beforeStaleEvent, 'closed streams cannot reload the fallback worktree');
+});
+
 test('initial request failure shows the original error without opening a stream', async () => {
   const { document, window, elements } = browserStub();
   let streams = 0;

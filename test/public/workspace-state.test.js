@@ -219,7 +219,7 @@ test('active HEAD change in Auto reloads commits, tree and open content without 
   assert.deepEqual(f.store.getState().commits, [{ sha: 'new', touchesFile: false }]);
   assert.deepEqual(f.store.getState().fileContent, { working: 'after', base: 'new base' });
   assert.equal(f.viewModeStore.getMode(), 'diff', 'refreshed status does not reset the chosen mode');
-  assert.deepEqual(f.changes, ['render', 'rail', 'toolbar', 'main']);
+  assert.deepEqual(f.changes, ['metadata', 'rail', 'toolbar', 'main']);
 });
 
 test('unchanged active HEAD and inactive HEAD changes do not refetch workspace resources', () => {
@@ -232,7 +232,7 @@ test('unchanged active HEAD and inactive HEAD changes do not refetch workspace r
   assert.equal(f.requests.length, 3);
   assert.equal(f.fileCommitRequests.length, 1);
   assert.deepEqual(f.watches, ['/a']);
-  assert.deepEqual(f.changes, ['render', 'render']);
+  assert.deepEqual(f.changes, ['metadata']);
   assert.equal(f.store.getState().activeFile, 'open');
 });
 
