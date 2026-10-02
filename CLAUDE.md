@@ -4,7 +4,7 @@ Use Conventional Commits for commits pushed to `main`.
 One feature is one commit. Squash related commit before pushing to main.
 
 Before starting a task or exploration in a new session, create a dedicated Git worktree from origin/main and move the OpenCode session into it.
-Name worktree directories in lowercase kebab-case as `issue-<number>-<short-purpose>` for issue-linked work or `<type>-<short-purpose>` (such as `explore-session-recovery`) otherwise.
+If you are given an issue read it, then name worktree directories in lowercase kebab-case as `issue-<number>-<short-purpose>` for issue-linked work or `<type>-<short-purpose>` (such as `explore-session-recovery`) otherwise.
 You are allowed to install existing locked dependencies in worktrees.
 Review changes against the commit the worktree started from.
 
