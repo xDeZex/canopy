@@ -16,3 +16,20 @@ Functions should preferably be functional: they compute their result from their 
 - Test functions by giving them inputs and checking the outputs. This is the preferred shape for a test.
 - Tests should not exercise external dependencies or IO (filesystem, network, git, the clock, and so on).
 - Where a test can't avoid them, mocking is acceptable. Better still is to write the code so the logic is separate from the IO, which makes mocking unnecessary. If a test needs a mock, consider first whether the code should be restructured.
+
+### Discussing the test plan
+
+Before implementing, propose the test plan in terms of behaviour and confidence,
+rather than function names or testing adapters.
+
+- Explicitly label each group as static checks, unit tests, integration tests,
+  or end-to-end tests. Distinguish automated tests from manual evaluation.
+- Describe what each group will prove, which external dependencies will be
+  simulated, and what remains unverified.
+- Explain the approximate balance between levels and why it suits the work.
+  Use the testing trophy as guidance, not a fixed numerical quota.
+- Agree coverage and trade-offs with the user first. The agent owns mapping
+  that agreement to concrete test seams; explain code-level details when useful.
+
+During review, check whether the tests support the agreed confidence claims,
+including the limitations of simulated dependencies.
