@@ -40,6 +40,8 @@ test('comments route is read-only, membership-scoped and ignores arbitrary sidec
   assert.equal(result.headers['Cache-Control'], 'no-store');
   assert.deepEqual(calls, ['/linked']);
   const head = await handler(request('HEAD', '/api/comments?worktree=/linked'));
+  assert.equal(head.status, result.status);
+  assert.deepEqual(head.headers, result.headers);
   assert.equal(head.body, undefined);
 });
 
@@ -70,6 +72,94 @@ test('deletion preview and confirmed DELETE validate exact membership, origin an
   } });
   assert.equal(result.status, 200);
   assert.deepEqual(calls, [{ path: '/linked', confirmation: 'signed-snapshot' }]);
+});
+
+test('deletion errors disclose details and preserve removal outcomes with default branch fields', async () => {
+  for (const [details, status, payload] of [
+    [{}, 500, { removed: false, branchDeleted: false, branch: null }],
+    [{ status: 409, removed: null }, 409, { removed: null, branchDeleted: false, branch: null }],
+    [{ status: 403, removed: false, branchDeleted: null }, 403, { removed: false, branchDeleted: false, branch: null }],
+    [{ status: 500, removed: true, branchDeleted: true, branch: 'feature' }, 500,
+      { removed: true, branchDeleted: true, branch: 'feature' }],
+  ]) {
+    const fail = async () => { throw Object.assign(new Error('git failed /secret/path'), details); };
+    const handler = makeHandler({ worktreeDeletion: { preview: fail, remove: fail } });
+    for (const method of ['GET', 'DELETE']) {
+      const response = await handler({ ...request(method, '/api/worktree-deletion?worktree=/linked'),
+        headers: { host: 'localhost', 'x-canopy-confirmation': 'token' } });
+      assert.equal(response.status, status);
+      assert.deepEqual(JSON.parse(response.body), { error: 'git failed /secret/path', ...payload });
+      assert.equal(response.headers['Cache-Control'], 'no-store');
+      assert.equal(response.headers['Content-Length'], Buffer.byteLength(response.body));
+    }
+  }
+});
+
+test('deletion HEAD runs preview, retaining GET status and headers without a body', async () => {
+  for (const fails of [false, true]) {
+    const calls = [];
+    const handler = makeHandler({ worktreeDeletion: {
+      preview: async (path) => {
+        calls.push(path);
+        if (fails) throw Object.assign(new Error('Preview unavailable'), { status: 409, removed: null });
+        return { path, confirmation: 'signed-snapshot' };
+      },
+      remove: async () => assert.fail('HEAD must not remove a worktree'),
+    } });
+    const url = '/api/worktree-deletion?worktree=/linked';
+    const get = await handler(request('GET', url));
+    const head = await handler(request('HEAD', url));
+    assert.equal(head.status, fails ? 409 : 200);
+    assert.deepEqual(head.headers, get.headers);
+    assert.equal(head.body, undefined);
+    assert.equal(head.stream, undefined);
+    assert.deepEqual(calls, ['/linked', '/linked']);
+  }
+});
+
+test('unsupported mutation methods return 404 before membership validation or static fallback', async () => {
+  const unexpected = () => assert.fail('Unsupported methods must not invoke dependencies');
+  const handler = makeHandler({ getWorktrees: unexpected, createComment: unexpected,
+    worktreeDeletion: { preview: unexpected, remove: unexpected }, readStatic: unexpected });
+  for (const [route, methods] of [
+    ['/api/worktree-deletion', ['POST', 'PUT', 'PATCH', 'OPTIONS']],
+    ['/api/comments', ['DELETE', 'PUT', 'PATCH', 'OPTIONS']],
+  ]) {
+    for (const method of methods) {
+      const response = await handler(request(method, route));
+      assert.equal(response.status, 404);
+      assert.deepEqual(JSON.parse(response.body), { error: 'Not found' });
+      assert.equal(response.headers['Cache-Control'], undefined);
+    }
+  }
+});
+
+test('mutation validation checks membership before origin or body and only then adds no-store', async () => {
+  const unexpected = () => assert.fail('Validation failures must not invoke mutations');
+  const handler = makeHandler({ createComment: unexpected, worktreeDeletion: { remove: unexpected } });
+  for (const [method, route, originError] of [
+    ['DELETE', '/api/worktree-deletion', 'Same-origin request with confirmation header required'],
+    ['POST', '/api/comments', 'Same-origin JSON request required'],
+  ]) {
+    for (const [query, status, error, cache] of [
+      ['', 400, 'Missing "worktree" query param', undefined],
+      ['?worktree=/unknown', 404, 'Unknown worktree', undefined],
+      ['?worktree=/linked', 403, originError, 'no-store'],
+    ]) {
+      const response = await handler({ ...request(method, `${route}${query}`),
+        headers: { host: 'localhost', origin: 'https://evil.example' }, body: 'not json' });
+      assert.equal(response.status, status);
+      assert.deepEqual(JSON.parse(response.body), { error });
+      assert.equal(response.headers['Cache-Control'], cache);
+    }
+  }
+  for (const body of [undefined, 'not json', 'null', '[1]', '42', '"text"']) {
+    const response = await handler({ ...request('POST', '/api/comments?worktree=/linked'),
+      headers: { host: 'localhost', 'content-type': 'application/json' }, body });
+    assert.equal(response.status, 400);
+    assert.deepEqual(JSON.parse(response.body), { error: 'Invalid JSON body' });
+    assert.equal(response.headers['Cache-Control'], 'no-store');
+  }
 });
 
 test('both observation routes forward the browser ignore mode, defaulting on', async () => {
@@ -258,22 +348,22 @@ test('/api/watch-worktrees frames snapshots and poll errors, and unsubscribes on
   assert.equal(unsubscribed, true);
 });
 
-test('HEAD on an SSE route gets the headers with no stream and starts no watcher', async () => {
-  let started = false;
-  const res = await run('/api/watch?worktree=/main', 'HEAD', {
-    watchWorktree: () => {
-      started = true;
-      return { close() {} };
-    },
+test('HEAD on every SSE route keeps GET headers without a body, stream or subscription', async () => {
+  const unexpected = () => assert.fail('HEAD must not start a subscription');
+  const handler = makeHandler({
+    watchWorktree: unexpected,
+    subscribeToWorktreeChanges: unexpected,
+    subscribeToActivity: unexpected,
   });
-  assert.equal(res.status, 200);
-  assert.equal(res.headers['Content-Type'], 'text/event-stream; charset=utf-8');
-  assert.equal(res.stream, undefined);
-  assert.equal(started, false);
-
-  const list = await run('/api/watch-worktrees', 'HEAD');
-  assert.equal(list.status, 200);
-  assert.equal(list.stream, undefined);
+  for (const url of ['/api/watch?worktree=/main', '/api/watch-worktrees', '/api/watch-activity']) {
+    const get = await handler(request('GET', url));
+    const head = await handler(request('HEAD', url));
+    assert.equal(head.status, 200);
+    assert.deepEqual(head.headers, get.headers);
+    assert.equal(head.headers['Content-Type'], 'text/event-stream; charset=utf-8');
+    assert.equal(head.body, undefined);
+    assert.equal(head.stream, undefined);
+  }
 });
 
 test('static: / serves index.html with its content type and length', async () => {
@@ -365,8 +455,10 @@ test('comment creation reports conflicts with the latest revision and hides unex
   const response = await post(conflict, '/api/comments?worktree=/linked', jsonHeaders);
   assert.equal(response.status, 409);
   assert.deepEqual(JSON.parse(response.body), { error: 'Comments changed', conflict: true, revision: 'r9' });
+  assert.equal(response.headers['Cache-Control'], 'no-store');
   const broken = makeHandler({ createComment: async () => { throw new Error('EACCES /secret/path'); } });
   const failure = await post(broken, '/api/comments?worktree=/linked', jsonHeaders);
   assert.equal(failure.status, 500);
-  assert.doesNotMatch(failure.body, /secret/);
+  assert.deepEqual(JSON.parse(failure.body), { error: 'Could not save comment', conflict: false, revision: null });
+  assert.equal(failure.headers['Cache-Control'], 'no-store');
 });

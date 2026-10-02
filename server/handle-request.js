@@ -52,6 +52,11 @@ export function createRequestHandler({
     const includeBody = method !== 'HEAD';
     const ignoreGitignore = searchParams.get('ignoreGitignore') !== 'false';
     const json = (status, body) => jsonResponse(status, body, { includeBody });
+    const noStoreJson = (status, payload) => {
+      const response = json(status, payload);
+      response.headers['Cache-Control'] = 'no-store';
+      return response;
+    };
 
     // Reject missing and unknown worktrees before any route operates on a
     // path. Returns `{ worktreePath }` or `{ error }` (a ready response).
@@ -67,51 +72,49 @@ export function createRequestHandler({
       return { worktreePath };
     };
 
-    if (pathname === '/api/worktree-deletion' && (isReadable || method === 'DELETE')) {
-      const respond = (status, body) => {
-        const response = json(status, body);
-        response.headers['Cache-Control'] = 'no-store';
-        return response;
-      };
+    async function handleWorktreeDeletion() {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
       if (method === 'DELETE') {
         if (!headers['x-canopy-confirmation'] || typeof headers['x-canopy-confirmation'] !== 'string' ||
             crossOrigin(headers, protocol)) {
-          return respond(403, { error: 'Same-origin request with confirmation header required' });
+          return noStoreJson(403, { error: 'Same-origin request with confirmation header required' });
         }
       }
       try {
         const result = method === 'DELETE'
           ? await worktreeDeletion.remove(worktreePath, headers['x-canopy-confirmation'])
           : await worktreeDeletion.preview(worktreePath);
-        return respond(200, result);
+        return noStoreJson(200, result);
       } catch (err) {
-        return respond(err.status ?? 500, { error: err.message, removed: err.removed === undefined ? false : err.removed,
+        return noStoreJson(err.status ?? 500, { error: err.message, removed: err.removed === undefined ? false : err.removed,
           branchDeleted: err.branchDeleted ?? false, branch: err.branch ?? null });
       }
     }
 
-    if (pathname === '/api/comments' && method === 'POST') {
-      const respond = (status, payload) => {
-        const response = json(status, payload);
-        response.headers['Cache-Control'] = 'no-store';
-        return response;
-      };
+    async function handleCommentCreation() {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
       if (crossOrigin(headers, protocol) || !/^application\/json\b/i.test(headers['content-type'] ?? '')) {
-        return respond(403, { error: 'Same-origin JSON request required' });
+        return noStoreJson(403, { error: 'Same-origin JSON request required' });
       }
       let input;
-      try { input = JSON.parse(body ?? ''); } catch { return respond(400, { error: 'Invalid JSON body' }); }
-      if (input === null || typeof input !== 'object' || Array.isArray(input)) return respond(400, { error: 'Invalid JSON body' });
+      try { input = JSON.parse(body ?? ''); } catch { return noStoreJson(400, { error: 'Invalid JSON body' }); }
+      if (input === null || typeof input !== 'object' || Array.isArray(input)) return noStoreJson(400, { error: 'Invalid JSON body' });
       try {
-        return respond(201, await createComment(worktreePath, input));
+        return noStoreJson(201, await createComment(worktreePath, input));
       } catch (err) {
-        return respond(err.status ?? 500, { error: err.status ? err.message : 'Could not save comment',
+        return noStoreJson(err.status ?? 500, { error: err.status ? err.message : 'Could not save comment',
           conflict: err.conflict ?? false, revision: err.revision ?? null });
       }
+    }
+
+    if (pathname === '/api/worktree-deletion' && (isReadable || method === 'DELETE')) {
+      return handleWorktreeDeletion();
+    }
+
+    if (pathname === '/api/comments' && method === 'POST') {
+      return handleCommentCreation();
     }
 
     if (!isReadable) return jsonResponse(404, { error: 'Not found' });
@@ -123,9 +126,7 @@ export function createRequestHandler({
     if (pathname === '/api/comments') {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
-      const response = json(200, await getComments(worktreePath));
-      response.headers['Cache-Control'] = 'no-store';
-      return response;
+      return noStoreJson(200, await getComments(worktreePath));
     }
 
     if (pathname === '/api/files') {
