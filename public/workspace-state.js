@@ -33,6 +33,8 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   let comments = { threads: [], warning: null };
   let mainView = 'file';
   let selectedThreadId = null;
+  let worktreeGeneration = 0;
+  let commentsLoad = Promise.resolve();
 
   async function fetchJson(url) {
     const res = await request(url);
@@ -62,6 +64,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   function switchWorktree(path) {
     if (path === activePath) return false;
     activePath = path;
+    worktreeGeneration++;
     clearFile();
     // Invalidate outstanding requests even if a previous path is reselected.
     treeRequest++;
@@ -175,7 +178,12 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     onChange('main');
   }
 
-  async function loadComments() {
+  function loadComments() {
+    commentsLoad = readComments();
+    return commentsLoad;
+  }
+
+  async function readComments() {
     const generation = ++commentsRequest;
     const path = activePath;
     if (!path) return;
@@ -200,7 +208,17 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   // revision this client has seen. Rejections carry the server's message; the
   // latest comments are reloaded either way so a conflict shows what changed.
   async function addComment({ file, line, endLine, text }) {
+    return saveComment({ file, line, endLine, text });
+  }
+
+  async function addReply({ threadId, text, worktree = activePath }) {
+    if (worktree !== activePath) throw new Error('The active worktree changed; return to this conversation to retry');
+    return saveComment({ threadId, text }, { waitForRefresh: true });
+  }
+
+  async function saveComment(input, { waitForRefresh = false } = {}) {
     const path = activePath;
+    const generation = worktreeGeneration;
     const revision = comments?.revision;
     if (comments?.warning) throw new Error(`Cannot save while comments cannot be read: ${comments.warning}`);
     if (!path || typeof revision !== 'string') throw new Error('Comments are still loading; try again in a moment');
@@ -208,17 +226,36 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     try {
       res = await request(`/api/comments?worktree=${encodeURIComponent(path)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file, line, endLine, text, revision }),
+        body: JSON.stringify({ ...input, revision }),
       });
     } catch (err) {
       throw new Error(`Could not save comment: ${err.message}`);
     }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      if (path === activePath) void loadComments();
-      throw new Error(body.error || `request failed with status ${res.status}`);
+    const body = !res.ok ? await res.json().catch(() => ({})) : null;
+    if (waitForRefresh && generation !== worktreeGeneration) {
+      if (res.ok) return; // The old worktree's draft was saved; do not invite a duplicate retry.
+      throw new Error('The active worktree changed; return to this conversation to retry');
     }
-    if (path === activePath) void loadComments();
+    if (generation === worktreeGeneration) {
+      const refresh = loadComments();
+      if (waitForRefresh) {
+        // A watcher may supersede our read. Wait for that newer read too,
+        // rather than enabling retry against a revision not yet displayed.
+        let pending = refresh;
+        do {
+          await pending;
+          if (generation !== worktreeGeneration) {
+            if (res.ok) return; // Navigation cannot turn a confirmed save into a retry.
+            throw new Error('The active worktree changed; return to this conversation to retry');
+          }
+          if (pending === commentsLoad) break;
+          pending = commentsLoad;
+        } while (true);
+      }
+    }
+    if (!res.ok) throw new Error(body.error || `request failed with status ${res.status}`);
+    // A successful POST is not retried when its refresh fails: that would
+    // duplicate the reply. The retained conversation shows the read warning.
   }
 
   function showGeneralComments() {
@@ -291,6 +328,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     },
     showGeneralComments,
     addComment,
+    addReply,
     // A reconnect has no paths: reconcile the tree and any selected content.
     remoteChange(paths = null) {
       loadFileTree();

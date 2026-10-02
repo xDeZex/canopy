@@ -51,6 +51,52 @@ function fixture(savedMode = null) {
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
 const list = (paths) => paths.map((path) => ({ path }));
 
+test('reply conflict waits for refreshed conversation before retry and never posts against a failed refresh', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a', '/b']));
+  await f.reply(f.commentRequests[0], { threads: [{ id: 't', messages: ['seen'] }], revision: 'r1', warning: null });
+  let settled = false;
+  const saved = f.store.addReply({ threadId: 't', text: 'my draft' });
+  const rejected = assert.rejects(saved, /Comments changed/).then(() => { settled = true; });
+  assert.deepEqual(JSON.parse(f.postRequests[0].options.body), { threadId: 't', text: 'my draft', revision: 'r1' });
+  f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  await f.reply(f.commentRequests[1], { threads: [{ id: 't', messages: ['seen', 'incoming'] }], revision: 'r2', warning: null });
+  await rejected;
+  assert.deepEqual(f.store.getState().comments.threads[0].messages, ['seen', 'incoming']);
+  const retry = f.store.addReply({ threadId: 't', text: 'my draft' });
+  assert.equal(JSON.parse(f.postRequests[1].options.body).revision, 'r2');
+  f.postRequests[1].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
+  const failed = assert.rejects(retry, /Comments changed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  f.commentRequests[2].reject(new Error('offline'));
+  await failed;
+  await assert.rejects(f.store.addReply({ threadId: 't', text: 'my draft' }), /cannot be read/);
+  assert.equal(f.postRequests.length, 2, 'failed refresh cannot let a retry overwrite unseen messages');
+  f.store.selectWorktree('/b');
+  await f.reply(f.commentRequests.at(-1), { threads: [], revision: 'absent', warning: null });
+  await assert.rejects(f.store.addReply({ threadId: 't', text: 'my draft', worktree: '/a' }), /worktree/);
+  assert.equal(f.postRequests.length, 2);
+});
+
+test('reply success refreshes all messages before resolving and worktree round trips invalidate pending saves', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a', '/b']));
+  await f.reply(f.commentRequests[0], { threads: [{ id: 't', messages: [] }], revision: 'r1', warning: null });
+  const saved = f.store.addReply({ threadId: 't', text: 'reply' });
+  f.postRequests[0].resolve({ ok: true, status: 201 });
+  await new Promise((resolve) => setImmediate(resolve));
+  await f.reply(f.commentRequests[1], { threads: [{ id: 't', messages: ['reply'] }], revision: 'r2', warning: null });
+  await saved;
+  const late = f.store.addReply({ threadId: 't', text: 'late' });
+  const rejected = assert.rejects(late, /worktree/);
+  f.store.selectWorktree('/b');
+  f.store.selectWorktree('/a');
+  f.postRequests[1].resolve({ ok: false, status: 409, json: async () => ({ error: 'conflict' }) });
+  await rejected;
+});
+
 test('comment navigation distinguishes general from unavailable anchors, preserves same-file content and clears removed selections', async () => {
   const f = fixture('file');
   f.store.updateWorktrees(list(['/a', '/b']));

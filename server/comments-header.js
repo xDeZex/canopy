@@ -19,8 +19,10 @@ Schema:
 A thread not tied to a file may omit file, side and line_range together (never use null).
 Unknown fields, duplicate ids, other versions and non-core YAML tags make Canopy refuse
 the whole file with a visible warning. IDs and created_at values must never change.
-To reply, append a message with author: agent. A reply does not change resolved; set
+User replies append author: user and always set resolved: false, reopening the thread.
+Agent replies append author: agent and leave resolved unchanged unless explicitly setting
 resolved: true only when the same edit also adds an agent response.
+Prose never changes resolution on its own.
 Writing from outside Canopy: reread the file immediately before changing it, change only
 what you mean to, write the result to a temporary file in this directory and atomically
 rename it over comments.yaml. Never edit in place.

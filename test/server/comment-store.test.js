@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCommentStore } from '../../server/comment-store.js';
 import { commentsRevision, parseComments } from '../../server/comments.js';
+import { createRequestHandler } from '../../server/handle-request.js';
 
 const enoent = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
 const SIDECAR = '/repo/.canopy/comments.yaml';
@@ -33,6 +34,74 @@ function fixture({ files = { '/repo': 'dir', '/repo/src': 'dir', '/repo/src/a.js
   return { store, fs, log };
 }
 const request = (revision, patch = {}) => ({ file: 'src/a.js', line: 2, text: 'Why?', revision, ...patch });
+
+test('registered same-origin reply route uses the shared atomic revision guard and preserves unseen messages', async () => {
+  const { store, fs, log } = fixture();
+  const first = await store.create('/repo', request('absent'));
+  const second = await store.create('/repo', request(first.revision, { text: 'unrelated' }));
+  fs.set(SIDECAR, fs.get(SIDECAR).replace('resolved: false', 'resolved: true'));
+  const revision = commentsRevision(fs.get(SIDECAR));
+  const handle = createRequestHandler({ getWorktrees: async () => [{ path: '/repo' }], createComment: store.create });
+  const post = (input, patch = {}) => handle({ method: 'POST', pathname: '/api/comments',
+    searchParams: new URLSearchParams({ worktree: '/repo' }), headers: { host: 'localhost', 'content-type': 'application/json' },
+    body: JSON.stringify(input), ...patch });
+  const input = { threadId: first.thread.id, text: 'Done <b>literal</b>', revision };
+  log.length = 0;
+  assert.equal((await post(input, { headers: { host: 'localhost', origin: 'http://evil', 'content-type': 'application/json' } })).status, 403);
+  assert.equal((await post(input, { searchParams: new URLSearchParams({ worktree: '/unknown' }) })).status, 404);
+  assert.equal((await post({ ...input, threadId: 'missing' })).status, 409);
+  assert.equal((await post({ ...input, text: ' ' })).status, 400);
+  assert.equal(log.some(([step]) => step === 'write'), false);
+  const response = await post(input);
+  assert.equal(response.status, 201);
+  assert.equal(response.headers['Cache-Control'], 'no-store');
+  const result = JSON.parse(response.body);
+  const threads = parseComments(fs.get(SIDECAR)).threads;
+  assert.equal(threads[0].resolved, false);
+  assert.deepEqual(threads[0].messages[0], first.thread.messages[0]);
+  assert.equal(threads[0].messages[1].author, 'user');
+  assert.equal(threads[0].messages[1].text, input.text);
+  assert.deepEqual(threads[1], second.thread);
+  assert.equal(result.revision, commentsRevision(fs.get(SIDECAR)));
+  const before = fs.get(SIDECAR);
+  assert.equal((await post(input)).status, 409);
+  assert.equal(fs.get(SIDECAR), before);
+});
+
+test('general and unavailable anchored threads can be replied to without relocating their anchors', async () => {
+  const message = { id: 'original', author: 'agent', text: 'Fixed', created_at: '2026-10-01T12:00:00Z' };
+  const threads = [
+    { id: 'general', created_at: message.created_at, resolved: true, messages: [message] },
+    { id: 'unavailable', file: 'deleted.js', side: 'modified', line_range: { start: 4, end: 8 },
+      created_at: message.created_at, resolved: true, messages: [message] },
+  ];
+  const source = JSON.stringify({ version: 1, threads });
+  const { store, fs } = fixture({ files: { '/repo': 'dir', '/repo/.canopy': 'dir', [SIDECAR]: source } });
+  let revision = commentsRevision(source);
+  for (const thread of threads) {
+    const result = await store.create('/repo', { threadId: thread.id, text: 'Still open?', revision });
+    revision = result.revision;
+    assert.deepEqual(result.thread, { ...thread, resolved: false, messages: [message, result.thread.messages[1]] });
+  }
+  assert.equal(parseComments(fs.get(SIDECAR)).threads.length, 2);
+});
+
+test('reply and new-thread mutations share a queue and reply failures preserve the atomic sidecar boundary', async () => {
+  const seeded = fixture();
+  const first = await seeded.store.create('/repo', request('absent'));
+  const input = { threadId: first.thread.id, text: 'reply', revision: first.revision };
+  const results = await Promise.allSettled([seeded.store.create('/repo', input), seeded.store.create('/repo', request(first.revision))]);
+  assert.deepEqual(results.map((result) => result.status), ['fulfilled', 'rejected']);
+  assert.equal(results[1].reason.conflict, true);
+  const before = seeded.fs.get(SIDECAR);
+  for (const [data, writeFails, status] of [[before, true, undefined], ['version: 2\nthreads: []', false, 409], ['symlink', false, 409]]) {
+    const { store, fs, log } = fixture({ writeFails, files: { '/repo': 'dir', '/repo/.canopy': 'dir', [SIDECAR]: data } });
+    await assert.rejects(store.create('/repo', { ...input, revision: commentsRevision(data) }), (err) => err.status === status);
+    assert.equal(fs.get(SIDECAR), data);
+    assert.equal(log.some(([step]) => step === 'rename'), false);
+    assert.equal([...fs.keys()].some((path) => path.endsWith('.tmp')), false);
+  }
+});
 
 test('first save lazily creates the sidecar via a temp file and atomic rename', async () => {
   const { store, fs, log } = fixture();

@@ -92,6 +92,7 @@ export async function startApp({
     getAutoScroll: () => autoScrollStore.isEnabled(),
     getWrap,
     addComment: (comment) => workspace.addComment(comment),
+    addReply: (reply) => workspace.addReply(reply),
   });
 
   function onViewModeChanged(mode) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseComments, appendThread, commentsRevision, validateNewThread } from '../../server/comments.js';
+import { parseComments, appendThread, appendReply, validateReply, commentsRevision, validateNewThread } from '../../server/comments.js';
 
 export const thread = (patch = {}) => ({
   id: 'thread-1', file: 'public/app.js', side: 'modified', line_range: { start: 1, end: 2 },
@@ -11,6 +11,25 @@ export const thread = (patch = {}) => ({
   ], ...patch,
 });
 const source = (threads) => JSON.stringify({ version: 1, threads });
+
+test('user replies append without rewriting history, reopen even resolved threads, and never interpret prose', () => {
+  const original = thread({ resolved: true });
+  const other = thread({ id: 'other' });
+  const result = appendReply(source([original, other]), { threadId: original.id, text: 'Resolved, fixed, done.' },
+    { messageId: 'new', createdAt: '2026-10-02T09:00:00Z' });
+  const loaded = parseComments(result.source).threads;
+  assert.deepEqual(result.thread.messages.slice(0, -1), original.messages);
+  assert.equal(result.thread.resolved, false);
+  assert.match(result.source, /User replies append author: user and always set resolved: false/);
+  assert.deepEqual(result.thread.messages.at(-1), { id: 'new', author: 'user', text: 'Resolved, fixed, done.', created_at: '2026-10-02T09:00:00Z' });
+  assert.deepEqual(loaded[1], parseComments(source([other])).threads[0]);
+  assert.throws(() => appendReply(source([original]), { threadId: 'missing', text: 'x' }, { messageId: 'new' }), /not found/);
+  assert.throws(() => appendReply(source([original]), { threadId: original.id, text: 'x' }, { messageId: 'first' }), /Duplicate/);
+  for (const input of [{}, { threadId: '', text: 'x' }, { threadId: 't', text: ' ' }, { threadId: 't', text: 'x'.repeat(20001) }]) {
+    assert.equal(typeof validateReply(input), 'string');
+  }
+  assert.equal(validateReply({ threadId: 't', text: '<b>literal</b>' }), null);
+});
 
 test('mixed version 1 threads accept only complete anchors or genuinely general conversations', () => {
   const { file, side, line_range, ...general } = thread({ id: 'general' });

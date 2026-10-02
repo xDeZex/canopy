@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { open, mkdir, rename, rm } from 'node:fs/promises';
-import { appendThread, commentsRevision, validateNewThread } from './comments.js';
+import { appendThread, appendReply, commentsRevision, validateNewThread, validateReply } from './comments.js';
 import { SIDECAR, checkPath, defaultReadIo } from './sidecar-path.js';
 
 const fail = (status, message, extra = {}) => Object.assign(new Error(message), { status, ...extra });
@@ -35,12 +35,15 @@ export function createCommentStore({ io = defaultIo, newId = randomUUID, now = (
   }
 
   async function save(worktreePath, { revision, ...input }) {
-    const invalid = validateNewThread(input);
+    const reply = Object.hasOwn(input, 'threadId');
+    const invalid = reply ? validateReply(input) : validateNewThread(input);
     if (invalid) throw fail(400, invalid);
     if (typeof revision !== 'string') throw fail(400, 'Missing comments revision');
     const root = await io.realpath(worktreePath);
-    try { await checkPath(io, root, input.file); }
-    catch (err) { throw fail(400, `File is unavailable: ${err.code === 'ENOENT' ? 'missing' : err.message}`); }
+    if (!reply) {
+      try { await checkPath(io, root, input.file); }
+      catch (err) { throw fail(400, `File is unavailable: ${err.code === 'ENOENT' ? 'missing' : err.message}`); }
+    }
 
     const source = await readCurrent(root);
     const latest = commentsRevision(source);
@@ -50,7 +53,7 @@ export function createCommentStore({ io = defaultIo, newId = randomUUID, now = (
     }
     let next;
     try {
-      next = appendThread(source, input, { threadId: `thread-${newId()}`, messageId: `message-${newId()}`,
+      next = (reply ? appendReply : appendThread)(source, input, { ...(!reply ? { threadId: `thread-${newId()}` } : {}), messageId: `message-${newId()}`,
         createdAt: now().toISOString() });
     } catch (err) {
       throw fail(409, `Refusing to modify the comments file: ${err.message}`);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderCommentIndex, commentsForView, renderComposer } from '../../public/comments-view.js';
+import { renderCommentIndex, commentsForView, renderComposer, renderConversation } from '../../public/comments-view.js';
 
 const element = (tag) => ({ tag, children: [], textContent: '', events: {},
   setAttribute(name, value) { this[name] = value; },
@@ -47,6 +47,67 @@ test('valid inline ranges are available; unavailable anchors never become genera
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const find = (node, tag) => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
 const submit = (form) => form.events.submit({ preventDefault() {} });
+
+test('resolved conversations expose native Reply, retain the same focused draft through updates and show safe retry text', async () => {
+  let finish;
+  const saves = [];
+  const doc = { createElement(tag) { const node = element(tag); node.focus = () => { doc.activeElement = node; }; return node; } };
+  const article = renderConversation(doc, thread, { onReply: (text) => {
+    saves.push(text);
+    return new Promise((resolve, reject) => { finish = { resolve, reject }; });
+  } });
+  const reply = find(article, 'button')[0];
+  assert.equal(reply.textContent, 'Reply');
+  assert.equal(reply.type, 'button');
+  assert.equal(reply['aria-expanded'], 'false');
+  assert.doesNotMatch(texts(article), /Edit/);
+  reply.events.click();
+  const textarea = find(article, 'textarea')[0];
+  assert.equal(textarea['aria-label'], 'Reply to thread t');
+  assert.equal(doc.activeElement, textarea);
+  textarea.value = 'my <b>draft</b>';
+  textarea.events.input();
+  article.updateThread({ ...thread, resolved: false, messages: [...thread.messages,
+    { id: 'incoming', author: 'agent', text: '<script>incoming</script>', created_at: 'later' }] });
+  assert.equal(find(article, 'textarea')[0], textarea);
+  assert.equal(doc.activeElement, textarea);
+  assert.equal(textarea.value, 'my <b>draft</b>');
+  const form = find(article, 'form')[0];
+  const saving = submit(form);
+  submit(form);
+  assert.equal(find(form, 'button')[0].disabled, true);
+  assert.deepEqual(saves, ['my <b>draft</b>']);
+  finish.reject(new Error('Conflict <img> — review incoming messages and retry'));
+  await saving;
+  assert.equal(find(form, 'button')[0].textContent, 'Retry reply');
+  assert.match(texts(article), /Conflict <img>/);
+  assert.match(texts(article), /<script>incoming<\/script>/);
+  assert.equal(find(article, 'textarea')[0], textarea);
+  const retry = submit(form);
+  finish.resolve();
+  await retry;
+  assert.equal(find(article, 'textarea').length, 0);
+  assert.equal(reply['aria-expanded'], 'false');
+});
+
+test('an unreadable refresh blocks reply retry until a valid conversation arrives without discarding the draft', async () => {
+  let saves = 0;
+  const article = renderConversation(document, thread, { onReply: async () => { saves++; throw new Error('Conflict'); } });
+  find(article, 'button')[0].events.click();
+  const textarea = find(article, 'textarea')[0];
+  textarea.value = 'keep me';
+  article.updateReplyState({ blocked: true, warning: 'Failed to refresh; reload comments before retrying' });
+  const form = find(article, 'form')[0];
+  assert.equal(find(form, 'button')[0].disabled, true);
+  await submit(form);
+  assert.equal(saves, 0);
+  assert.match(texts(form), /Failed to refresh/);
+  article.updateReplyState({ blocked: false });
+  assert.equal(find(form, 'button')[0].disabled, false);
+  await submit(form);
+  assert.equal(saves, 1);
+  assert.equal(textarea.value, 'keep me');
+});
 
 function composer(options = {}) {
   const calls = [];
@@ -99,6 +160,14 @@ test('a failed save shows the error as text, keeps the draft and allows retry; a
 test('composer restores a retained error with its draft', () => {
   const { view } = composer({ text: 'kept', error: 'Disk full' });
   assert.equal(find(view.node, 'p')[0].textContent, 'Disk full');
+});
+
+test('composer retry wording is explicit rather than inferred from save-button text', async () => {
+  const { view, form, textarea } = composer({ saveLabel: 'Publish', retryLabel: 'Try again',
+    onSave: async () => { throw new Error('Conflict'); } });
+  textarea.value = 'draft';
+  await submit(form);
+  assert.equal(find(view.node, 'button')[0].textContent, 'Try again');
 });
 
 test('composer labels a range by its inclusive lines and a single line by its line', () => {

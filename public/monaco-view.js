@@ -3,7 +3,7 @@
 // no-build-step approach, same version validated in prototype/ui-layout's
 // throwaway UI (variant D). The mounted controller is tested with a Monaco
 // stub; Monaco's rendering itself is left to manual/visual verification.
-import { renderConversation, renderComposer } from './comments-view.js';
+import { renderConversation, renderComposer, captureCommentFocus } from './comments-view.js';
 import { composerTarget } from './comment-range.js';
 
 let loaderReady = null;
@@ -41,11 +41,14 @@ const DIFF_MODE_OPTIONS = {
 const lineCount = (editor) => editor.getModel().getLineCount();
 
 // Shared public code-editor seam for File and the modified pane of Diff.
-function createThreadZones(getEditor, { contentAvailable = true, document, ResizeObserver, composer = null }) {
+function createThreadZones(getEditor, { contentAvailable = true, document, ResizeObserver, composer = null,
+  conversation = (thread) => renderConversation(document, thread) }) {
   let zones = [];
   let disposed = false;
   let snapshot = null;
   const threadsById = new Map();
+  const articlesById = new Map();
+  let topology = null;
   let foldingDisabled = false;
   let composerEntry = null;
   let hoverDecorations = [];
@@ -60,7 +63,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
   // The gutter target and keyboard shortcut both open the same composer: a
   // native form in a view zone after the last chosen modified-side line. The
   // draft lives with the caller so remounts can restore it.
-  function openComposer(line, endLine = line, text = '', error = null) {
+  function openComposer(line, endLine = line, text = '', error = null, focus = true) {
     if (disposed) return;
     const editor = getEditor();
     if (!Number.isSafeInteger(line) || !Number.isSafeInteger(endLine) || line < 1 || endLine < line ||
@@ -100,7 +103,12 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
       entry.observer.observe(view.node);
     }
     composerEntry = entry;
-    setTimeout(() => { if (composerEntry === entry) view.focus(); }, 0);
+    setTimeout(() => {
+      if (composerEntry !== entry) return;
+      // Restoring a draft is not a new focus request: a retained reply or a
+      // toolbar control may have regained focus while this mount completed.
+      if (focus || !document.activeElement || document.activeElement === document.body) view.focus();
+    }, 0);
   }
   if (composer && contentAvailable) {
     const editor = getEditor();
@@ -126,7 +134,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
         }
       }),
     );
-    if (composer.draft) openComposer(composer.draft.line, composer.draft.endLine, composer.draft.text, composer.draft.error);
+    if (composer.draft) openComposer(composer.draft.line, composer.draft.endLine, composer.draft.text, composer.draft.error, false);
   }
   function clearZones(accessor) {
     for (const zone of zones) {
@@ -170,6 +178,20 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
         if (!groups.has(end)) groups.set(end, []);
         groups.get(end).push(thread);
       }
+      const nextTopology = JSON.stringify([...groups].map(([end, conversations]) => [end, conversations.map((thread) => thread.id)]));
+      for (const thread of valid) {
+        let article = articlesById.get(thread.id);
+        if (!article) {
+          article = conversation(thread);
+          articlesById.set(thread.id, article);
+        } else article.updateThread?.(thread);
+        const target = threadsById.get(thread.id);
+        if (target) target.thread = thread;
+      }
+      // History/resolution updates do not remove native view zones or forms.
+      if (topology === nextTopology) return;
+      topology = nextTopology;
+      const restoreFocus = valid.map((thread) => captureCommentFocus(document, articlesById.get(thread.id))).find(Boolean);
       editor.changeViewZones((accessor) => {
         clearZones(accessor);
         for (const [end, conversations] of groups) {
@@ -177,7 +199,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
           node.className = 'review-zone';
           const rail = document.createElement('div');
           rail.className = 'review-zone__rail';
-          const articles = conversations.map((thread) => renderConversation(document, thread));
+          const articles = conversations.map((thread) => articlesById.get(thread.id));
           rail.replaceChildren(...articles);
           node.replaceChildren(rail);
           node.addEventListener('mousedown', (event) => event.stopPropagation());
@@ -212,6 +234,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
           }
         }
       });
+      restoreFocus?.();
     },
     revealThread(id) {
       const target = threadsById.get(id);
@@ -244,6 +267,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
       disposed = true;
       subscriptions.forEach((subscription) => subscription?.dispose?.());
       threadsById.clear();
+      articlesById.clear();
       if (zones.length) getEditor().changeViewZones(clearZones);
     },
   };
@@ -255,7 +279,7 @@ function createThreadZones(getEditor, { contentAvailable = true, document, Resiz
 // Monaco has computed the diff (#24).
 // Returns a controller with disposal, hunk navigation, and viewport scrolling.
 export async function mountDiffEditor(container, { original, modified, language, mode = 'inline', autoScroll = false, wrap = false,
-  threads = [], composer = null, document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
+  threads = [], composer = null, conversation, document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
   await ensureLoader();
 
   const editor = monaco.editor.createDiffEditor(container, {
@@ -280,7 +304,7 @@ export async function mountDiffEditor(container, { original, modified, language,
   editor.setModel({ original: originalModel, modified: modifiedModel });
   let disposed = false;
   const threadZones = createThreadZones(() => editor.getModifiedEditor(), {
-    contentAvailable: modified !== null, document, ResizeObserver, composer,
+    contentAvailable: modified !== null, document, ResizeObserver, composer, conversation,
   });
   threadZones.updateThreads(threads);
 
@@ -403,7 +427,7 @@ function scrollWithCursor(editor, direction) {
 // Mounts a plain read-only full-file view (File mode). Returns a
 // controller with `dispose()`, `scrollUp()` and `scrollDown()`; no hunks to navigate.
 export async function mountEditor(container, { content, language, wrap = false, threads = [], composer = null,
-  document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
+  conversation, document = globalThis.document, ResizeObserver = globalThis.ResizeObserver }) {
   await ensureLoader();
 
   const editor = monaco.editor.create(container, {
@@ -416,7 +440,7 @@ export async function mountEditor(container, { content, language, wrap = false, 
     wordWrap: wrap ? 'on' : 'off',
   });
 
-  const threadZones = createThreadZones(() => editor, { contentAvailable: content !== null, document, ResizeObserver, composer });
+  const threadZones = createThreadZones(() => editor, { contentAvailable: content !== null, document, ResizeObserver, composer, conversation });
   threadZones.updateThreads(threads);
   return {
     updateThreads: threadZones.updateThreads,

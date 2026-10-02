@@ -31,24 +31,77 @@ function textNode(document, tag, text, className = '') {
   return node;
 }
 
-export function renderConversation(document, thread) {
+// DOM moves/remounts blur native inputs. Restore only an input that actually
+// had focus, and never override a later user focus choice during an async mount.
+export function captureCommentFocus(document, root) {
+  const active = document.activeElement;
+  if (!active || !root?.contains?.(active)) return null;
+  const { selectionStart, selectionEnd, selectionDirection } = active;
+  return () => {
+    if (active.isConnected === false) return;
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement !== active) return;
+    active.focus?.();
+    if (Number.isInteger(selectionStart)) active.setSelectionRange?.(selectionStart, selectionEnd, selectionDirection);
+  };
+}
+
+export function renderConversation(document, thread, { onReply } = {}) {
   const article = document.createElement('article');
-  article.className = `review-thread${thread.resolved ? ' review-thread--resolved' : ''}`;
-  article.setAttribute('aria-label', `Thread ${thread.id}, ${thread.resolved ? 'Resolved' : 'Open'}`);
-  const metadata = textNode(document, 'div',
-    `${thread.resolved ? 'Resolved' : 'Open'} · ${Object.hasOwn(thread, 'file') ? `${thread.file}:${thread.line_range.start}–${thread.line_range.end}` : 'Comments without a file'}\n${thread.created_at}`,
-    'review-thread__metadata');
+  const metadata = textNode(document, 'div', '', 'review-thread__metadata');
   const messages = document.createElement('div');
   messages.className = 'review-thread__messages';
-  messages.replaceChildren(...thread.messages.map((message) => {
-    const item = document.createElement('section');
-    item.replaceChildren(
-      textNode(document, 'p', `${message.author} · ${message.created_at}`, 'review-thread__author'),
-      textNode(document, 'p', message.text, 'review-thread__text'),
-    );
-    return item;
-  }));
-  article.replaceChildren(metadata, messages);
+  const actions = document.createElement('div');
+  let messageSnapshot = null;
+  // Only the read-only history changes on refresh. The native form stays put,
+  // preserving typing, focus, selection and a pending save across updates.
+  article.updateThread = (next) => {
+    thread = next;
+    article.className = `review-thread${thread.resolved ? ' review-thread--resolved' : ''}`;
+    article.setAttribute('aria-label', `Thread ${thread.id}, ${thread.resolved ? 'Resolved' : 'Open'}`);
+    metadata.textContent = `${thread.resolved ? 'Resolved' : 'Open'} · ${Object.hasOwn(thread, 'file') ? `${thread.file}:${thread.line_range.start}–${thread.line_range.end}` : 'Comments without a file'}\n${thread.created_at}`;
+    const snapshot = JSON.stringify(thread.messages);
+    if (snapshot === messageSnapshot) return;
+    messageSnapshot = snapshot;
+    messages.replaceChildren(...[...thread.messages].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)).map((message) => {
+      const item = document.createElement('section');
+      item.replaceChildren(
+        textNode(document, 'p', `${message.author} · ${message.created_at}`, 'review-thread__author'),
+        textNode(document, 'p', message.text, 'review-thread__text'),
+      );
+      return item;
+    }));
+  };
+  article.updateThread(thread);
+  article.replaceChildren(metadata, messages, ...(onReply ? [actions] : []));
+  if (onReply) {
+    const reply = textNode(document, 'button', 'Reply');
+    reply.type = 'button';
+    reply.setAttribute('aria-expanded', 'false');
+    let composer = null;
+    let replyState = { blocked: false };
+    article.updateReplyState = (next) => {
+      replyState = next;
+      composer?.setBlocked(next);
+    };
+    const close = () => {
+      const focused = composer?.hasFocus();
+      composer = null;
+      reply.setAttribute('aria-expanded', 'false');
+      actions.replaceChildren(reply);
+      if (focused) reply.focus?.();
+    };
+    reply.addEventListener('click', () => {
+      if (!composer) {
+        composer = renderComposer(document, { label: `Reply to thread ${thread.id}`, saveLabel: 'Save reply', retryLabel: 'Retry reply',
+          onSave: async (text) => { await onReply(text); close(); }, onCancel: close });
+        composer.setBlocked(replyState);
+        reply.setAttribute('aria-expanded', 'true');
+        actions.replaceChildren(reply, composer.node);
+      }
+      composer.focus();
+    });
+    actions.replaceChildren(reply);
+  }
   return article;
 }
 
@@ -76,7 +129,7 @@ export function renderCommentIndex(document, { threads = [], warning = null }, {
   return panel;
 }
 
-export function renderConversationView(document, { threads = [], warning = null }, { general = false } = {}) {
+export function renderConversationView(document, { threads = [], warning = null }, { general = false, conversation = (thread) => renderConversation(document, thread) } = {}) {
   const panel = document.createElement('section');
   panel.className = 'conversation-view';
   panel.setAttribute('aria-label', general ? 'Comments without a file' : 'Review conversation');
@@ -86,7 +139,7 @@ export function renderConversationView(document, { threads = [], warning = null 
   if (!threads.length) children.push(textNode(document, 'p', general ? 'No comments without a file.' : 'This conversation is no longer available.', 'empty'));
   for (const thread of threads) {
     if (thread.unavailable) children.push(textNode(document, 'p', thread.unavailable, 'review-comments__warning'));
-    children.push(renderConversation(document, thread));
+    children.push(conversation(thread));
   }
   panel.replaceChildren(...children);
   return panel;
@@ -95,43 +148,61 @@ export function renderConversationView(document, { threads = [], warning = null 
 // A native form for a new comment on `line`, through `endLine` for a range.
 // The caller owns the draft: `onInput` reports edits, and a rejected `onSave`
 // shows its message as text while the typed text stays so it can be retried.
-export function renderComposer(document, { line, endLine = line, text = '', error = null, onInput, onSave, onCancel }) {
+export function renderComposer(document, { line, endLine = line, text = '', error = null, label: labelText, saveLabel = 'Save comment', retryLabel, onInput, onSave, onCancel }) {
   const form = document.createElement('form');
   form.className = 'review-composer';
   const target = endLine > line ? `lines ${line}-${endLine}` : `line ${line}`;
-  const label = textNode(document, 'label', `New comment on ${target}`, 'review-composer__label');
+  const description = labelText ?? `New comment on ${target}`;
+  const label = textNode(document, 'label', description, 'review-composer__label');
   const textarea = document.createElement('textarea');
   textarea.className = 'review-composer__text';
   textarea.rows = 3;
   textarea.value = text;
-  textarea.setAttribute('aria-label', `New comment on ${target}`);
+  textarea.setAttribute('aria-label', description);
   textarea.addEventListener('input', () => onInput?.(textarea.value));
   const status = textNode(document, 'p', error ?? '', 'review-comments__warning');
   status.setAttribute('role', 'alert');
-  const save = textNode(document, 'button', 'Save comment');
+  const save = textNode(document, 'button', saveLabel);
   save.type = 'submit';
   const cancel = textNode(document, 'button', 'Cancel');
   cancel.type = 'button';
   cancel.addEventListener('click', () => onCancel?.());
   let saving = false;
+  let blocked = false;
+  let blockedMessage = null;
+  let saveError = error;
+  const setBlocked = ({ blocked: next, warning = null }) => {
+    blocked = next;
+    blockedMessage = warning;
+    save.disabled = saving || blocked;
+    status.textContent = blockedMessage ?? saveError ?? '';
+  };
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (saving || textarea.value.trim() === '') return;
+    if (saving || blocked || textarea.value.trim() === '') return;
     saving = true;
     save.disabled = true;
+    cancel.disabled = true;
+    textarea.readOnly = true;
     status.textContent = '';
     try {
       await onSave(textarea.value);
+      saveError = null;
     } catch (err) {
-      status.textContent = err.message;
+      saveError = err.message;
+      status.textContent = blockedMessage ? `${err.message}\n${blockedMessage}` : err.message;
+      if (retryLabel) save.textContent = retryLabel;
     } finally {
       saving = false;
-      save.disabled = false;
+      save.disabled = blocked;
+      cancel.disabled = false;
+      textarea.readOnly = false;
     }
   });
   const actions = document.createElement('div');
   actions.className = 'review-composer__actions';
   actions.replaceChildren(save, cancel);
   form.replaceChildren(label, textarea, status, actions);
-  return { node: form, focus: () => textarea.focus?.() };
+  return { node: form, setBlocked, focus: () => textarea.focus?.(), hasFocus: () =>
+    document.activeElement === textarea || document.activeElement === save || document.activeElement === cancel };
 }

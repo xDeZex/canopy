@@ -23,3 +23,7 @@ cd canopy
 npm ci
 npm run dev -- .
 ```
+
+Review conversations support inline user replies, including reopening resolved
+threads. See the [reply/reopen and incoming-conflict demo](docs/reply-demo.md) for
+a user-run visual and keyboard evaluation.
