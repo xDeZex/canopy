@@ -31,6 +31,16 @@ test('sidebar exposes only file/range buttons and the always-useful general navi
   assert.equal(renderCommentIndex(document, { threads: [] }, {}).children[0].textContent, 'Comments without a file');
 });
 
+test('compact rail keeps resolved threads selectable and distinguishes their status without exposing messages', () => {
+  const index = renderCommentIndex(document, { threads: [thread, { ...thread, id: 'open', resolved: false }] }, {});
+  assert.equal(index.children.length, 3);
+  assert.match(index.children[1].className, /comment-index__button--resolved/);
+  assert.equal(index.children[1]['aria-label'], 'missing.js:4–8, Resolved');
+  assert.equal(index.children[2]['aria-label'], 'missing.js:4–8, Open');
+  assert.doesNotMatch(index.children[2].className, /--resolved/);
+  assert.doesNotMatch(texts(index), /Secret full text/);
+});
+
 test('valid inline ranges are available; unavailable anchors never become general', () => {
   const state = { activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
     fileContent: { working: 'one\ntwo' }, comments: { threads: [
@@ -47,6 +57,52 @@ test('valid inline ranges are available; unavailable anchors never become genera
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const find = (node, tag) => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
 const submit = (form) => form.events.submit({ preventDefault() {} });
+
+test('native Resolve/Reopen keeps reply drafts and explicit retry intent across incoming history, without interpreting text', async () => {
+  let finish;
+  const saves = [];
+  const article = renderConversation(document, { ...thread, resolved: false }, { onReply: async () => {}, onSetResolved: (resolved) => {
+    saves.push(resolved);
+    return new Promise((resolve, reject) => { finish = { resolve, reject }; });
+  } });
+  const reply = find(article, 'button')[0];
+  const toggle = find(article, 'button')[1];
+  assert.equal(toggle.textContent, 'Resolve');
+  assert.equal(toggle.type, 'button');
+  assert.equal(toggle['aria-label'], 'Resolve thread t');
+  reply.events.click();
+  const textarea = find(article, 'textarea')[0];
+  textarea.value = 'Is this resolved? <b>literal draft</b>';
+  const saving = toggle.events.click();
+  toggle.events.click();
+  assert.equal(toggle.disabled, true);
+  assert.deepEqual(saves, [true]);
+  article.updateThread({ ...thread, messages: [...thread.messages, { id: 'incoming', author: 'agent', text: '<script>literal</script>', created_at: 'later' }] });
+  finish.reject(new Error('Conflict <img>; review and retry'));
+  await saving;
+  assert.equal(toggle.textContent, 'Retry resolve', 'retry does not invert an incoming resolved flag');
+  assert.equal(find(article, 'textarea')[0], textarea);
+  assert.equal(textarea.value, 'Is this resolved? <b>literal draft</b>');
+  assert.match(texts(article), /Conflict <img>/);
+  assert.equal(find(article, 'p').at(-1).role, 'alert');
+  article.updateResolutionState({ blocked: true, warning: 'Cannot refresh; reload comments' });
+  assert.equal(toggle.disabled, true);
+  await toggle.events.click();
+  assert.deepEqual(saves, [true]);
+  article.updateResolutionState({ blocked: false });
+  const retry = toggle.events.click();
+  finish.resolve();
+  await retry;
+  assert.deepEqual(saves, [true, true]);
+  assert.equal(toggle.textContent, 'Reopen');
+  const reopening = toggle.events.click();
+  article.updateThread({ ...thread, resolved: false });
+  finish.resolve();
+  await reopening;
+  assert.deepEqual(saves, [true, true, false]);
+  assert.equal(toggle.textContent, 'Resolve');
+  assert.doesNotMatch(texts(article), /Edit/);
+});
 
 test('resolved conversations expose native Reply, retain the same focused draft through updates and show safe retry text', async () => {
   let finish;

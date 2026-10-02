@@ -45,12 +45,15 @@ export function captureCommentFocus(document, root) {
   };
 }
 
-export function renderConversation(document, thread, { onReply } = {}) {
+export function renderConversation(document, thread, { onReply, onSetResolved } = {}) {
   const article = document.createElement('article');
   const metadata = textNode(document, 'div', '', 'review-thread__metadata');
   const messages = document.createElement('div');
   messages.className = 'review-thread__messages';
   const actions = document.createElement('div');
+  const resolutionActions = document.createElement('div');
+  resolutionActions.className = 'review-thread__resolution';
+  let updateResolution = () => {};
   let messageSnapshot = null;
   // Only the read-only history changes on refresh. The native form stays put,
   // preserving typing, focus, selection and a pending save across updates.
@@ -59,6 +62,7 @@ export function renderConversation(document, thread, { onReply } = {}) {
     article.className = `review-thread${thread.resolved ? ' review-thread--resolved' : ''}`;
     article.setAttribute('aria-label', `Thread ${thread.id}, ${thread.resolved ? 'Resolved' : 'Open'}`);
     metadata.textContent = `${thread.resolved ? 'Resolved' : 'Open'} · ${Object.hasOwn(thread, 'file') ? `${thread.file}:${thread.line_range.start}–${thread.line_range.end}` : 'Comments without a file'}\n${thread.created_at}`;
+    updateResolution();
     const snapshot = JSON.stringify(thread.messages);
     if (snapshot === messageSnapshot) return;
     messageSnapshot = snapshot;
@@ -72,7 +76,7 @@ export function renderConversation(document, thread, { onReply } = {}) {
     }));
   };
   article.updateThread(thread);
-  article.replaceChildren(metadata, messages, ...(onReply ? [actions] : []));
+  article.replaceChildren(metadata, messages, ...(onReply ? [actions] : []), ...(onSetResolved ? [resolutionActions] : []));
   if (onReply) {
     const reply = textNode(document, 'button', 'Reply');
     reply.type = 'button';
@@ -102,6 +106,49 @@ export function renderConversation(document, thread, { onReply } = {}) {
     });
     actions.replaceChildren(reply);
   }
+  if (onSetResolved) {
+    const toggle = textNode(document, 'button', '');
+    toggle.type = 'button';
+    const status = textNode(document, 'p', '', 'review-comments__warning');
+    status.setAttribute('role', 'alert');
+    let saving = false;
+    let blocked = false;
+    let warning = null;
+    let error = null;
+    let retryResolved = null;
+    updateResolution = () => {
+      const resolved = retryResolved ?? !thread.resolved;
+      const action = resolved ? 'resolve' : 'reopen';
+      toggle.textContent = retryResolved === null ? (resolved ? 'Resolve' : 'Reopen') : `Retry ${action}`;
+      toggle.setAttribute('aria-label', `${retryResolved === null ? (resolved ? 'Resolve' : 'Reopen') : `Retry ${action}`} thread ${thread.id}`);
+      toggle.disabled = saving || blocked;
+      status.textContent = [error, warning].filter(Boolean).join('\n');
+    };
+    article.updateResolutionState = (next) => {
+      blocked = next.blocked;
+      warning = next.warning ?? null;
+      updateResolution();
+    };
+    toggle.addEventListener('click', async () => {
+      if (saving || blocked) return;
+      const resolved = retryResolved ?? !thread.resolved;
+      saving = true;
+      error = null;
+      updateResolution();
+      try {
+        await onSetResolved(resolved);
+        retryResolved = null;
+      } catch (err) {
+        error = err.message;
+        retryResolved = resolved;
+      } finally {
+        saving = false;
+        updateResolution();
+      }
+    });
+    resolutionActions.replaceChildren(toggle, status);
+    updateResolution();
+  }
   return article;
 }
 
@@ -121,6 +168,8 @@ export function renderCommentIndex(document, { threads = [], warning = null }, {
   for (const thread of threads.filter((thread) => Object.hasOwn(thread, 'file'))) {
     const { start, end } = thread.line_range;
     const button = textNode(document, 'button', `${thread.file}:${start}${start === end ? '' : `–${end}`}`, 'comment-index__button');
+    if (thread.resolved) button.className += ' comment-index__button--resolved';
+    button.setAttribute('aria-label', `${button.textContent}, ${thread.resolved ? 'Resolved' : 'Open'}`);
     button.type = 'button';
     button.addEventListener('click', () => onSelectThread?.(thread.id));
     children.push(button);

@@ -51,6 +51,40 @@ function fixture(savedMode = null) {
 const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
 const list = (paths) => paths.map((path) => ({ path }));
 
+test('resolution conflicts wait for superseding watch refreshes, retry the chosen flag and block unreadable or cross-worktree saves', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a', '/b']));
+  await f.reply(f.commentRequests[0], { threads: [{ id: 't', resolved: false, messages: ['seen'] }], revision: 'r1', warning: null });
+  let settled = false;
+  const saved = f.store.setThreadResolved({ threadId: 't', resolved: true });
+  const rejected = assert.rejects(saved, /Comments changed/).then(() => { settled = true; });
+  assert.deepEqual(JSON.parse(f.postRequests[0].options.body), { action: 'set-resolved', threadId: 't', resolved: true, revision: 'r1' });
+  f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  f.store.remoteChange(['.canopy/comments.yaml']);
+  await f.reply(f.commentRequests[1], { threads: [{ id: 't', resolved: false, messages: ['stale'] }], revision: 'stale', warning: null });
+  assert.equal(settled, false, 'retry stays pending until the latest watch refresh completes');
+  await f.reply(f.commentRequests[2], { threads: [{ id: 't', resolved: false, messages: ['seen', 'agent'] }], revision: 'r2', warning: null });
+  await rejected;
+  const retry = f.store.setThreadResolved({ threadId: 't', resolved: true });
+  assert.equal(JSON.parse(f.postRequests[1].options.body).revision, 'r2');
+  f.postRequests[1].resolve({ ok: true, status: 201 });
+  await new Promise((resolve) => setImmediate(resolve));
+  await f.reply(f.commentRequests[3], { threads: [{ id: 't', resolved: true, messages: ['seen', 'agent'] }], revision: 'r3', warning: null });
+  await retry;
+  assert.equal(f.store.getState().comments.threads[0].resolved, true);
+  const reopen = f.store.setThreadResolved({ threadId: 't', resolved: false });
+  f.postRequests[2].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed' }) });
+  const failed = assert.rejects(reopen, /Comments changed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  f.commentRequests[4].reject(new Error('offline'));
+  await failed;
+  await assert.rejects(f.store.setThreadResolved({ threadId: 't', resolved: false }), /cannot be read/);
+  f.store.selectWorktree('/b');
+  await assert.rejects(f.store.setThreadResolved({ threadId: 't', resolved: true, worktree: '/a' }), /worktree changed/);
+  assert.equal(f.postRequests.length, 3);
+});
+
 test('reply conflict waits for refreshed conversation before retry and never posts against a failed refresh', async () => {
   const f = fixture();
   f.store.updateWorktrees(list(['/a', '/b']));

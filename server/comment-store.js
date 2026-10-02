@@ -1,10 +1,18 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { open, mkdir, rename, rm } from 'node:fs/promises';
-import { appendThread, appendReply, commentsRevision, validateNewThread, validateReply } from './comments.js';
+import { appendThread, appendReply, setThreadResolved, commentsRevision, validateNewThread, validateReply, validateResolution } from './comments.js';
 import { SIDECAR, checkPath, defaultReadIo } from './sidecar-path.js';
 
 const fail = (status, message, extra = {}) => Object.assign(new Error(message), { status, ...extra });
+
+function checkRevision(source, revision) {
+  const latest = commentsRevision(source);
+  if (latest !== revision) {
+    throw fail(409, 'Comments changed since you loaded them. They were reloaded; review them and save again.',
+      { conflict: true, revision: latest });
+  }
+}
 
 // Sync before the rename so a crash cannot leave a renamed empty file.
 async function writeExclusive(file, data) {
@@ -21,7 +29,9 @@ const defaultIo = { ...defaultReadIo, mkdir, rename, rm, writeExclusive };
 
 // The shared revision-checked mutation path for the sidecar. IO, ids and the
 // clock are injected; the logic lives in comments.js. Mutations in this process are serialized per worktree;
-// arbitrary external writers are only guarded by the revision recheck.
+// External edits during the temp write are caught by a final safe-path revision
+// recheck. An external writer can still race between that recheck and rename;
+// preventing that requires a cooperating lock or compare-and-swap protocol.
 export function createCommentStore({ io = defaultIo, newId = randomUUID, now = () => new Date() } = {}) {
   const queues = new Map();
 
@@ -35,25 +45,24 @@ export function createCommentStore({ io = defaultIo, newId = randomUUID, now = (
   }
 
   async function save(worktreePath, { revision, ...input }) {
-    const reply = Object.hasOwn(input, 'threadId');
-    const invalid = reply ? validateReply(input) : validateNewThread(input);
+    const resolution = input.action === 'set-resolved';
+    if (input.action !== undefined && !resolution) throw fail(400, 'Unknown comment action');
+    if (!resolution && Object.hasOwn(input, 'resolved')) throw fail(400, 'Resolution requires the set-resolved action');
+    const reply = !resolution && Object.hasOwn(input, 'threadId');
+    const invalid = resolution ? validateResolution(input) : reply ? validateReply(input) : validateNewThread(input);
     if (invalid) throw fail(400, invalid);
     if (typeof revision !== 'string') throw fail(400, 'Missing comments revision');
     const root = await io.realpath(worktreePath);
-    if (!reply) {
+    if (!reply && !resolution) {
       try { await checkPath(io, root, input.file); }
       catch (err) { throw fail(400, `File is unavailable: ${err.code === 'ENOENT' ? 'missing' : err.message}`); }
     }
 
     const source = await readCurrent(root);
-    const latest = commentsRevision(source);
-    if (latest !== revision) {
-      throw fail(409, 'Comments changed since you loaded them. They were reloaded; review them and save again.',
-        { conflict: true, revision: latest });
-    }
+    checkRevision(source, revision);
     let next;
     try {
-      next = (reply ? appendReply : appendThread)(source, input, { ...(!reply ? { threadId: `thread-${newId()}` } : {}), messageId: `message-${newId()}`,
+      next = resolution ? setThreadResolved(source, input) : (reply ? appendReply : appendThread)(source, input, { ...(!reply ? { threadId: `thread-${newId()}` } : {}), messageId: `message-${newId()}`,
         createdAt: now().toISOString() });
     } catch (err) {
       throw fail(409, `Refusing to modify the comments file: ${err.message}`);
@@ -64,6 +73,7 @@ export function createCommentStore({ io = defaultIo, newId = randomUUID, now = (
     await io.mkdir(path.dirname(target), { recursive: true });
     try {
       await io.writeExclusive(temp, next.source);
+      checkRevision(await readCurrent(root), revision);
       await io.rename(temp, target);
     } catch (err) {
       await io.rm(temp, { force: true }).catch(() => {});

@@ -8,7 +8,7 @@ const enoent = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
 const SIDECAR = '/repo/.canopy/comments.yaml';
 
 // In-memory filesystem: path -> 'dir' | 'symlink' | file text.
-function fixture({ files = { '/repo': 'dir', '/repo/src': 'dir', '/repo/src/a.js': 'x\ny\n' }, writeFails = false, idStart = 0 } = {}) {
+function fixture({ files = { '/repo': 'dir', '/repo/src': 'dir', '/repo/src/a.js': 'x\ny\n' }, writeFails = false, afterWrite = () => {}, idStart = 0 } = {}) {
   const fs = new Map(Object.entries(files));
   const log = [];
   let id = idStart;
@@ -26,6 +26,7 @@ function fixture({ files = { '/repo': 'dir', '/repo/src': 'dir', '/repo/src/a.js
       log.push(['write', path]);
       if (writeFails) { fs.set(path, 'partial'); throw new Error('disk full'); }
       fs.set(path, data);
+      await afterWrite(fs);
     },
     rename: async (from, to) => { log.push(['rename', from, to]); fs.set(to, fs.get(from)); fs.delete(from); },
     rm: async (path) => { log.push(['rm', path]); fs.delete(path); },
@@ -34,6 +35,65 @@ function fixture({ files = { '/repo': 'dir', '/repo/src': 'dir', '/repo/src/a.js
   return { store, fs, log };
 }
 const request = (revision, patch = {}) => ({ file: 'src/a.js', line: 2, text: 'Why?', revision, ...patch });
+
+test('resolution route persists chosen flags without creating messages and rejects stale or ambiguous mutations', async () => {
+  const { store, fs, log } = fixture();
+  const first = await store.create('/repo', request('absent'));
+  const other = await store.create('/repo', request(first.revision, { text: 'Is this resolved?' }));
+  const handle = createRequestHandler({ getWorktrees: async () => [{ path: '/repo' }], createComment: store.create });
+  const post = (input, patch = {}) => handle({ method: 'POST', pathname: '/api/comments',
+    searchParams: new URLSearchParams({ worktree: '/repo' }), headers: { host: 'localhost', 'content-type': 'application/json' },
+    body: JSON.stringify(input), ...patch });
+  const input = { action: 'set-resolved', threadId: first.thread.id, resolved: true, revision: other.revision };
+  log.length = 0;
+  assert.equal((await post(input, { headers: { host: 'localhost', origin: 'http://evil', 'content-type': 'application/json' } })).status, 403);
+  assert.equal((await post(input, { searchParams: new URLSearchParams({ worktree: '/unknown' }) })).status, 404);
+  for (const patch of [{ resolved: 'true' }, { text: 'reply' }, { action: 'unknown' }, { action: undefined }, { revision: undefined }]) {
+    assert.equal((await post({ ...input, ...patch })).status, 400);
+  }
+  assert.equal((await post({ ...input, threadId: 'missing' })).status, 409);
+  assert.equal(log.some(([step]) => step === 'write'), false);
+  const response = await post(input);
+  assert.equal(response.status, 201);
+  const result = JSON.parse(response.body);
+  assert.deepEqual(result.thread, { ...first.thread, resolved: true });
+  assert.deepEqual(parseComments(fs.get(SIDECAR)).threads, [{ ...first.thread, resolved: true }, other.thread]);
+  const before = fs.get(SIDECAR);
+  const stale = await post(input);
+  assert.equal(stale.status, 409);
+  assert.equal(JSON.parse(stale.body).conflict, true);
+  assert.equal(fs.get(SIDECAR), before);
+  const reopened = await post({ ...input, revision: result.revision, resolved: false });
+  assert.equal(reopened.status, 201);
+  assert.deepEqual(parseComments(fs.get(SIDECAR)).threads, [first.thread, other.thread]);
+});
+
+test('resolution of general or unavailable threads shares reply serialization and refuses unsafe or failed writes', async () => {
+  const message = { id: 'original', author: 'agent', text: 'Fixed', created_at: '2026-10-01T12:00:00Z' };
+  const threads = [
+    { id: 'general', created_at: message.created_at, resolved: false, messages: [message] },
+    { id: 'unavailable', file: 'deleted.js', side: 'modified', line_range: { start: 4, end: 8 },
+      created_at: message.created_at, resolved: false, messages: [message] },
+  ];
+  const source = JSON.stringify({ version: 1, threads });
+  const input = { action: 'set-resolved', threadId: 'unavailable', resolved: true, revision: commentsRevision(source) };
+  const files = { '/repo': 'dir', '/repo/.canopy': 'dir', [SIDECAR]: source };
+  const f = fixture({ files });
+  const results = await Promise.allSettled([f.store.create('/repo', input),
+    f.store.create('/repo', { threadId: 'unavailable', text: 'reply', revision: input.revision })]);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].reason.conflict, true);
+  const general = await f.store.create('/repo', { ...input, threadId: 'general', revision: results[0].value.revision });
+  assert.deepEqual(general.thread, { ...threads[0], resolved: true });
+  assert.deepEqual(parseComments(f.fs.get(SIDECAR)).threads, threads.map((thread) => ({ ...thread, resolved: true })));
+  for (const [data, writeFails, status] of [[source, true, undefined], ['version: 2\nthreads: []', false, 409], ['symlink', false, 409]]) {
+    const failed = fixture({ writeFails, files: { ...files, [SIDECAR]: data } });
+    await assert.rejects(failed.store.create('/repo', { ...input, revision: commentsRevision(data) }), (err) => err.status === status);
+    assert.equal(failed.fs.get(SIDECAR), data);
+    assert.equal(failed.log.some(([step]) => step === 'rename'), false);
+    assert.equal([...failed.fs.keys()].some((path) => path.endsWith('.tmp')), false);
+  }
+});
 
 test('registered same-origin reply route uses the shared atomic revision guard and preserves unseen messages', async () => {
   const { store, fs, log } = fixture();
@@ -144,6 +204,32 @@ test('an external edit after the client loaded is detected by reread, not overwr
   fs.set(SIDECAR, fs.get(SIDECAR).replace('Why?', 'Edited by agent'));
   await assert.rejects(store.create('/repo', request(first.revision)), { status: 409, conflict: true });
   assert.match(fs.get(SIDECAR), /Edited by agent/);
+});
+
+test('an agent replacement during the temp write returns a visible conflict and preserves its data for every mutation', async () => {
+  const seeded = fixture();
+  const first = await seeded.store.create('/repo', request('absent'));
+  const source = seeded.fs.get(SIDECAR);
+  const external = source.replace('Why?', 'Edited by agent');
+  for (const input of [request(first.revision),
+    { threadId: first.thread.id, text: 'reply', revision: first.revision },
+    { action: 'set-resolved', threadId: first.thread.id, resolved: true, revision: first.revision }]) {
+    const { store, fs, log } = fixture({ files: { '/repo': 'dir', '/repo/src': 'dir', '/repo/src/a.js': 'x',
+      '/repo/.canopy': 'dir', [SIDECAR]: source }, idStart: 10, afterWrite: (files) => files.set(SIDECAR, external) });
+    const handle = createRequestHandler({ getWorktrees: async () => [{ path: '/repo' }], createComment: store.create });
+    const response = await handle({ method: 'POST', pathname: '/api/comments',
+      searchParams: new URLSearchParams({ worktree: '/repo' }), headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify(input) });
+    assert.equal(response.status, 409);
+    assert.deepEqual(JSON.parse(response.body), {
+      error: 'Comments changed since you loaded them. They were reloaded; review them and save again.',
+      conflict: true, revision: commentsRevision(external),
+    });
+    assert.equal(fs.get(SIDECAR), external);
+    assert.equal(log.some(([step]) => step === 'rename'), false);
+    assert.ok(log.some(([step]) => step === 'rm'));
+    assert.equal([...fs.keys()].some((path) => path.endsWith('.tmp')), false);
+  }
 });
 
 test('malformed or unsupported existing data is refused and left untouched', async () => {

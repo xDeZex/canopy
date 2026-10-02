@@ -216,6 +216,11 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     return saveComment({ threadId, text }, { waitForRefresh: true });
   }
 
+  async function setThreadResolved({ threadId, resolved, worktree = activePath }) {
+    if (worktree !== activePath) throw new Error('The active worktree changed; return to this conversation to retry');
+    return saveComment({ action: 'set-resolved', threadId, resolved }, { waitForRefresh: true });
+  }
+
   async function saveComment(input, { waitForRefresh = false } = {}) {
     const path = activePath;
     const generation = worktreeGeneration;
@@ -329,6 +334,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     showGeneralComments,
     addComment,
     addReply,
+    setThreadResolved,
     // A reconnect has no paths: reconcile the tree and any selected content.
     remoteChange(paths = null) {
       loadFileTree();

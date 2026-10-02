@@ -20,6 +20,7 @@ A thread not tied to a file may omit file, side and line_range together (never u
 Unknown fields, duplicate ids, other versions and non-core YAML tags make Canopy refuse
 the whole file with a visible warning. IDs and created_at values must never change.
 User replies append author: user and always set resolved: false, reopening the thread.
+Explicit user Resolve/Reopen changes only resolved, without adding or editing messages.
 Agent replies append author: agent and leave resolved unchanged unless explicitly setting
 resolved: true only when the same edit also adds an agent response.
 Prose never changes resolution on its own.

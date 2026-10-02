@@ -48,7 +48,7 @@ function createDocument() {
   return document;
 }
 
-function fixture(mode, { addReply, addComment } = {}) {
+function fixture(mode, { addReply, addComment, setThreadResolved } = {}) {
   const document = createDocument();
   const zones = new Map();
   let nextId = 0;
@@ -79,12 +79,62 @@ function fixture(mode, { addReply, addComment } = {}) {
     mountEditor, mountDiffEditor, languageForPath: () => 'javascript', getAutoScroll: () => false, getWrap: () => false,
     addReply: async (input) => { saves.push(input); await addReply?.(input); },
     addComment,
+    setThreadResolved,
   });
   return { viewer, mainEl, zones, document, saves, get adds() { return adds; },
     setState(patch) { state = { ...state, ...patch }; },
     article: () => find(mainEl, 'article')[0],
   };
 }
+
+test('resolution stays available in every diff mode and general/unavailable views while retaining focused reply drafts', async () => {
+  const oldWindow = globalThis.window;
+  const oldMonaco = globalThis.monaco;
+  try {
+    for (const mode of ['file', 'inline', 'side-by-side']) {
+      const saves = [];
+      const f = fixture(mode, { setThreadResolved: async (input) => { saves.push(input); } });
+      try {
+        f.viewer.render();
+        await tick();
+        const article = f.article();
+        find(article, 'button')[0].events.click();
+        const textarea = find(article, 'textarea')[0];
+        textarea.value = 'Is this resolved?';
+        textarea.setSelectionRange(1, 4, 'backward');
+        const toggle = find(article, 'button').find((button) => button.textContent === 'Reopen');
+        await toggle.events.click();
+        assert.deepEqual(saves, [{ threadId: 't', resolved: false, worktree: '/repo' }]);
+        f.setState({ comments: { threads: [thread({ resolved: false })], revision: 'r2' } });
+        f.viewer.refreshComments({ reveal: false });
+        f.viewer.render();
+        await tick();
+        assert.equal(f.article(), article);
+        assert.equal(toggle.textContent, 'Resolve');
+        assert.equal(f.document.activeElement, textarea);
+        assert.deepEqual([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection], [1, 4, 'backward']);
+        const { file, side, line_range, ...general } = thread({ resolved: false });
+        f.setState({ mainView: 'general', comments: { threads: [general], revision: 'r3' } });
+        f.viewer.refreshComments({ reveal: false });
+        await toggle.events.click();
+        assert.equal(f.article(), article);
+        f.setState({ mainView: 'file', selectedThreadId: 't', comments: { threads: [thread({ resolved: false, unavailable: 'missing' })], revision: 'r4' } });
+        f.viewer.refreshComments({ reveal: false });
+        await toggle.events.click();
+        assert.equal(f.article(), article);
+        assert.equal(textarea.value, 'Is this resolved?');
+        assert.deepEqual(saves.slice(1), [
+          { threadId: 't', resolved: true, worktree: '/repo' }, { threadId: 't', resolved: true, worktree: '/repo' },
+        ]);
+        f.setState({ activePath: '/other', comments: { threads: [], revision: 'absent' } });
+        f.viewer.render();
+        await toggle.events.click();
+        assert.equal(saves.length, 3, 'detached controls cannot cross-save into another worktree');
+        assert.match(find(article, 'p').at(-1).textContent, /worktree changed/);
+      } finally { f.viewer.dispose(); }
+    }
+  } finally { globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+});
 
 test('real viewer/Monaco seam preserves reply typing, selection and focus through live history and remounts in every mode', async () => {
   const oldWindow = globalThis.window;

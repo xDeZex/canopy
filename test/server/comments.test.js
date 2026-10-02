@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseComments, appendThread, appendReply, validateReply, commentsRevision, validateNewThread } from '../../server/comments.js';
+import { parseComments, appendThread, appendReply, validateReply, commentsRevision, validateNewThread, setThreadResolved, validateResolution } from '../../server/comments.js';
 
 export const thread = (patch = {}) => ({
   id: 'thread-1', file: 'public/app.js', side: 'modified', line_range: { start: 1, end: 2 },
@@ -11,6 +11,22 @@ export const thread = (patch = {}) => ({
   ], ...patch,
 });
 const source = (threads) => JSON.stringify({ version: 1, threads });
+
+test('explicit resolution changes only the chosen flag, retaining stored history and unrelated threads', () => {
+  const original = thread();
+  const other = thread({ id: 'other' });
+  const resolved = setThreadResolved(source([original, other]), { threadId: original.id, resolved: true });
+  assert.deepEqual(resolved.thread, { ...original, resolved: true });
+  assert.deepEqual(parseComments(resolved.source).threads, parseComments(source([{ ...original, resolved: true }, other])).threads);
+  const reopened = setThreadResolved(resolved.source, { threadId: original.id, resolved: false });
+  assert.deepEqual(reopened.thread, original);
+  assert.deepEqual(setThreadResolved(reopened.source, { threadId: original.id, resolved: false }).thread, original);
+  assert.throws(() => setThreadResolved(resolved.source, { threadId: 'missing', resolved: true }), /not found/);
+  assert.throws(() => setThreadResolved('version: 2\nthreads: []', { threadId: original.id, resolved: true }), /schema/);
+  assert.equal(validateResolution({ threadId: original.id, resolved: false }), null);
+  for (const input of [{}, { threadId: '', resolved: true }, { threadId: 't', resolved: 'true' },
+    { threadId: 't', resolved: true, text: 'reply' }]) assert.equal(typeof validateResolution(input), 'string');
+});
 
 test('user replies append without rewriting history, reopen even resolved threads, and never interpret prose', () => {
   const original = thread({ resolved: true });
@@ -149,7 +165,8 @@ test('a saved sidecar starts with a comment header that states the contract and 
   const { source, thread: created } = appendThread(null, request, ids);
   const header = headerOf(source);
   for (const rule of [/Append a message/, /author: agent/, /reread the file/, /atomically\s+# rename/, /Never edit in place/,
-    /resolved: true only when the same edit also adds an agent response/]) assert.match(header, rule);
+    /resolved: true only when the same edit also adds an agent response/,
+    /Explicit user Resolve\/Reopen changes only resolved/]) assert.match(header, rule);
   assert.deepEqual(parseComments(source), { warning: null, threads: [created] });
 });
 

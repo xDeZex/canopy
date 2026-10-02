@@ -89,6 +89,13 @@ export function validateReply({ threadId, text } = {}) {
   return null;
 }
 
+export function validateResolution({ threadId, resolved, text } = {}) {
+  if (!string(threadId)) return 'Thread id is required';
+  if (typeof resolved !== 'boolean') return 'Resolved must be a boolean';
+  if (text !== undefined) return 'Resolution cannot include a reply';
+  return null;
+}
+
 // Timestamps are quoted so YAML 1.1 readers in external tools keep them strings.
 function serialize(data) {
   const doc = new Document(data);
@@ -122,6 +129,16 @@ export function appendReply(source, { threadId, text }, { messageId, createdAt }
   if (previous.messages.some((message) => message.id === messageId)) throw new Error('Duplicate message id');
   const thread = { ...previous, resolved: false, messages: [...previous.messages,
     { id: messageId, author: 'user', text, created_at: createdAt }] };
+  return { thread, source: serialize({ version: 1,
+    threads: data.threads.map((existing) => existing.id === threadId ? thread : existing) }) };
+}
+
+// Resolution is an explicit flag change, never inferred from message text.
+export function setThreadResolved(source, { threadId, resolved }) {
+  const data = source === null ? { version: 1, threads: [] } : parseSidecar(source);
+  const previous = data.threads.find((thread) => thread.id === threadId);
+  if (!previous) throw new Error('Thread not found');
+  const thread = { ...previous, resolved };
   return { thread, source: serialize({ version: 1,
     threads: data.threads.map((existing) => existing.id === threadId ? thread : existing) }) };
 }

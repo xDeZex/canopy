@@ -1,7 +1,7 @@
 // Owns #main's visible state and the lifecycle of its Monaco controller.
 import { commentsForView, renderConversation, renderConversationView, captureCommentFocus } from './comments-view.js';
 
-export function createViewer({ mainEl, document, getState, getViewMode, getDiffRenderMode, mountEditor, mountDiffEditor, languageForPath, getAutoScroll, getWrap, addComment, addReply }) {
+export function createViewer({ mainEl, document, getState, getViewMode, getDiffRenderMode, mountEditor, mountDiffEditor, languageForPath, getAutoScroll, getWrap, addComment, addReply, setThreadResolved }) {
   let currentView = null;
   let generation = 0;
   let viewerError = null;
@@ -19,16 +19,21 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
     const key = JSON.stringify([worktree, thread.id]);
     let article = conversations.get(key);
     if (!article) {
-      article = renderConversation(document, thread, addReply ? { onReply: async (text) => {
+      article = renderConversation(document, thread, { ...(addReply ? { onReply: async (text) => {
         if (getState().activePath !== worktree) throw new Error('The active worktree changed; return to this conversation to retry');
         await addReply({ threadId: thread.id, text, worktree });
-      } } : {});
+      } } : {}), ...(setThreadResolved ? { onSetResolved: async (resolved) => {
+        if (getState().activePath !== worktree) throw new Error('The active worktree changed; return to this conversation to retry');
+        await setThreadResolved({ threadId: thread.id, resolved, worktree });
+      } } : {}) });
       conversations.set(key, article);
     } else article.updateThread(thread);
     const comments = getState().comments;
-    article.updateReplyState?.({ blocked: Boolean(comments?.warning) || typeof comments?.revision !== 'string',
+    const mutationState = { blocked: Boolean(comments?.warning) || typeof comments?.revision !== 'string',
       warning: comments?.warning ? `Cannot save until comments refresh successfully: ${comments.warning}` :
-        typeof comments?.revision !== 'string' ? 'Comments are still loading; wait before saving' : null });
+        typeof comments?.revision !== 'string' ? 'Comments are still loading; wait before saving' : null };
+    article.updateReplyState?.(mutationState);
+    article.updateResolutionState?.(mutationState);
     return article;
   }
 
@@ -46,7 +51,7 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
   }
   // Navigation reveals the selected thread; a live refresh must not move the reader.
   function updateEditor(comments, { reveal = true } = {}) {
-    if (addReply) inlineThreads(comments).forEach(conversation);
+    if (addReply || setThreadResolved) inlineThreads(comments).forEach(conversation);
     currentView?.updateThreads?.(inlineThreads(comments));
     const selected = selectedThread(comments);
     if (reveal && selected && !selected.unavailable) currentView?.revealThread?.(selected.id);
@@ -160,7 +165,7 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
         const language = languageForPath(activeFile);
         const view = mode === 'file'
           ? await mountEditor(container, { content: fileContent.working, language, wrap: getWrap(), document,
-              ...(threads.length ? { threads } : {}), ...(composer ? { composer } : {}), ...(addReply ? { conversation: mountConversation } : {}) })
+              ...(threads.length ? { threads } : {}), ...(composer ? { composer } : {}), ...(addReply || setThreadResolved ? { conversation: mountConversation } : {}) })
           : await mountDiffEditor(container, {
               original: fileContent.head ?? '',
               modified: fileContent.working ?? '',
@@ -171,7 +176,7 @@ export function createViewer({ mainEl, document, getState, getViewMode, getDiffR
               document,
               ...(threads.length ? { threads } : {}),
               ...(composer ? { composer } : {}),
-              ...(addReply ? { conversation: mountConversation } : {}),
+              ...(addReply || setThreadResolved ? { conversation: mountConversation } : {}),
             });
         if (thisRender !== generation) view.dispose();
         else {

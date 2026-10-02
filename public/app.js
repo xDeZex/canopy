@@ -93,6 +93,7 @@ export async function startApp({
     getWrap,
     addComment: (comment) => workspace.addComment(comment),
     addReply: (reply) => workspace.addReply(reply),
+    setThreadResolved: (input) => workspace.setThreadResolved(input),
   });
 
   function onViewModeChanged(mode) {
