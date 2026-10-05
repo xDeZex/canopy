@@ -5,22 +5,34 @@
   "type": "module",
   "description": "A live view over git worktrees and diffs for reviewing an AI agent's work.",
   "bin": {
-    "canopy": "./server/index.js"
+    "canopy": "./dist/server/index.js"
   },
   "files": [
-    "server/",
-    "public/"
+    "dist/server/",
+    "dist/public/"
   ],
   "engines": {
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "node server/index.js",
-    "test": "node --test"
+    "build": "node scripts/build.js",
+    "typecheck": "node scripts/check-inputs.js && tsc --noEmit && node scripts/typecheck-probe.js",
+    "predev": "npm run build",
+    "dev": "node dist/server/index.js",
+    "pretest": "npm run build",
+    "test": "node scripts/test.js",
+    "prepare": "npm run build",
+    "smoke:build": "node scripts/smoke-build.js",
+    "smoke:package": "node scripts/smoke-package.js",
+    "smoke:git-install": "node scripts/smoke-git-install.js"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
     "ignore": "^7.0.11",
     "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.0",
+    "typescript": "5.9.3"
   }
 }
