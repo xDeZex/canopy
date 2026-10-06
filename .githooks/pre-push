@@ -1,4 +1,22 @@
 #!/bin/sh
 # Canopy pre-push hook: validate the current checkout, not outgoing commits.
-npm run typecheck </dev/null || exit 1
-npm test </dev/null
+output=$(mktemp) || exit 1
+trap 'rm -f "$output"' 0
+trap 'exit 1' 1 2 15
+
+run_check() {
+  label=$1
+  shift
+  printf 'Running %s...\n' "$label"
+  if "$@" </dev/null >"$output" 2>&1; then
+    printf '%s passed.\n' "$label"
+  else
+    status=$?
+    cat "$output" >&2
+    printf '%s failed; push blocked.\n' "$label" >&2
+    return "$status"
+  fi
+}
+
+run_check Typecheck npm run typecheck || exit 1
+run_check Tests npm test
