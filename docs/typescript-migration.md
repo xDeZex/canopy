@@ -13,11 +13,14 @@ server/public trees (plus normal package metadata and README).
 broad include glob. The baseline had 94 JavaScript inputs. Issue #68 replaced
 the routing helper and its unit test (2 TS / 92 JS); issue #69 also migrates
 the HTTP app, request handler and their three test files: **7 strict TS inputs
-and 87 remaining JS inputs**. `allowJs: true` / `checkJs: false` only lets these
+and 87 remaining JS inputs**. Issue #70 then migrates four discovery/commit/deletion
+modules and five further test files (the HTTP integration test overlaps #69),
+and adds three narrow port/test helpers: **19 TS / 78 JS inputs**.
+`allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-an 87-JS ceiling. New code should be TypeScript and listed explicitly.
+a 78-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -41,7 +44,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; eleven deliberately invalid routing/HTTP calls and response shapes rejected by the compiler |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; sixteen deliberately invalid routing/HTTP/discovery/Git/commit/confirmation calls and response shapes rejected by the compiler |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -176,3 +179,75 @@ No minimum-Node rerun, package smoke or manual browser evaluation was performed
 for #69. This evidence does not establish real Monaco, filesystem watcher
 reliability or destructive Git correctness. The existing static-prefix guard
 and unrelated behavior are intentionally unchanged.
+
+## Evidence and limitations for #70
+
+The per-issue evidence below records the original isolated implementation,
+not the cumulative integration branch. The #69 evidence above likewise records
+its original branch.
+
+Discovery, porcelain parsing, commit listing and deletion assessment now use
+strict TypeScript, with a shared `Git` port requiring only arguments, working
+directory and string stdout. Commit fields remain possibly undefined for
+malformed log records rather than inventing parser validation or changing the
+existing output. The reusable test fake records calls, accepts canned responses
+or a stateful handler, and rejects unconfigured commands; it is **not** a Git
+emulator. HTTP/SSE test JSON is parsed as unknown and checked before inspection.
+The adjacent legacy polling module only gains an honest generic timer/snapshot
+port annotation; its implementation remains unchecked pending its own ticket.
+
+Automated evidence in this implementation worktree (Node 22.22.1):
+
+- `npm ci` passed the locked dependency install and real prepare/build lifecycle;
+  no dependency changes or new packages were introduced.
+- `npm run typecheck` passed: **15 strict TS / 82 temporary JS inputs**, with
+  the JavaScript ceiling lowered to 82 and all nine static negative probes
+  rejected. The original invalid-input and fake-Git deletion-failure cases
+  remain; an empty raw branch field still fails closed during assessment.
+- `npm run build` passed. Direct compiled runs of the six migrated test files
+  passed **43 tests**. Final focused execution also included the adjacent app,
+  request-handler and worktree-polling tests: **113 passed, 0 failed/skipped**.
+  The focused command was `node --test` with the nine explicit paths under
+  `dist/test/server/`: `porcelain.test.js`, `commits.test.js`,
+  `origin-main.test.js`, `origin-main-live.test.js`, `worktree-delete.test.js`,
+  `app.integration.test.js`, `app.test.js`, `handle-request.test.js` and
+  `worktree-watch.test.js`. `scripts/test.js` always appends the full manifest,
+  so direct compiled paths are used for focused runs.
+- New fail-closed fake-Git coverage used a red-green slice through
+  `createListWorktrees`: the discovery-refusal test failed with **Missing
+  expected rejection** while an unconfigured fake command returned empty
+  stdout, then passed when the reusable fake rejected it. The additional
+  discovery/order and reference-identity assertions characterize existing
+  behavior. Parsing is the thin unit layer; the majority of directly scoped
+  cases integrate real modules over fake Git, with one real loopback HTTP test.
+
+- Final independent validation passed `npm run typecheck`, `npm test` and
+  `git diff --cached --check` on Node 22.22.1. The full compiled suite passed
+  **567 tests, 0 failed/skipped/cancelled**. The runner used explicit compiled
+  manifest paths, without source/output double discovery.
+- The two-axis review found no spec violations or hard standards breaches.
+  Its optional duplicated-fixture-key finding was addressed with a typed
+  mutation table, retaining all 12 snapshot changes. After that test-only
+  cleanup, typecheck, build, all **10 compiled deletion tests** and whitespace
+  checks passed; the full suite was not rerun.
+
+No exact-minimum Node rerun, package/build smoke rerun, manual browser evaluation
+or live destructive Git deletion was performed for this ticket. Successful
+fake deletion tests establish command/result orchestration only; negative and
+partial-failure cases establish simulated safety behavior, **not** proof of
+live Git/filesystem destruction, watcher behavior or race freedom. No external
+YAML application boundary is changed by this ticket.
+
+## Cumulative integration validation (#69 and #70)
+
+On Node 22.22.1, the integrated #69 step passed typecheck and all 60 focused
+compiled HTTP tests with 7 TS / 87 JS inputs. The integrated #70 step passed
+typecheck (all sixteen combined negative probes), build and all 117 focused
+compiled tests using the nine paths listed in its historical evidence, with
+19 TS / 78 JS inputs. These counts come from the combined manifest, not summed
+branch totals. The shared HTTP integration file retains the static MIME/HEAD
+regression, both discovery regressions and one Git-backed HTTP smoke using the
+reusable fail-closed fake. Unused request capabilities in the live-ref fixture
+now fail closed instead of passing undefined. The polling port accepts readonly
+snapshots and the HTTP adapter narrows unknown polling errors before forwarding
+their message. External Git, filesystem and watcher limitations remain unchanged.

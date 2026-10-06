@@ -28,13 +28,22 @@ createApp({ watchWorktree: (_path, onChange) => { onChange([42]); return { close
 const conflictingResponse: ResponseDescription = { status: 200, headers: {}, body: 'json', stream: { subscribe: () => () => {} } };
 declare const handleRequest: ReturnType<typeof createRequestHandler>;
 handleRequest({ method: 'GET', pathname: 42, searchParams: new URLSearchParams() });
+import { parseWorktreeList, selectedFirst } from '../server/porcelain.js';
+import { createListWorktrees } from '../server/default-deps.js';
+import { listCommits } from '../server/commits.js';
+import { createWorktreeDeletion } from '../server/worktree-delete.js';
+parseWorktreeList(42);
+selectedFirst([{ path: 42 }], '/repo');
+createListWorktrees('/repo', async () => 42);
+listCommits('/repo', 42);
+createWorktreeDeletion('/repo').remove('/linked', 42);
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   const diagnostics = ts.getPreEmitDiagnostics(program);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322],
-    'Static gate must reject every deliberate invalid routing/HTTP call and response shape');
-  console.log('Static negative probes: all eleven invalid routing/HTTP calls and response shapes rejected');
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345],
+    'Static gate must reject every deliberate invalid routing/HTTP/discovery/Git/commit/confirmation call and response shape');
+  console.log('Static negative probes: all sixteen invalid calls and response shapes rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

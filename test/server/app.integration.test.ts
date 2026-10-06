@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import http from 'node:http';
 import { createApp } from '../../server/app.js';
 import { createListWorktrees } from '../../server/default-deps.js';
+import { fakeGit } from './fake-git.js';
 
 test('HTTP static IO preserves MIME, byte length and HEAD semantics with a fake filesystem', async (t) => {
   const reads: string[] = [];
@@ -47,17 +48,38 @@ test('HTTP static IO preserves MIME, byte length and HEAD semantics with a fake 
   assert.ok(reads[0].endsWith('/public/index.html'));
 });
 
+test('discovery refuses an unconfigured fake Git listing instead of silently inventing an empty repository', async () => {
+  const { runGit } = fakeGit({ 'rev-parse': 'aaa\n' });
+  await assert.rejects(createListWorktrees('/main', runGit)(), /Unexpected Git call: worktree list --porcelain/);
+});
+
+test('discovery keeps Git identity/order while selecting a linked worktree and labeling the actual main worktree', async () => {
+  const { runGit, calls } = fakeGit({
+    worktree: 'worktree /main\nHEAD aaa\nbranch refs/heads/main\n\nworktree /other\nHEAD bbb\ndetached\n\nworktree /linked\nHEAD ccc\nbranch refs/heads/topic\n',
+    'rev-parse': 'ddd\n',
+  });
+  const worktrees = await createListWorktrees('/linked', runGit)();
+  assert.deepEqual(worktrees.map(({ path, head, branch, deletionReason, originMainSha }) =>
+    ({ path, head, branch, deletionReason, originMainSha })), [
+    { path: '/linked', head: 'ccc', branch: 'topic', deletionReason: 'Server is running in this worktree', originMainSha: 'ddd' },
+    { path: '/main', head: 'aaa', branch: 'main', deletionReason: 'Main worktree cannot be deleted', originMainSha: 'ddd' },
+    { path: '/other', head: 'bbb', branch: null, deletionReason: null, originMainSha: 'ddd' },
+  ]);
+  assert.ok(calls.every(({ cwd }) => cwd === '/linked'));
+});
+
 // Exercise the Git-backed list and HTTP adapter without inspecting a real
 // repository. All Git IO stays at the injected boundary.
 test('smoke: the Git-backed worktree list is served over HTTP with fake Git', async (t) => {
   const sha = 'a'.repeat(40);
-  const git = async (args: string[], cwd: string) => {
+  const { runGit: git } = fakeGit((args, cwd) => {
     assert.equal(cwd, '/main');
     if (args[0] === 'worktree' && args[1] === 'list') return `worktree /main\nHEAD ${sha}\nbranch refs/heads/main\n`;
     if (args[0] === 'rev-parse') return `${sha}\n`;
     throw new Error(`Unexpected Git call: ${args}`);
-  };
-  const server = createApp({ repoRoot: '/main', listWorktrees: createListWorktrees('/main', git) });
+  });
+  const options = { repoRoot: '/main', listWorktrees: createListWorktrees('/main', git) };
+  const server = createApp(options);
   server.listen(0);
   await once(server, 'listening');
   t.after(() => server.close());

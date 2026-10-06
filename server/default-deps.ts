@@ -3,6 +3,7 @@
 // that owns the logic.
 
 import { runGit } from './git.js';
+import type { Git } from './git-port.js';
 import { parseWorktreeList, selectedFirst } from './porcelain.js';
 import { getFileTree } from './status.js';
 import { readFileContent } from './file-content.js';
@@ -15,7 +16,7 @@ import { worktreeDeletionReason } from './worktree-delete.js';
 // from repoRoot without inspecting .git paths or contacting the remote.
 // Including the raw tip in each snapshot lets the existing poll observe
 // ref-only changes even when a worktree's latest shared commit stays unchanged.
-export function createListWorktrees(repoRoot, git = runGit) {
+export function createListWorktrees(repoRoot: string, git: Git = runGit) {
   return async () => {
     const [stdout, originSha] = await Promise.all([
       git(['worktree', 'list', '--porcelain'], repoRoot),

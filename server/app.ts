@@ -70,9 +70,13 @@ export function createApp({
   // polling rather than a filesystem watch), so an injected `listWorktrees`
   // fake is also what drives this channel in tests.
   const watchWorktrees: NonNullable<AppOptions['watchWorktreeList']> =
-    // The legacy poller's inferred options omit its onError callback. Include
-    // its existing optional timer field, without changing the runtime default.
-    watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, { ...options, intervalMs: undefined }));
+    watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, {
+      onError: (error: unknown) => {
+        const message = error !== null && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+          ? error.message : String(error);
+        options.onError({ message });
+      },
+    }));
 
   // Shares one poll across every open `/api/watch-worktrees` connection.
   const subscribeToWorktreeChanges: RequestDependencies['subscribeToWorktreeChanges'] = createFanOut(watchWorktrees);

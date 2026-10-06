@@ -125,11 +125,16 @@ test('returns an empty array for empty output', () => {
 
 test('selectedFirst moves the selected linked worktree to the front', () => {
   const worktrees = [{ path: '/main' }, { path: '/a' }, { path: '/b' }];
-  assert.deepEqual(selectedFirst(worktrees, '/b'), [{ path: '/b' }, { path: '/main' }, { path: '/a' }]);
+  const selected = selectedFirst(worktrees, '/b');
+  assert.deepEqual(selected, [{ path: '/b' }, { path: '/main' }, { path: '/a' }]);
+  assert.notEqual(selected, worktrees);
+  assert.equal(selected[0], worktrees[2]);
+  assert.equal(selected[1], worktrees[0]);
+  assert.equal(selected[2], worktrees[1]);
 });
 
 test('selectedFirst leaves the order alone when the main or an unknown path is selected', () => {
   const worktrees = [{ path: '/main' }, { path: '/a' }];
-  assert.deepEqual(selectedFirst(worktrees, '/main'), worktrees);
-  assert.deepEqual(selectedFirst(worktrees, '/elsewhere'), worktrees);
+  assert.equal(selectedFirst(worktrees, '/main'), worktrees);
+  assert.equal(selectedFirst(worktrees, '/elsewhere'), worktrees);
 });

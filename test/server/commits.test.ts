@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCommitLog, markTouching, listCommits, LOG_FORMAT } from '../../server/commits.js';
+import { fakeGit } from './fake-git.js';
 
 // Captured `git log --pretty=format:LOG_FORMAT` output: fields joined by the
 // unit separator (0x1f), commits by a newline, no trailing newline.
@@ -8,10 +9,10 @@ const SEP = '\x1f';
 const THIRD = ['c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3', 'third commit', '2026-09-27T10:00:00+02:00'];
 const SECOND = ['b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', 'second commit', '2026-09-26T10:00:00+02:00'];
 const FIRST = ['a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', 'first commit', '2026-09-25T09:30:00-05:00'];
-const line = (fields) => fields.join(SEP);
+const line = (fields: string[]) => fields.join(SEP);
 const LOG_OUTPUT = [THIRD, SECOND, FIRST].map(line).join('\n');
 
-const toCommit = ([sha, message, date]) => ({ sha, message, date });
+const toCommit = ([sha, message, date]: string[]) => ({ sha, message, date });
 
 test('parses multiple commits into sha/message/date, keeping git\'s newest-first order', () => {
   assert.deepEqual(parseCommitLog(LOG_OUTPUT), [THIRD, SECOND, FIRST].map(toCommit));
@@ -44,20 +45,6 @@ test('markTouching flags only the shas that touched the file, keeping every comm
   ]);
 });
 
-// A fake runGit: `responses` maps a git subcommand ('log', 'merge-base') to
-// its stdout, or to an Error to throw. `--literal-pathspecs` is skipped when
-// finding the subcommand. Every call is recorded in `calls`.
-function fakeGit(responses) {
-  const calls = [];
-  const runGit = async (args, cwd) => {
-    calls.push({ args, cwd });
-    const response = responses[args.find((arg) => !arg.startsWith('--literal'))];
-    if (response instanceof Error) throw response;
-    return response ?? '';
-  };
-  return { runGit, calls };
-}
-
 const sep = '\x1f';
 const twoCommits = `bbb${sep}second${sep}2026-01-02T00:00:00+00:00\naaa${sep}first${sep}2026-01-01T00:00:00+00:00`;
 
@@ -80,7 +67,7 @@ test('listCommits marks commits touching a file, using literal pathspecs', async
 });
 
 test('listCommits passes the file after -- with literal pathspecs and --follow', async () => {
-  const seen = [];
+  const seen: string[][] = [];
   await listCommits('/wt', '*.txt', async (args) => {
     seen.push(args);
     return args[0] === 'log' ? twoCommits : '';

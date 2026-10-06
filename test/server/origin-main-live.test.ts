@@ -5,20 +5,29 @@ import { pollWorktrees } from '../../server/worktree-watch.js';
 import { createFanOut } from '../../server/fan-out.js';
 import { createRequestHandler } from '../../server/handle-request.js';
 import { listCommits } from '../../server/commits.js';
+import { fakeGit } from './fake-git.js';
+import { jsonRecords } from './json-records.js';
 
 const porcelain = 'worktree /main\nHEAD bbb\nbranch refs/heads/main\n\nworktree /linked\nHEAD bbb\nbranch refs/heads/topic\n';
 const log = 'bbb\x1fLocal\x1f2026-01-02T00:00:00Z\naaa\x1fPushed\x1f2026-01-01T00:00:00Z';
-const refSnapshot = (worktrees) => worktrees.map(({ path, head, branch, originMainSha }) => ({ path, head, branch, originMainSha }));
+const refSnapshot = (worktrees: Record<string, unknown>[]) => worktrees.map(({ path, head, branch, originMainSha }) => {
+  for (const value of [path, head, branch, originMainSha]) assert.ok(value === null || typeof value === 'string');
+  return { path, head, branch, originMainSha };
+});
+
+interface WatchOptions { onError?: (error: unknown) => void }
+interface Response {
+  body?: string | Buffer;
+  stream?: { subscribe: (write: (frame: string) => void) => () => void };
+}
 
 function fixture() {
-  let origin = 'aaa';
+  let origin: string | null = 'aaa';
   let shared = 'aaa';
-  let shadow = null;
-  let pending = null;
-  const delays = [];
-  const gitCalls = [];
-  const git = async (args, cwd) => {
-    gitCalls.push({ args, cwd });
+  let shadow: string | null = null;
+  let pending: (() => void | Promise<void>) | null = null;
+  const delays: number[] = [];
+  const { runGit: git, calls: gitCalls } = fakeGit((args) => {
     if (args[0] === 'worktree') return porcelain;
     if (args[0] === 'rev-parse') {
       if (shadow !== null && args.at(-1) === 'origin/main^{commit}') return `${shadow}\n`;
@@ -33,47 +42,60 @@ function fixture() {
     }
     if (args[0] === 'log') return log;
     throw new Error(`Unexpected Git command: ${args}`);
-  };
+  });
   const getWorktrees = createListWorktrees('/linked', git);
-  const subscribeToWorktreeChanges = createFanOut((onChange, options) =>
+  const subscribeToWorktreeChanges = createFanOut((onChange: (worktrees: Readonly<Awaited<ReturnType<typeof getWorktrees>>>) => void, options: WatchOptions) =>
     pollWorktrees(getWorktrees, onChange, {
       ...options,
-      setTimer(callback, delay) { pending = callback; delays.push(delay); return 'timer'; },
+      setTimer(callback: () => void | Promise<void>, delay: number) { pending = callback; delays.push(delay); return 'timer'; },
       clearTimer() { pending = null; },
     }));
   const handle = createRequestHandler({
     getWorktrees, subscribeToWorktreeChanges,
-    getCommits: (path, file) => listCommits(path, file, git),
+    getCommits: (path: string, file: string | null) => listCommits(path, file, git),
+    getTree: async () => { throw new Error('Unexpected tree read'); },
+    getContent: async () => { throw new Error('Unexpected content read'); },
+    getComments: async () => { throw new Error('Unexpected comments read'); },
+    createComment: async () => { throw new Error('Unexpected comment mutation'); },
+    watchWorktree: () => { throw new Error('Unexpected worktree watcher'); },
+    subscribeToActivity: () => { throw new Error('Unexpected activity subscription'); },
+    readStatic: async () => { throw new Error('Unexpected static read'); },
+    publicDir: '/public',
+    worktreeDeletion: {
+      preview: async () => { throw new Error('Unexpected deletion preview'); },
+      remove: async () => { throw new Error('Unexpected deletion'); },
+    },
   });
-  const request = (url) => {
+  const request = (url: string): Promise<Response> => {
     const { pathname, searchParams } = new URL(url, 'http://localhost');
-    return handle({ method: 'GET', pathname, searchParams });
+    return handle({ method: 'GET', pathname, searchParams, body: undefined });
   };
   const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
   return {
     request, gitCalls, delays, settle,
-    setOrigin: (sha, sharedSha = sha) => { origin = sha; shared = sharedSha; },
-    setShadow: (sha) => { shadow = sha; },
-    async tick() { const callback = pending; pending = null; await callback(); },
+    setOrigin: (sha: string | null, sharedSha = sha) => { origin = sha; shared = sharedSha ?? ''; },
+    setShadow: (sha: string) => { shadow = sha; },
+    async tick() { const callback = pending; pending = null; assert.ok(callback); await callback(); },
   };
 }
 
 test('local origin/main movement is streamed at normal cadence with unchanged HEAD in a linked worktree', async (t) => {
   const f = fixture();
-  const initial = refSnapshot(JSON.parse((await f.request('/api/worktrees')).body));
+  const initial = refSnapshot(jsonRecords((await f.request('/api/worktrees')).body));
   assert.deepEqual(initial, [
     { path: '/linked', head: 'bbb', branch: 'topic', originMainSha: 'aaa' },
     { path: '/main', head: 'bbb', branch: 'main', originMainSha: 'aaa' },
   ]);
   const response = await f.request('/api/watch-worktrees');
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(response.stream);
   t.after(response.stream.subscribe((frame) => frames.push(frame)));
   await f.settle();
   await f.tick();
   assert.equal(frames.length, 1, 'unchanged local refs do not emit again');
   f.setOrigin('bbb');
   await f.tick();
-  assert.deepEqual(frames.map((frame) => refSnapshot(JSON.parse(frame.slice(6)))), [
+  assert.deepEqual(frames.map((frame) => refSnapshot(jsonRecords(frame.slice(6)))), [
     initial,
     [
       { path: '/linked', head: 'bbb', branch: 'topic', originMainSha: 'bbb' },
@@ -81,7 +103,7 @@ test('local origin/main movement is streamed at normal cadence with unchanged HE
     ],
   ]);
   assert.deepEqual(f.delays, [2000, 2000, 2000]);
-  const commits = JSON.parse((await f.request('/api/commits?worktree=/linked')).body);
+  const commits = jsonRecords((await f.request('/api/commits?worktree=/linked')).body);
   assert.deepEqual(commits.map(({ sha, isOriginMain }) => [sha, isOriginMain]), [['bbb', true], ['aaa', false]]);
   assert.ok(f.gitCalls.every(({ cwd }) => cwd === '/linked'), 'Git resolves the shared ref from the launch worktree');
   assert.ok(f.gitCalls.every(({ args }) => ['worktree', 'rev-parse', 'merge-base', 'log'].includes(args[0])), 'only local read commands');
@@ -91,10 +113,11 @@ test('advanced origin/main tips stream changes even when the latest shared commi
   const f = fixture();
   f.setOrigin('ccc', 'aaa');
   const response = await f.request('/api/watch-worktrees');
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(response.stream);
   t.after(response.stream.subscribe((frame) => frames.push(frame)));
   await f.settle();
-  const commits = async () => JSON.parse((await f.request('/api/commits?worktree=/linked')).body);
+  const commits = async () => jsonRecords((await f.request('/api/commits?worktree=/linked')).body);
   const expected = [
     { sha: 'bbb', message: 'Local', date: '2026-01-02T00:00:00Z', isOriginMain: false },
     { sha: 'aaa', message: 'Pushed', date: '2026-01-01T00:00:00Z', isOriginMain: true },
@@ -103,7 +126,7 @@ test('advanced origin/main tips stream changes even when the latest shared commi
   f.setOrigin('ddd', 'aaa');
   await f.tick();
   assert.deepEqual(await commits(), expected);
-  assert.deepEqual(frames.map((frame) => refSnapshot(JSON.parse(frame.slice(6)))), [
+  assert.deepEqual(frames.map((frame) => refSnapshot(jsonRecords(frame.slice(6)))), [
     [
       { path: '/linked', head: 'bbb', branch: 'topic', originMainSha: 'ccc' },
       { path: '/main', head: 'bbb', branch: 'main', originMainSha: 'ccc' },
@@ -122,9 +145,9 @@ test('a same-named tag cannot replace the local remote-tracking origin/main ref'
   const f = fixture();
   f.setOrigin('bbb');
   f.setShadow('aaa');
-  const worktrees = JSON.parse((await f.request('/api/worktrees')).body);
+  const worktrees = jsonRecords((await f.request('/api/worktrees')).body);
   assert.deepEqual(worktrees.map(({ originMainSha }) => originMainSha), ['bbb', 'bbb']);
-  const commits = JSON.parse((await f.request('/api/commits?worktree=/linked')).body);
+  const commits = jsonRecords((await f.request('/api/commits?worktree=/linked')).body);
   assert.deepEqual(commits.map(({ sha, isOriginMain }) => [sha, isOriginMain]), [['bbb', true], ['aaa', false]]);
 });
 
@@ -132,10 +155,11 @@ test('ref creation, deletion and movement to unrelated history stream changes wi
   const f = fixture();
   f.setOrigin(null);
   const response = await f.request('/api/watch-worktrees');
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(response.stream);
   t.after(response.stream.subscribe((frame) => frames.push(frame)));
   await f.settle();
-  const markers = async () => JSON.parse((await f.request('/api/commits?worktree=/linked')).body)
+  const markers = async () => jsonRecords((await f.request('/api/commits?worktree=/linked')).body)
     .filter((commit) => commit.isOriginMain).map((commit) => commit.sha);
   assert.deepEqual(await markers(), []);
   f.setOrigin('aaa');
@@ -148,6 +172,6 @@ test('ref creation, deletion and movement to unrelated history stream changes wi
   await f.tick();
   assert.deepEqual(await markers(), []);
   await f.tick();
-  assert.deepEqual(frames.map((frame) => JSON.parse(frame.slice(6)).map(({ originMainSha }) => originMainSha)),
+  assert.deepEqual(frames.map((frame) => jsonRecords(frame.slice(6)).map(({ originMainSha }) => originMainSha)),
     [[null, null], ['aaa', 'aaa'], ['outside-history', 'outside-history'], [null, null]]);
 });

@@ -9,10 +9,19 @@
 // commits automatically, with no trailing newline after the last one.
 
 import { runGit as defaultRunGit } from './git.js';
+import type { Git } from './git-port.js';
+
+export interface Commit {
+  sha: string | undefined;
+  message: string | undefined;
+  date: string | undefined;
+  touchesFile?: boolean;
+  isOriginMain?: boolean;
+}
 
 export const LOG_FORMAT = '%H%x1f%s%x1f%cI';
 
-export function parseCommitLog(output) {
+export function parseCommitLog(output: string): Commit[] {
   const trimmed = output.replace(/\r?\n$/, '');
   if (!trimmed) return [];
 
@@ -25,15 +34,15 @@ export function parseCommitLog(output) {
 // Marks each commit with whether it appears in `touchingSha` (the shas from
 // `git log -- <file>`). `touchesFile` is present only when a file was asked
 // about: absent means "no file open, no marking", `false` means "didn't touch".
-export function markTouching(commits, touchingSha) {
-  const touched = new Set(touchingSha);
+export function markTouching<T extends { sha: string | undefined }>(commits: T[], touchingSha: readonly string[]) {
+  const touched = new Set<string | undefined>(touchingSha);
   return commits.map((commit) => ({ ...commit, touchesFile: touched.has(commit.sha) }));
 }
 
 // Flags the latest commit shared with `origin/main` (`originSha`) so the client
 // can draw a divider there. When it is unknown or not in the listed history
 // the commits come back unchanged: no marker rather than a wrong one.
-export function markOriginMain(commits, originSha) {
+export function markOriginMain<T extends { sha: string | undefined }>(commits: T[], originSha: string | null): (T & { isOriginMain?: boolean })[] {
   if (!commits.some((commit) => commit.sha === originSha)) return commits;
   return commits.map((commit) => ({ ...commit, isOriginMain: commit.sha === originSha }));
 }
@@ -41,7 +50,7 @@ export function markOriginMain(commits, originSha) {
 // Shas of commits that touched `file` (following renames), or null when the
 // filter fails (e.g. a path outside the worktree): that must only cost the
 // marking, never the commit list itself.
-async function shasTouching(worktreePath, file, runGit) {
+async function shasTouching(worktreePath: string, file: string, runGit: Git) {
   try {
     const stdout = await runGit(['--literal-pathspecs', 'log', '--follow', '--pretty=format:%H', '--', file], worktreePath);
     return stdout.split('\n').filter(Boolean);
@@ -51,7 +60,7 @@ async function shasTouching(worktreePath, file, runGit) {
 }
 
 // Sha `origin/main` points at, or null when there is no such remote branch.
-export async function originMainSha(worktreePath, runGit = defaultRunGit) {
+export async function originMainSha(worktreePath: string, runGit: Git = defaultRunGit) {
   try {
     const stdout = await runGit(['rev-parse', '--verify', '-q', 'refs/remotes/origin/main^{commit}'], worktreePath);
     return stdout.trim() || null;
@@ -62,7 +71,7 @@ export async function originMainSha(worktreePath, runGit = defaultRunGit) {
 
 // Latest commit shared by HEAD and origin/main, or null when the ref is
 // missing or the histories are unrelated: only the divider is lost.
-async function sharedOriginMainSha(worktreePath, runGit) {
+async function sharedOriginMainSha(worktreePath: string, runGit: Git) {
   try {
     const stdout = await runGit(['merge-base', 'HEAD', 'refs/remotes/origin/main'], worktreePath);
     return stdout.trim() || null;
@@ -71,7 +80,7 @@ async function sharedOriginMainSha(worktreePath, runGit) {
   }
 }
 
-export async function listCommits(worktreePath, file, runGit = defaultRunGit) {
+export async function listCommits(worktreePath: string, file?: string | null, runGit: Git = defaultRunGit): Promise<Commit[]> {
   try {
     const [stdout, touching, originSha] = await Promise.all([
       runGit(['log', `--pretty=format:${LOG_FORMAT}`], worktreePath),

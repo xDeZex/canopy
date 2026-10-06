@@ -55,6 +55,16 @@ function shallowEqual(a, b) {
 // instead of going silent.
 // `setTimer`/`clearTimer` default to the real timers and exist so tests can
 // drive ticks by hand instead of sleeping.
+/**
+ * The timer handle belongs to the injected IO edge, not necessarily Node.
+ * @template [Timer=ReturnType<typeof setTimeout>]
+ * @template Snapshot
+ * @param {() => Promise<readonly Snapshot[]>} getWorktrees
+ * @param {(worktrees: readonly Snapshot[]) => void} onChange
+ * @param {{ intervalMs?: number, onError?: (error: unknown) => void,
+ *   setTimer?: (callback: () => Promise<void>, delay: number) => Timer,
+ *   clearTimer?: (timer: Timer | null) => void }} options
+ */
 export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POLL_MS, onError, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let previous = null;
   let stopped = false;

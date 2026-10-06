@@ -1,19 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorktreeDeletion } from '../../server/worktree-delete.js';
+import { fakeGit, type GitCall } from './fake-git.js';
 
 const sha = 'a'.repeat(40);
 const remote = 'b'.repeat(40);
-const block = (path, branch = 'feature', flags = '') =>
+const block = (path: string, branch: string | null = 'feature', flags = '') =>
   `worktree ${path}\0HEAD ${sha}\0${branch ? `branch refs/heads/${branch}` : 'detached'}\0${flags ? `${flags}\0` : ''}\0`;
 
+interface State {
+  list: string; head: string; status: string; diff: string; cached: string;
+  untracked: string; ignored: string; hashes: string; remotes: string; count: string;
+  flags: string; sparse: string; staged: string; calls: GitCall[];
+  removalFinished?: boolean; afterRemoveListError?: string; pendingHead?: Promise<void>;
+  removeError?: string; afterRemoveList?: string; afterRemoveHead?: string;
+  beforeRefDeleteHead?: string; branchError?: string; branchRemoved?: boolean;
+}
+
 function fixture() {
-  const state = { list: block('/main', 'main') + block('/linked'), head: sha, status: ' M tracked\0?? new\0',
+  const state: State = { list: block('/main', 'main') + block('/linked'), head: sha, status: ' M tracked\0?? new\0',
     diff: 'changes', cached: 'staged changes', untracked: 'new\0', ignored: 'cache\0',
     hashes: `${sha}\n${remote}\n`, remotes: `refs/remotes/other/topic ${remote}\n`, count: '2\n',
     flags: 'H tracked\0', sparse: 'false\n', staged: `100644 ${sha} 0\ttracked\0`, calls: [] };
-  const git = async (args, cwd) => {
-    state.calls.push({ args, cwd });
+  const { runGit: git, calls } = fakeGit(async (args) => {
     if (args[0] === 'worktree' && args[1] === 'list') {
       if (state.removalFinished && state.afterRemoveListError) throw new Error(state.afterRemoveListError);
       return state.list;
@@ -49,7 +58,8 @@ function fixture() {
       return '';
     }
     throw new Error(`Unexpected Git call: ${args}`);
-  };
+  });
+  state.calls = calls;
   return { state, deletion: createWorktreeDeletion('/main', git, { secret: Buffer.alloc(32) }) };
 }
 
@@ -73,18 +83,20 @@ test('preview describes irreversible risks and confirmation removes the worktree
 });
 
 test('hidden index flags and sparse checkout block confirmation even when status reports clean', async () => {
-  for (const [flags, sparse, reason] of [
+  const cases: [string, string, RegExp][] = [
     ['h tracked\0', 'false\n', /assume-unchanged/i],
     ['s hidden\0', 'false\n', /assume-unchanged/i],
     ['S skipped\0', 'false\n', /skip-worktree/i],
     ['H tracked\0', 'true\n', /sparse.checkout/i],
-  ]) {
+  ];
+  for (const [flags, sparse, reason] of cases) {
     const { state, deletion } = fixture();
     const before = await deletion.preview('/linked');
     state.flags = flags;
     state.sparse = sparse;
     state.status = state.diff = state.cached = '';
     const preview = await deletion.preview('/linked');
+    assert.ok(preview.reason);
     assert.match(preview.reason, reason);
     assert.equal(preview.confirmation, undefined);
     await assert.rejects(deletion.remove('/linked', before.confirmation), reason);
@@ -98,6 +110,7 @@ test('gitlinks block deletion even when a submodule is unpopulated and Git statu
   state.staged += `160000 ${remote} 0\tvendor/unpopulated\0`;
   state.status = state.diff = state.cached = '';
   const preview = await deletion.preview('/linked');
+  assert.ok(preview.reason);
   assert.match(preview.reason, /submodule.*cannot.*safely assess/i);
   assert.equal(preview.confirmation, undefined);
   await assert.rejects(deletion.remove('/linked', before.confirmation), /submodule/i);
@@ -117,7 +130,8 @@ test('local branch deletion uses atomic expected-old-value removal and retains a
   const changed = fixture();
   const before = await changed.deletion.preview('/linked');
   changed.state.beforeRefDeleteHead = remote;
-  await assert.rejects(changed.deletion.remove('/linked', before.confirmation), (err) => {
+  await assert.rejects(changed.deletion.remove('/linked', before.confirmation), (err: unknown) => {
+    assertPartialFailure(err);
     assert.equal(err.removed, true);
     assert.equal(err.branchDeleted, false);
     assert.match(err.message, /branch.*not deleted.*changed/);
@@ -128,17 +142,19 @@ test('local branch deletion uses atomic expected-old-value removal and retains a
 });
 
 test('branch deletion refreshes worktrees after removal and refuses checked-out or malformed fresh listings', async () => {
-  for (const [listing, message] of [
+  const cases: [string, RegExp][] = [
     [block('/main', 'main') + block('/other', 'feature'), /another worktree/],
     [block('/main', 'main') + block('/linked', 'feature'), /another worktree/],
     ['worktree /main\0\0worktree\0branch refs/heads/feature\0\0', /malformed/],
     [block('/main', 'main') + block('/other').replace('refs/heads/feature', 'refs/remotes/feature'), /malformed/],
     [block('/main', 'main') + block('relative/path'), /malformed/],
-  ]) {
+  ];
+  for (const [listing, message] of cases) {
     const { state, deletion } = fixture();
     const preview = await deletion.preview('/linked');
     state.afterRemoveList = listing;
-    await assert.rejects(deletion.remove('/linked', preview.confirmation), (err) => {
+    await assert.rejects(deletion.remove('/linked', preview.confirmation), (err: unknown) => {
+      assertPartialFailure(err);
       assert.equal(err.removed, true);
       assert.equal(err.branchDeleted, false);
       assert.match(err.message, message);
@@ -156,8 +172,8 @@ test('branch deletion refreshes worktrees after removal and refuses checked-out 
 test('concurrent deletion is refused and a branch moved after worktree removal is not deleted', async () => {
   const { state, deletion } = fixture();
   const preview = await deletion.preview('/linked');
-  let resume;
-  state.pendingHead = new Promise((resolve) => { resume = resolve; });
+  let resume = () => {};
+  state.pendingHead = new Promise<void>((resolve) => { resume = resolve; });
   const first = deletion.remove('/linked', preview.confirmation);
   const second = deletion.remove('/linked', preview.confirmation);
   resume();
@@ -168,7 +184,8 @@ test('concurrent deletion is refused and a branch moved after worktree removal i
   const moved = fixture();
   const before = await moved.deletion.preview('/linked');
   moved.state.afterRemoveHead = remote;
-  await assert.rejects(moved.deletion.remove('/linked', before.confirmation), (err) => {
+  await assert.rejects(moved.deletion.remove('/linked', before.confirmation), (err: unknown) => {
+    assertPartialFailure(err);
     assert.equal(err.removed, true);
     assert.match(err.message, /branch.*not deleted.*changed/);
     return true;
@@ -177,11 +194,13 @@ test('concurrent deletion is refused and a branch moved after worktree removal i
 });
 
 test('assessment errors and malformed snapshots fail closed; detached clean worktrees need no branch deletion', async () => {
-  for (const [key, value] of [
+  const invalid: [keyof StringState, string][] = [
     ['count', 'error'], ['count', '-1'], ['count', '9007199254740992'], ['head', 'not a SHA'],
     ['flags', 'H tracked'], ['flags', 'malformed\0'], ['sparse', 'unknown'], ['staged', 'invalid\0'],
     ['hashes', ''], ['list', block('/main', 'main') + block('/linked', '').replace('detached', 'branch refs/heads/')],
-  ]) {
+    ['list', block('/main', 'main') + block('/linked', null).replace('detached\0', 'detached\0branch\0')],
+  ];
+  for (const [key, value] of invalid) {
     const { state, deletion } = fixture();
     state[key] = value;
     await assert.rejects(deletion.preview('/linked'));
@@ -200,11 +219,13 @@ test('assessment errors and malformed snapshots fail closed; detached clean work
 });
 
 test('branch failure reports partial removal; worktree failure never deletes the branch', async () => {
-  for (const failure of ['branchError', 'removeError']) {
+  const failures: ('branchError' | 'removeError')[] = ['branchError', 'removeError'];
+  for (const failure of failures) {
     const { state, deletion } = fixture();
     const preview = await deletion.preview('/linked');
     state[failure] = 'Git refused';
-    await assert.rejects(deletion.remove('/linked', preview.confirmation), (err) => {
+    await assert.rejects(deletion.remove('/linked', preview.confirmation), (err: unknown) => {
+      assertPartialFailure(err);
       assert.equal(err.removed, failure === 'branchError' ? true : null);
       assert.match(err.message, failure === 'branchError' ? /removed.*branch.*not deleted/ : /may be partially removed.*branch.*not deleted/);
       return true;
@@ -218,11 +239,14 @@ test('confirmation is bound to the clicked path and rejects changed safety snaps
   state.list = block('/main', 'main') + block('/linked', null) + block('/other', null);
   const preview = await deletion.preview('/linked');
   await assert.rejects(deletion.remove('/other', preview.confirmation), /changed/);
-  for (const [key, changed] of Object.entries({ status: 'A  staged\0', diff: 'new working bytes',
-    cached: 'new staged bytes', untracked: 'another\0', ignored: 'more cache\0',
-    hashes: `${remote}\n${sha}\n`, head: remote, remotes: `refs/remotes/other/topic ${sha}\n`, count: '3\n',
-    flags: 'H tracked\0H another\0', staged: `100755 ${sha} 0\ttracked\0`,
-    list: block('/main', 'main') + block('/linked', 'renamed') })) {
+  const changes: [keyof StringState, string][] = [
+    ['status', 'A  staged\0'], ['diff', 'new working bytes'], ['cached', 'new staged bytes'],
+    ['untracked', 'another\0'], ['ignored', 'more cache\0'], ['hashes', `${remote}\n${sha}\n`],
+    ['head', remote], ['remotes', `refs/remotes/other/topic ${sha}\n`], ['count', '3\n'],
+    ['flags', 'H tracked\0H another\0'], ['staged', `100755 ${sha} 0\ttracked\0`],
+    ['list', block('/main', 'main') + block('/linked', 'renamed')],
+  ];
+  for (const [key, changed] of changes) {
     const f = fixture();
     const before = await f.deletion.preview('/linked');
     f.state[key] = changed;
@@ -232,7 +256,7 @@ test('confirmation is bound to the clicked path and rejects changed safety snaps
 });
 
 test('protected, unknown and invalid-branch worktrees cannot receive a deletion confirmation', async () => {
-  for (const [list, running, target, reason] of [
+  const cases: [string, string, string, string][] = [
     [block('/main', 'topic') + block('/linked'), '/linked', '/main', 'Main worktree'],
     [block('/main', 'main') + block('/linked'), '/linked', '/linked', 'running'],
     [block('/main', 'main') + block('/linked'), '/linked/subfolder', '/linked', 'running'],
@@ -242,18 +266,20 @@ test('protected, unknown and invalid-branch worktrees cannot receive a deletion 
     [block('/main', 'main') + block('/linked') + block('/other'), '/main', '/linked', 'another worktree'],
     [block('/main', 'main') + block('/linked', '-danger'), '/main', '/linked', 'branch'],
     [block('/main', 'main') + block('/linked'), '/main', '/arbitrary', 'Unknown'],
-  ]) {
+  ];
+  for (const [list, running, target, reason] of cases) {
     const { state } = fixture();
     state.list = list;
     // Every invocation uses a fake Git boundary, including safety failures.
-    const git = async (args) => {
-      state.calls.push({ args });
+    const { runGit: git, calls } = fakeGit((args) => {
       if (args[0] === 'worktree' && args[1] === 'list') return list;
       throw new Error('Assessment should stop before operating on the protected path');
-    };
+    });
+    state.calls = calls;
     const deletion = createWorktreeDeletion(running, git, { secret: Buffer.alloc(32) });
     const preview = target === '/arbitrary' ? null : await deletion.preview(target);
     if (preview) {
+      assert.ok(preview.reason);
       assert.match(preview.reason, new RegExp(reason));
       assert.equal(preview.confirmation, undefined);
     }
@@ -261,3 +287,11 @@ test('protected, unknown and invalid-branch worktrees cannot receive a deletion 
     assert.equal(state.calls.some(({ args }) => args[1] === 'remove' || args[0] === 'update-ref'), false);
   }
 });
+
+type StringState = Pick<State, 'list' | 'head' | 'status' | 'diff' | 'cached' | 'untracked' | 'ignored' |
+  'hashes' | 'remotes' | 'count' | 'flags' | 'sparse' | 'staged'>;
+
+function assertPartialFailure(error: unknown): asserts error is Error & { removed: boolean | null; branchDeleted: boolean } {
+  assert.ok(error instanceof Error && 'removed' in error && (typeof error.removed === 'boolean' || error.removed === null));
+  assert.ok('branchDeleted' in error && typeof error.branchDeleted === 'boolean');
+}
