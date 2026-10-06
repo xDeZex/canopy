@@ -2,6 +2,17 @@ import path from 'node:path';
 import { readFileSync, lstatSync } from 'node:fs';
 import ignore from 'ignore';
 import { SIDECAR } from './sidecar-path.js';
+import type { PathStat } from './sidecar-path.js';
+import type { Ignore } from 'ignore';
+
+export type WatchStats = Partial<PathStat> & { mtimeMs?: number };
+export interface WatchPolicyOptions {
+  ignoreGitignore?: boolean;
+  observeSidecar?: boolean;
+  readFile?: (file: string, encoding: 'utf8') => string;
+  stat?: (file: string) => WatchStats & Pick<PathStat, 'isFile'>;
+}
+export type WatchPolicy = (filePath: string, stats?: WatchStats) => boolean;
 
 // Kept for callers of the original bookkeeping predicate. Watch policies apply
 // it only to paths relative to their worktree, never to parent directories.
@@ -9,7 +20,7 @@ export const IGNORE_GIT_DIR = /(^|[/\\])\.git([/\\]|$)/;
 
 // Evaluate already-loaded ancestor rules in order, without filesystem access
 // or policy-cache mutation. Later negations override earlier exclusions.
-function excludedByAncestors(parts, isDirectory, ancestors) {
+function excludedByAncestors(parts: string[], isDirectory: boolean, ancestors: { depth: number; rules: Ignore }[]) {
   return ancestors.reduce((excluded, { depth, rules }) => {
     const candidate = parts.slice(depth).join('/') + (isDirectory ? '/' : '');
     const result = rules.test(candidate);
@@ -22,30 +33,32 @@ function excludedByAncestors(parts, isDirectory, ancestors) {
 // Chokidar calls ignored before descending into directories. Load only the
 // ancestor rules needed for that decision, and cache them for this watch's
 // lifetime; restarting observation reloads edited .gitignore files.
-export function createWatchPolicy(worktreePath, {
+export function createWatchPolicy(worktreePath: string, {
   ignoreGitignore = true, observeSidecar = false, readFile = readFileSync, stat = lstatSync,
-} = {}) {
+}: WatchPolicyOptions = {}): WatchPolicy {
   const root = path.resolve(worktreePath);
-  const rules = new Map();
-  const reported = new Set();
+  const rules = new Map<string, Ignore>();
+  const reported = new Set<string>();
   // Missing paths are normal during deletes. Genuine IO failures are reported
   // once and fail open; they are not watcher failures that invalidate activity.
-  function report(file, err) {
-    if (['ENOENT', 'ENOTDIR'].includes(err.code) || reported.has(file)) return;
+  function report(file: string, err: unknown) {
+    const code = err !== null && typeof err === 'object' && 'code' in err ? err.code : undefined;
+    if (code === 'ENOENT' || code === 'ENOTDIR' || reported.has(file)) return;
     reported.add(file);
     console.error('canopy: watch policy error', file, err);
   }
-  function rulesAt(directory) {
-    if (!rules.has(directory)) {
-      const file = path.join(root, directory, '.gitignore');
-      let contents = '';
-      try {
-        if (stat(file).isFile()) contents = readFile(file, 'utf8');
-      }
-      catch (err) { report(file, err); }
-      rules.set(directory, ignore({ ignorecase: false }).add(contents));
+  function rulesAt(directory: string): Ignore {
+    const cached = rules.get(directory);
+    if (cached) return cached;
+    const file = path.join(root, directory, '.gitignore');
+    let contents = '';
+    try {
+      if (stat(file).isFile()) contents = readFile(file, 'utf8');
     }
-    return rules.get(directory);
+    catch (err) { report(file, err); }
+    const loaded = ignore({ ignorecase: false }).add(contents);
+    rules.set(directory, loaded);
+    return loaded;
   }
 
   return (filePath, stats) => {

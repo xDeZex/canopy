@@ -15,7 +15,7 @@ const refSnapshot = (worktrees: Record<string, unknown>[]) => worktrees.map(({ p
   return { path, head, branch, originMainSha };
 });
 
-interface WatchOptions { onError?: (error: unknown) => void }
+interface WatchOptions { onError: (error: { message: string }) => void }
 interface Response {
   body?: string | Buffer;
   stream?: { subscribe: (write: (frame: string) => void) => () => void };
@@ -46,7 +46,10 @@ function fixture() {
   const getWorktrees = createListWorktrees('/linked', git);
   const subscribeToWorktreeChanges = createFanOut((onChange: (worktrees: Readonly<Awaited<ReturnType<typeof getWorktrees>>>) => void, options: WatchOptions) =>
     pollWorktrees(getWorktrees, onChange, {
-      ...options,
+      onError(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        options.onError({ message });
+      },
       setTimer(callback: () => void | Promise<void>, delay: number) { pending = callback; delays.push(delay); return 'timer'; },
       clearTimer() { pending = null; },
     }));

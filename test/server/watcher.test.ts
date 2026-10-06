@@ -1,43 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { FakeWatcher, deferred, required } from './observation-fakes.js';
+import type { WatchWorktreeOptions } from '../../server/watcher.js';
+import type { WatchPolicyOptions } from '../../server/watch-policy.js';
 import { watchWorktree, IGNORE_GIT_DIR } from '../../server/watcher.js';
 import { watchActivity } from '../../server/worktree-activity.js';
 
 // A stand-in for a chokidar watcher: tests emit 'add'/'change'/'unlink'
 // themselves, and time only moves when `fire()` runs the pending timer.
 function fakeWatch() {
-  const watcher = Object.assign(new EventEmitter(), { closed: false, close: async () => { watcher.closed = true; } });
-  let pending = null;
+  const watcher = new FakeWatcher();
+  let pending: (() => void) | null = null;
+  const options: WatchWorktreeOptions & Required<Pick<WatchWorktreeOptions, 'watch' | 'setTimer' | 'clearTimer'>> = {
+    readFile: () => '',
+    stat: () => ({ isDirectory: () => false, isFile: () => true }),
+    watch: (path, chokidarOptions) => {
+      watcher.watchedWith = { path, chokidarOptions };
+      return watcher;
+    },
+    setTimer: (fn) => { pending = fn; return 'timer'; },
+    clearTimer: () => { pending = null; },
+  };
   return {
     watcher,
-    options: {
-      readFile: () => '',
-      stat: () => ({ isDirectory: () => false, isFile: () => true }),
-      watch: (path, chokidarOptions) => {
-        watcher.watchedWith = { path, chokidarOptions };
-        return watcher;
-      },
-      setTimer: (fn) => {
-        pending = fn;
-        return 'timer';
-      },
-      clearTimer: () => {
-        pending = null;
-      },
-    },
+    options,
     hasPending: () => pending !== null,
     fire() {
       const fn = pending;
       pending = null;
+      assert.ok(fn);
       fn();
     },
   };
 }
 
 function recorder() {
-  const calls = [];
-  const fn = (paths) => calls.push(paths);
+  const calls: string[][] = [];
+  const fn = (paths: string[]) => calls.push(paths);
   fn.calls = calls;
   return fn;
 }
@@ -45,7 +44,7 @@ function recorder() {
 test('linked worktree index replacement invalidates status without reporting file edits', async () => {
   const files = fakeWatch();
   const index = fakeWatch();
-  const gitCalls = [];
+  const gitCalls: { args: string[]; cwd: string }[] = [];
   const onChange = recorder();
   let statuses = 0;
   const watcher = watchWorktree('/linked', onChange, {
@@ -101,8 +100,7 @@ test('an index watch ignores lock files and another worktree index', async () =>
 
 test('closing during index resolution does not start a late watcher', async () => {
   const fake = fakeWatch();
-  let resolveIndex;
-  const pending = new Promise((resolve) => { resolveIndex = resolve; });
+  const { promise: pending, resolve: resolveIndex } = deferred<string>();
   const watcher = watchWorktree('/linked', recorder(), {
     ...fake.options,
     runGit: () => pending,
@@ -144,7 +142,7 @@ test('index readiness reconciles status once unless closed during its initial sc
 });
 
 test('index resolution and watcher errors are logged while file edits remain observable', async (t) => {
-  t.mock.method(console, 'error', () => {});
+  const diagnosticLog = t.mock.method(console, 'error', () => {});
   for (const failure of ['resolve', 'watch', 'event']) {
     const files = fakeWatch();
     const index = fakeWatch();
@@ -170,7 +168,7 @@ test('index resolution and watcher errors are logged while file edits remain obs
     assert.deepEqual(onChange.calls, [['open.txt']], failure);
     await watcher.close();
   }
-  assert.equal(console.error.mock.callCount(), 3);
+  assert.equal(diagnosticLog.mock.callCount(), 3);
 });
 
 test('watches the worktree with relative paths, skipping the initial scan', () => {
@@ -183,7 +181,7 @@ test('watches the worktree with relative paths, skipping the initial scan', () =
 });
 
 test('an edit, add or delete reports its relative path after the debounce', () => {
-  for (const event of ['change', 'add', 'unlink']) {
+  for (const event of ['change', 'add', 'unlink'] as const) {
     const fake = fakeWatch();
     const onChange = recorder();
     watchWorktree('/wt', onChange, fake.options);
@@ -237,7 +235,7 @@ test('each event restarts the debounce, and a later burst is reported separately
 test('paths under .git are ignored, other paths are not', () => {
   const fake = fakeWatch();
   watchWorktree('/wt', recorder(), fake.options);
-  const ignored = fake.watcher.watchedWith.chokidarOptions.ignored;
+  const ignored = required(fake.watcher.watchedWith.chokidarOptions.ignored);
 
   assert.equal(ignored('.git/index'), true);
   for (const path of ['.git', '.git/index', 'sub/.git/HEAD', '.git\\index']) {
@@ -255,9 +253,9 @@ test('gitignore policy prunes dependencies and guards emitted events without los
     readFile: (file) => file === '/linked/.gitignore' ? 'deps/\n*.log\n!keep.log\n' : '',
     stat: () => ({ isDirectory: () => false, isFile: () => true }),
   });
-  const ignored = fake.watcher.watchedWith.chokidarOptions.ignored;
+  const ignored = required(fake.watcher.watchedWith.chokidarOptions.ignored);
   assert.equal(ignored('/linked/deps', { isDirectory: () => true }), true);
-  for (const event of ['add', 'change', 'unlink']) {
+  for (const event of ['add', 'change', 'unlink'] as const) {
     fake.watcher.emit(event, 'deps/package/file');
     fake.watcher.emit(event, 'error.log');
     fake.watcher.emit(event, '.git/index');
@@ -274,8 +272,8 @@ test('active and activity watchers observe directory symlinks as links, not igno
   const active = fakeWatch();
   const activity = fakeWatch();
   const edits = recorder();
-  const timestamps = [];
-  const options = {
+  const timestamps: number[] = [];
+  const options: WatchPolicyOptions = {
     readFile: (file) => file === '/wt/.gitignore' ? 'linked/\ndeps/\n' : '',
     stat: (file) => ({ isDirectory: () => file === '/wt/deps', isSymbolicLink: () => file === '/wt/linked', isFile: () => file.endsWith('/.gitignore') }),
   };
@@ -284,8 +282,8 @@ test('active and activity watchers observe directory symlinks as links, not igno
   for (const fake of [active, activity]) {
     const watchOptions = fake.watcher.watchedWith.chokidarOptions;
     assert.equal(watchOptions.followSymlinks, false, 'never traverse symlink targets');
-    assert.equal(watchOptions.ignored('/wt/linked'), false);
-    assert.equal(watchOptions.ignored('/wt/deps'), true);
+    assert.equal(required(watchOptions.ignored)('/wt/linked'), false);
+    assert.equal(required(watchOptions.ignored)('/wt/deps'), true);
   }
   active.watcher.emit('add', 'linked');
   activity.watcher.emit('add', 'linked', { mtimeMs: 500 });
@@ -297,7 +295,7 @@ test('active and activity watchers observe directory symlinks as links, not igno
 });
 
 test('rule and path stat failures are logged without escaping watcher events or suppressing edits', (t) => {
-  t.mock.method(console, 'error', () => {});
+  const diagnosticLog = t.mock.method(console, 'error', () => {});
   const fake = fakeWatch();
   const edits = recorder();
   watchWorktree('/wt', edits, { ...fake.options,
@@ -307,14 +305,14 @@ test('rule and path stat failures are logged without escaping watcher events or 
     },
     readFile: () => { throw Object.assign(new Error('cannot read rules'), { code: 'EACCES' }); },
   });
-  const ignored = fake.watcher.watchedWith.chokidarOptions.ignored;
+  const ignored = required(fake.watcher.watchedWith.chokidarOptions.ignored);
   assert.equal(ignored('/wt/edit.txt'), false);
-  for (const event of ['add', 'change', 'unlink']) {
+  for (const event of ['add', 'change', 'unlink'] as const) {
     assert.doesNotThrow(() => fake.watcher.emit(event, 'edit.txt'));
   }
   fake.fire();
   assert.deepEqual(edits.calls, [['edit.txt']]);
-  assert.equal(console.error.mock.callCount(), 2, 'each failed path and rule file is reported once');
+  assert.equal(diagnosticLog.mock.callCount(), 2, 'each failed path and rule file is reported once');
 });
 
 test('close() cancels a pending report and closes the underlying watcher', async () => {
@@ -340,14 +338,14 @@ test('ready resolves when the initial scan is done', async () => {
 });
 
 test('a watcher error is logged, not thrown, and rejects ready', async (t) => {
-  t.mock.method(console, 'error', () => {});
+  const diagnosticLog = t.mock.method(console, 'error', () => {});
   const fake = fakeWatch();
   const watcher = watchWorktree('/wt', recorder(), fake.options);
 
   fake.watcher.emit('error', new Error('directory vanished'));
 
   await assert.rejects(watcher.ready, /directory vanished/);
-  assert.equal(console.error.mock.callCount(), 1);
+  assert.equal(diagnosticLog.mock.callCount(), 1);
 });
 
 test('a gitignored comments sidecar is reported, its siblings are not, and close disposes the watcher', async () => {
@@ -358,7 +356,7 @@ test('a gitignored comments sidecar is reported, its siblings are not, and close
       ...files.options, ignoreGitignore,
       readFile: (file) => file === '/wt/.gitignore' ? '.canopy/\n' : '',
     });
-    const { ignored } = files.watcher.watchedWith.chokidarOptions;
+    const ignored = required(files.watcher.watchedWith.chokidarOptions.ignored);
     assert.equal(ignored('.canopy', { isDirectory: () => true }), false);
     files.watcher.emit('change', '.canopy/comments.yaml');
     files.watcher.emit('change', '.canopy/other.yaml');

@@ -5,20 +5,33 @@
 // subscriber and returns `{ close }`, which is called when the last one leaves.
 // Late subscribers receive the latest successful value immediately; the cache
 // belongs to that source lifecycle and errors never replace it.
-export function createFanOut(start) {
-  let active = null;
+import type { Closable } from './observation-port.js';
 
-  return function subscribe({ onChange, onError }) {
+export interface Subscriber<Value, Failure = unknown> {
+  onChange: (value: Value) => void;
+  onError?: (error: Failure) => void;
+}
+export type StartSource<Value, Failure = unknown> = (onChange: (value: Value) => void,
+  options: { onError: (error: Failure) => void }) => Closable;
+interface Lifecycle<Value, Failure> {
+  subscribers: Set<Subscriber<Value, Failure>>;
+  source: Closable | null;
+  cache: { hasLatest: false } | { hasLatest: true; latest: Value };
+}
+
+export function createFanOut<Value, Failure = unknown>(start: StartSource<Value, Failure>) {
+  let active: Lifecycle<Value, Failure> | null = null;
+
+  return function subscribe({ onChange, onError }: Subscriber<Value, Failure>) {
     const subscriber = { onChange, onError };
     if (!active) {
       const subscribers = new Set([subscriber]);
-      const lifecycle = { subscribers, source: null, hasLatest: false, latest: undefined };
+      const lifecycle: Lifecycle<Value, Failure> = { subscribers, source: null, cache: { hasLatest: false } };
       // Register before starting, since a source may emit synchronously.
       active = lifecycle;
       lifecycle.source = start(
         (value) => {
-          lifecycle.latest = value;
-          lifecycle.hasLatest = true;
+          lifecycle.cache = { hasLatest: true, latest: value };
           // Subscribers added during delivery already receive this via replay.
           for (const subscriber of [...subscribers]) {
             if (subscribers.has(subscriber)) subscriber.onChange(value);
@@ -32,7 +45,7 @@ export function createFanOut(start) {
       );
     } else {
       active.subscribers.add(subscriber);
-      if (active.hasLatest) subscriber.onChange(active.latest);
+      if (active.cache.hasLatest) subscriber.onChange(active.cache.latest);
     }
 
     const lifecycle = active;
@@ -40,6 +53,7 @@ export function createFanOut(start) {
       if (!lifecycle.subscribers.delete(subscriber)) return;
       if (lifecycle.subscribers.size === 0) {
         active = null;
+        if (lifecycle.source === null) throw new TypeError('Source has not finished starting');
         lifecycle.source.close();
       }
     };

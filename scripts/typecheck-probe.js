@@ -104,6 +104,33 @@ uncheckedJson.threads;
 createViewer({ ...nativeViewerOptions, mainEl: 42 });
 mountEditor(document.body, { content: 42 });
 createViewer({ ...nativeViewerOptions, addReply: async (input) => { input.text.toFixed(); } });
+import { createWatchPolicy } from '../server/watch-policy.js';
+createWatchPolicy(42);
+import { createFanOut } from '../server/fan-out.js';
+createFanOut((_change: (value: number) => void) => ({ close: 42 }));
+import chokidar from 'chokidar';
+import { readFileSync, lstatSync } from 'node:fs';
+import { watchWorktree } from '../server/watcher.js';
+import { watchActivity, createActivityFeed } from '../server/worktree-activity.js';
+import { pollWorktrees } from '../server/worktree-watch.js';
+import type { Watch, TimerOptions } from '../server/observation-port.js';
+const nativeWatch: Watch = chokidar.watch;
+const nativeTimers: TimerOptions = { setTimer: setTimeout, clearTimer: clearTimeout };
+createWatchPolicy('/repo', { readFile: readFileSync, stat: lstatSync });
+watchWorktree('/repo', () => {}, { watch: nativeWatch, ...nativeTimers });
+watchActivity('/repo', () => {}, { watch: nativeWatch, readFile: readFileSync, stat: lstatSync });
+pollWorktrees(async () => [{ path: '/repo' }], () => {}, nativeTimers);
+watchWorktree('/repo', (paths) => paths.push(42));
+watchWorktree('/repo', () => {}, { runGit: async () => 42 });
+createWatchPolicy('/repo', { readFile: () => 42 });
+watchActivity('/repo', () => {}, { now: () => 'yesterday' });
+createActivityFeed(async () => [{ path: 42 }]);
+pollWorktrees(async () => [42], () => {});
+watchWorktree('/repo', () => {}, { setTimer: () => ({ fake: true }) });
+watchWorktree('/repo', () => {}, { watch: () => ({ close() {} }) });
+import { FakeWatcher } from '../test/server/observation-fakes.js';
+const simulatedWatch: Watch = () => new FakeWatcher();
+new FakeWatcher().emit('add', 'file.txt', { mtimeMs: 'yesterday' });
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   await checkInputs(program, [filename]);
@@ -114,9 +141,9 @@ createViewer({ ...nativeViewerOptions, addReply: async (input) => { input.text.t
   const projectDiagnostics = diagnostics.filter((diagnostic) => diagnostic.file?.fileName !== filename);
   assert.equal(projectDiagnostics.length, 0, `Project typecheck failed.\n${ts.formatDiagnostics(projectDiagnostics, formatHost)}`);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551],
-    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment IO and minimal path ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
-  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment IO and minimal path ports accepted; all forty-one invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
+   assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322],
+    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
+   console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, minimal path ports and structural watchers accepted; all fifty-two invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

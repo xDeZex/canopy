@@ -1,15 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFanOut } from '../../server/fan-out.js';
+import type { StartSource } from '../../server/fan-out.js';
+import { required } from './observation-fakes.js';
+
+type TestValue = number | readonly { path: string; branch?: string; head?: string }[];
+function message(error: unknown) {
+  assert.ok(error instanceof Error);
+  return error.message;
+}
 
 // A fake source that records starts/closes and exposes its callbacks.
 function fakeSource() {
-  const source = { starts: 0, closes: 0 };
-  source.start = (onChange, { onError }) => {
-    source.starts++;
-    source.emit = onChange;
-    source.fail = onError;
-    return { close: () => source.closes++ };
+  let emit: ((value: TestValue) => void) | undefined;
+  let fail: ((error: unknown) => void) | undefined;
+  const source: { starts: number; closes: number; readonly emit: (value: TestValue) => void;
+    readonly fail: (error: unknown) => void; start: StartSource<TestValue> } = {
+    starts: 0, closes: 0,
+    get emit() { return required(emit); },
+    get fail() { return required(fail); },
+    start: (onChange, { onError }) => {
+      source.starts++;
+      emit = onChange;
+      fail = onError;
+      return { close: () => source.closes++ };
+    },
   };
   return source;
 }
@@ -25,12 +40,12 @@ test('starts the source on the first subscriber only', () => {
 test('a late subscriber immediately receives the latest successful list', () => {
   const source = fakeSource();
   const subscribe = createFanOut(source.start);
-  const first = [];
+  const first: TestValue[] = [];
   const latest = [{ path: '/main', branch: 'main', head: 'new' }];
   const leave = subscribe({ onChange: (value) => first.push(value) });
   source.emit([{ path: '/main', branch: 'main', head: 'old' }]);
   source.emit(latest);
-  const late = [];
+  const late: TestValue[] = [];
   const leaveLate = subscribe({ onChange: (value) => late.push(value) });
 
   assert.deepEqual(late, [latest]);
@@ -43,8 +58,8 @@ test('a late subscriber immediately receives the latest successful list', () => 
 test('subscribing during a live emission receives that success only once', () => {
   const source = fakeSource();
   const subscribe = createFanOut(source.start);
-  const late = [];
-  let leaveLate;
+  const late: TestValue[] = [];
+  let leaveLate: (() => void) | undefined;
   const leave = subscribe({ onChange: () => {
     leaveLate = subscribe({ onChange: (value) => late.push(value) });
   } });
@@ -52,19 +67,19 @@ test('subscribing during a live emission receives that success only once', () =>
   source.emit([]);
 
   assert.deepEqual(late, [[]]);
-  leaveLate();
+  required(leaveLate)();
   leave();
 });
 
 test('the first subscriber receives synchronous source errors and success without duplicates', () => {
-  const values = [];
-  const errors = [];
-  const subscribe = createFanOut((onChange, { onError }) => {
+  const values: TestValue[] = [];
+  const errors: string[] = [];
+  const subscribe = createFanOut<TestValue>((onChange, { onError }) => {
     onError(new Error('initial failure'));
     onChange([]);
     return { close() {} };
   });
-  const leave = subscribe({ onChange: (value) => values.push(value), onError: (error) => errors.push(error.message) });
+  const leave = subscribe({ onChange: (value) => values.push(value), onError: (error) => errors.push(message(error)) });
 
   assert.deepEqual(values, [[]]);
   assert.deepEqual(errors, ['initial failure']);
@@ -73,40 +88,40 @@ test('the first subscriber receives synchronous source errors and success withou
 
 test('subscribing during synchronous source startup shares the source and replays once', () => {
   let starts = 0;
-  const subscribe = createFanOut((onChange) => {
+  const subscribe = createFanOut<TestValue>((onChange) => {
     starts++;
     onChange([]);
     return { close() {} };
   });
-  const late = [];
-  let leaveLate;
+  const late: TestValue[] = [];
+  let leaveLate: (() => void) | undefined;
   const leave = subscribe({ onChange: () => {
     leaveLate = subscribe({ onChange: (value) => late.push(value) });
   } });
 
   assert.equal(starts, 1);
   assert.deepEqual(late, [[]]);
-  leaveLate();
+  required(leaveLate)();
   leave();
 });
 
 test('errors are live-only and preserve the cached success, including an empty list', () => {
   const source = fakeSource();
   const subscribe = createFanOut(source.start);
-  const errors = [];
-  const leave = subscribe({ onChange() {}, onError: (error) => errors.push(error.message) });
+  const errors: string[] = [];
+  const leave = subscribe({ onChange() {}, onError: (error) => errors.push(message(error)) });
   source.fail(new Error('before success'));
-  const late = [];
-  const lateErrors = [];
-  const leaveLate = subscribe({ onChange: (value) => late.push(value), onError: (error) => lateErrors.push(error.message) });
+  const late: TestValue[] = [];
+  const lateErrors: string[] = [];
+  const leaveLate = subscribe({ onChange: (value) => late.push(value), onError: (error) => lateErrors.push(message(error)) });
   assert.deepEqual(late, []);
   assert.deepEqual(lateErrors, []);
 
   source.emit([]);
   source.fail(new Error('after success'));
-  const reconnect = [];
-  const reconnectErrors = [];
-  const leaveReconnect = subscribe({ onChange: (value) => reconnect.push(value), onError: (error) => reconnectErrors.push(error.message) });
+  const reconnect: TestValue[] = [];
+  const reconnectErrors: string[] = [];
+  const leaveReconnect = subscribe({ onChange: (value) => reconnect.push(value), onError: (error) => reconnectErrors.push(message(error)) });
   assert.deepEqual(reconnect, [[]]);
   assert.deepEqual(reconnectErrors, []);
   assert.deepEqual(errors, ['before success', 'after success']);
@@ -119,9 +134,9 @@ test('errors are live-only and preserve the cached success, including an empty l
 test('delivers each value and error to every subscriber', () => {
   const source = fakeSource();
   const subscribe = createFanOut(source.start);
-  const values = [];
-  const errors = [];
-  subscribe({ onChange: (v) => values.push(['a', v]), onError: (e) => errors.push(['a', e.message]) });
+  const values: [string, TestValue][] = [];
+  const errors: [string, string][] = [];
+  subscribe({ onChange: (v) => values.push(['a', v]), onError: (e) => errors.push(['a', message(e)]) });
   subscribe({ onChange: (v) => values.push(['b', v]) });
 
   source.emit(1);
@@ -151,7 +166,7 @@ test('repeated cleanup is safe and cannot close a later source lifecycle', () =>
   leave();
   assert.equal(source.closes, 1);
 
-  const later = [];
+  const later: TestValue[] = [];
   const leaveLater = subscribe({ onChange: (value) => later.push(value) });
   leave();
   source.emit([]);
@@ -169,10 +184,10 @@ test('a restarted source has no cached success from the previous lifecycle', () 
   const emitOld = source.emit;
   leave();
 
-  const values = [];
+  const values: TestValue[] = [];
   const leaveNext = subscribe({ onChange: (value) => values.push(value) });
   emitOld([{ path: '/stale' }]);
-  const late = [];
+  const late: TestValue[] = [];
   const leaveLate = subscribe({ onChange: (value) => late.push(value) });
   assert.deepEqual(values, []);
   assert.deepEqual(late, []);
@@ -186,7 +201,7 @@ test('a restarted source has no cached success from the previous lifecycle', () 
 test('a subscriber that left no longer receives values, and a later subscriber restarts the source', () => {
   const source = fakeSource();
   const subscribe = createFanOut(source.start);
-  const seen = [];
+  const seen: TestValue[] = [];
   const leave = subscribe({ onChange: (v) => seen.push(v) });
   leave();
 

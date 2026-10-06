@@ -17,7 +17,14 @@
 // poll interval is cheap, and "did the list change" is a plain value
 // comparison with no filesystem-event edge cases to get wrong.
 
+import type { TimerOptions, TimerHandle } from './observation-port.js';
+
 const DEFAULT_POLL_MS = 2000;
+
+export interface PollOptions extends TimerOptions {
+  intervalMs?: number;
+  onError?: (error: unknown) => void;
+}
 
 // Structural equality over two worktree-list snapshots (as returned by
 // `parseWorktreeList`): same length, same worktrees in the same order, same
@@ -25,16 +32,20 @@ const DEFAULT_POLL_MS = 2000;
 // stable (main worktree first, then others in listing order), so a reorder
 // would only happen alongside an actual add/remove, which this would catch
 // anyway via the length/path change.
-export function worktreeListsEqual(a, b) {
+export function worktreeListsEqual(a: readonly object[], b: readonly object[]) {
   if (a.length !== b.length) return false;
   return a.every((worktree, i) => shallowEqual(worktree, b[i]));
 }
 
-function shallowEqual(a, b) {
+function shallowEqual(a: object, b: object) {
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every((key) => a[key] === b[key]);
+  return aKeys.every((key) => {
+    const aValue: unknown = Reflect.get(a, key);
+    const bValue: unknown = Reflect.get(b, key);
+    return aValue === bValue;
+  });
 }
 
 // Polls `getWorktrees()` (typically the same function `/api/worktrees` uses)
@@ -55,20 +66,10 @@ function shallowEqual(a, b) {
 // instead of going silent.
 // `setTimer`/`clearTimer` default to the real timers and exist so tests can
 // drive ticks by hand instead of sleeping.
-/**
- * The timer handle belongs to the injected IO edge, not necessarily Node.
- * @template [Timer=ReturnType<typeof setTimeout>]
- * @template Snapshot
- * @param {() => Promise<readonly Snapshot[]>} getWorktrees
- * @param {(worktrees: readonly Snapshot[]) => void} onChange
- * @param {{ intervalMs?: number, onError?: (error: unknown) => void,
- *   setTimer?: (callback: () => Promise<void>, delay: number) => Timer,
- *   clearTimer?: (timer: Timer | null) => void }} options
- */
-export function pollWorktrees(getWorktrees, onChange, { intervalMs = DEFAULT_POLL_MS, onError, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
-  let previous = null;
+export function pollWorktrees<Snapshot extends object>(getWorktrees: () => readonly Snapshot[] | Promise<readonly Snapshot[]>, onChange: (worktrees: readonly Snapshot[]) => void, { intervalMs = DEFAULT_POLL_MS, onError, setTimer = setTimeout, clearTimer = clearTimeout }: PollOptions = {}) {
+  let previous: readonly Snapshot[] | null = null;
   let stopped = false;
-  let timer = null;
+  let timer: TimerHandle | undefined;
 
   const tick = async () => {
     if (stopped) return;

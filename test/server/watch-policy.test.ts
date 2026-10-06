@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWatchPolicy } from '../../server/watch-policy.js';
+import { createWatchPolicy, type WatchPolicyOptions } from '../../server/watch-policy.js';
 
 test('root ignore rules prune directories without reading inside them, while negations retain files', () => {
-  const reads = [];
+  const reads: string[] = [];
   const ignored = createWatchPolicy('/parent/.git/repo', {
     readFile: (file) => {
       reads.push(file);
@@ -45,7 +45,7 @@ test('nested rules override ancestors only within their directory, and disabled 
     ['/linked/.gitignore', '*.tmp\n/root-only\ncache/\n'],
     ['/linked/src/.gitignore', '!keep.tmp\n/local\n'],
   ]);
-  const options = {
+  const options: WatchPolicyOptions = {
     readFile: (file) => files.get(file) ?? '',
     stat: () => ({ isDirectory: () => false, isFile: () => true }),
   };
@@ -68,7 +68,7 @@ test('nested rules override ancestors only within their directory, and disabled 
 
 test('only regular root and nested gitignore files supply rules, never symlinks or other file types', () => {
   for (const type of ['symlink', 'directory', 'fifo']) {
-    const reads = [];
+    const reads: string[] = [];
     const ignored = createWatchPolicy('/wt', {
       stat: (file) => ({
         isFile: () => file === '/wt/.gitignore',
@@ -90,7 +90,7 @@ test('only regular root and nested gitignore files supply rules, never symlinks 
 });
 
 test('unavailable rule files fail open with one diagnostic per cached failure, preserving other rules', (t) => {
-  t.mock.method(console, 'error', () => {});
+  const diagnosticLog = t.mock.method(console, 'error', (..._args: unknown[]) => {});
   for (const operation of ['stat', 'read']) {
     for (const code of ['EACCES', 'EISDIR']) {
       const failure = Object.assign(new Error('rules unavailable'), { code });
@@ -106,13 +106,14 @@ test('unavailable rule files fail open with one diagnostic per cached failure, p
           return file === '/wt/.gitignore' ? '*.log\n' : '';
         },
       });
-      const before = console.error.mock.callCount();
+      const before = diagnosticLog.mock.callCount();
       assert.equal(ignored('src/edit.txt'), false);
       assert.equal(ignored('src/another.txt'), false);
       assert.equal(ignored('src/error.log'), true, 'available root rules still apply');
       assert.equal(attempts, 1, 'failed configuration is cached until restart');
-      assert.equal(console.error.mock.callCount(), before + 1);
-      const diagnostic = console.error.mock.calls.at(-1).arguments;
+      assert.equal(diagnosticLog.mock.callCount(), before + 1);
+      const diagnostic = diagnosticLog.mock.calls.at(-1)?.arguments;
+      assert.ok(diagnostic);
       assert.ok(diagnostic.includes(failedFile));
       assert.ok(diagnostic.includes(failure));
     }
@@ -120,16 +121,16 @@ test('unavailable rule files fail open with one diagnostic per cached failure, p
 });
 
 test('missing and deleted paths retain cached root and nested ignore decisions without diagnostics', (t) => {
-  t.mock.method(console, 'error', () => {});
+  const diagnosticLog = t.mock.method(console, 'error', () => {});
   for (const code of ['ENOENT', 'ENOTDIR']) {
     const files = new Map([['/wt/.gitignore', 'deps/\n*.tmp\n'], ['/wt/src/.gitignore', '!keep.tmp\n']]);
-    const reads = [];
+    const reads: string[] = [];
     const ignored = createWatchPolicy('/wt', {
       stat: (file) => {
         if (files.has(file)) return { isFile: () => true };
         throw Object.assign(new Error('missing'), { code });
       },
-      readFile: (file) => { reads.push(file); return files.get(file); },
+      readFile: (file) => { reads.push(file); const contents = files.get(file); assert.ok(contents !== undefined); return contents; },
     });
     assert.equal(ignored('src/drop.tmp'), true);
     assert.equal(ignored('src/keep.tmp'), false);
@@ -140,7 +141,7 @@ test('missing and deleted paths retain cached root and nested ignore decisions w
     assert.equal(ignored('other/deleted.txt'), false);
     assert.deepEqual(reads, ['/wt/.gitignore', '/wt/src/.gitignore']);
   }
-  assert.equal(console.error.mock.callCount(), 0);
+  assert.equal(diagnosticLog.mock.callCount(), 0);
 });
 
 test('the comments sidecar and its directory stay watched even when gitignored', () => {

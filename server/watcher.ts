@@ -10,9 +10,18 @@ import chokidar from 'chokidar';
 import path from 'node:path';
 import { runGit as defaultRunGit } from './git.js';
 import { createWatchPolicy } from './watch-policy.js';
+import type { WatchPolicyOptions } from './watch-policy.js';
+import type { Watch, ObservationWatcher, TimerHandle, TimerOptions } from './observation-port.js';
+import type { Git } from './git-port.js';
 export { IGNORE_GIT_DIR } from './watch-policy.js';
 
 const DEFAULT_DEBOUNCE_MS = 150;
+export interface WatchWorktreeOptions extends WatchPolicyOptions, TimerOptions {
+  debounceMs?: number;
+  watch?: Watch;
+  runGit?: Git;
+  onStatusChange?: () => void;
+}
 
 // Keep bookkeeping out of file-edit notifications. The resolved index is
 // observed separately: it invalidates status, not HEAD-versus-disk content.
@@ -20,28 +29,28 @@ const DEFAULT_DEBOUNCE_MS = 150;
 // `watch`, `setTimer` and `clearTimer` default to chokidar and the real
 // timers; they exist so tests can drive events and time by hand.
 export function watchWorktree(
-  worktreePath,
-  onChange,
+  worktreePath: string,
+  onChange: (paths: string[]) => void,
   { debounceMs = DEFAULT_DEBOUNCE_MS, watch = chokidar.watch, setTimer = setTimeout,
     clearTimer = clearTimeout, runGit = defaultRunGit, onStatusChange,
-    ignoreGitignore = true, readFile, stat } = {},
+     ignoreGitignore = true, readFile, stat }: WatchWorktreeOptions = {},
 ) {
   const ignored = createWatchPolicy(worktreePath, { ignoreGitignore, observeSidecar: true, readFile, stat });
-  const changedPaths = new Set();
-  let timer = null;
-  let statusTimer = null;
-  let indexWatcher = null;
+  const changedPaths = new Set<string>();
+  let timer: TimerHandle | undefined;
+  let statusTimer: TimerHandle | undefined;
+  let indexWatcher: ObservationWatcher | null = null;
   let closed = false;
 
   const flush = () => {
-    timer = null;
+    timer = undefined;
     if (changedPaths.size === 0) return;
     const paths = [...changedPaths];
     changedPaths.clear();
     onChange(paths);
   };
 
-  const schedule = (relativePath) => {
+  const schedule = (relativePath: string) => {
     if (closed || ignored(relativePath)) return;
     changedPaths.add(relativePath);
     clearTimer(timer);
@@ -57,15 +66,15 @@ export function watchWorktree(
         (await runGit(['rev-parse', '--git-path', 'index'], worktreePath)).trim());
       if (closed) return;
       indexWatcher = watch(indexPath, { ignoreInitial: true });
-      const scheduleStatus = (changedPath) => {
+       const scheduleStatus = (changedPath: string) => {
         if (closed || path.resolve(changedPath) !== indexPath) return;
         clearTimer(statusTimer);
         statusTimer = setTimer(() => {
-          statusTimer = null;
+           statusTimer = undefined;
           if (!closed) onStatusChange();
         }, debounceMs);
       };
-      for (const event of ['add', 'change', 'unlink']) indexWatcher.on(event, scheduleStatus);
+      for (const event of ['add', 'change', 'unlink'] as const) indexWatcher.on(event, scheduleStatus);
       // The API tree may predate index resolution and the initial scan.
       // Reconcile once observation starts, including changes ignoreInitial
       // suppressed, without treating readiness as a working-file edit.
@@ -98,7 +107,7 @@ export function watchWorktree(
     console.error('canopy: file watcher error', err);
   });
 
-  const ready = new Promise((resolve, reject) => {
+  const ready = new Promise<void>((resolve, reject) => {
     watcher.once('ready', resolve);
     watcher.once('error', reject);
   });

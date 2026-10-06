@@ -36,11 +36,14 @@ test helper after removing the obsolete legacy workspace wrapper. Combined with
 #71, #72 and #76, the manifest contains **84 strict TS / 19 remaining JS inputs**
 (103 total). The original #77 branch had 66 TS / 37 JS;
 its historical evidence below is separate from these integrated counts.
+Issue #73 migrates the five live-observation/activity modules and their five
+matching test files, adding one narrow observation port and one test helper:
+**96 strict TS / 9 remaining JS inputs** (105 total).
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 19-JS ceiling. New code should be TypeScript and listed explicitly.
+a 9-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -64,7 +67,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment IO and minimal path ports accepted; forty-one invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, minimal path ports and structural watchers accepted; fifty-two invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -730,3 +733,84 @@ reconnect reliability, actual filesystem durability/race freedom, watcher delive
 or live destructive Git safety. The remaining 19 JS inputs are unchecked; the
 workspace/live and durable-comment owners are now strictly checked through the
 retained upstream migrations.
+
+## Implementation evidence and limitations for #73
+
+Starting commit: `d131246`. The five observation owners (`watch-policy`,
+`watcher`, `worktree-watch`, `worktree-activity`, `fan-out`) and their matching
+tests now compile as strict TypeScript. The explicit manifest contains **96 TS /
+9 JS inputs** (105 total); ten JavaScript inputs were replaced and the two
+consumed-capability/test helpers were added. The JavaScript ceiling is 9.
+Native `.js` ESM imports and dependencies are unchanged.
+
+The observation port describes only file/error/readiness events, close,
+consumed watch options and native/string/numeric timer handles. Stats describe
+only consumed optional file/directory/mtime capabilities, reusing the typed
+sidecar path stat vocabulary; index resolution reuses the shared `Git` port.
+Fake watchers and hand-cranked schedulers are not asserted into native classes.
+Fan-out values and failures are generic, with a discriminated successful-value
+cache that distinguishes an actual undefined value from no successful emission.
+Polling errors remain unknown. The adjacent `origin-main-live` fixture now
+narrows polling failures into the HTTP message envelope, as the production app
+already does. JSON/YAML validation remains at the existing migrated boundaries;
+there is no new trusted parser result or change to those validators.
+
+Porcelain paths remain nullable at the activity-feed seam rather than being
+asserted into filesystem paths. Its native observation adapter rejects a null
+path, as the previous native path-policy boundary did; injected feed observation
+still receives that nullable input. Bare worktrees remain unobserved. Gitignore
+cache/fail-open diagnostics, regular-file-only rule reads, symlink traversal and
+the content-only sidecar exception are retained. File edit and index status
+notifications, sequential polling/replay, per-mode monotonic timestamps and
+teardown/stale-callback guards retain their established behavior.
+
+### Automated implementation checks (Node 22.22.1)
+
+- **Static:** regular `npm run typecheck` passes with strict source/tests,
+  manifest coverage, native chokidar/filesystem/timer positive controls and all
+  **52 negative probes** rejected (41 retained + 11 observation probes). There
+  are no blanket `any`, compiler suppressions or unsafe assertions in this slice.
+- **Type-driven red/green:** the policy-path probe was added before migration;
+  the gate failed because `createWatchPolicy(42)` was accepted by unchecked JS.
+  It passed after typing the policy. Separately, the invalid fan-out source
+  cleanup probe was accepted before that owner's migration (gate red), then
+  rejected afterward with TS2345 (gate green). Intermediate strict fixture
+  failures drove typed watcher callbacks, deferred promises and captured mock
+  diagnostics, not fake native objects. These are typing failures, not claims
+  of unrelated runtime defects or fabricated failing recovery behavior.
+- **Unit/integration:** each of the five migrated compiled test files was run
+  individually during the slices. The final focused command was `node --test`
+  with nine explicit paths under `dist/test/server/`: `watch-policy.test.js`,
+  `watcher.test.js`, `worktree-watch.test.js`, `worktree-activity.test.js`,
+  `fan-out.test.js`, `app.test.js`, `handle-request.test.js`,
+  `app.integration.test.js` and the necessarily adjusted
+  `origin-main-live.test.js`. After `npm run build`, **129 tests passed, zero
+  failures/skips/cancellations**: 63 directly migrated tests and 66 adjacent
+  compatibility tests.
+- All **61 original scoped test registrations** and their names remain; two
+  integration registrations were added. The Git-backed fail-then-recover poll
+  integrates real discovery, polling and fan-out over fail-closed fake Git and
+  timers. It verifies cached success through failure, live-only errors, replay
+  without extra Git calls, next-tick recovery/deduplication, 2000-ms cadence and
+  last-subscriber cleanup. The activity integration wires real feed/poll/policy/
+  observation owners over fake watcher/filesystem/clock/timer IO, checking shared
+  polling, isolated mode timestamps, monotonic updates, failure/recovery, bare
+  paths, removed watchers, late events and complete teardown. These additions
+  characterize existing runtime behavior and passed without a runtime fix.
+- `git diff --check` and a separate whitespace check of the new untracked TS
+  files passed; a baseline/current test-name comparison confirmed registration
+  retention.
+- **Final independent validation:** on Node **22.22.1**, `npm run typecheck`
+  passed (96 TS / 9 JS inputs, all 52 negative probes rejected). One full
+  `npm test` run built and executed compiled output: **593 passed, 0 failed,
+  skipped or cancelled**. `git diff --cached --check` passed. Separate Standards
+  and Spec reviews inspected the complete staged diff against `d131246` and
+  found no documented breaches or actionable findings on either axis.
+
+Coverage follows the agreed testing trophy: static checks, the retained thin
+pure policy/equality/fan-out layer, and primarily public-seam integration with
+fake external IO. Adjacent HTTP tests use real loopback transport; some retained
+static-serving cases read compiled assets. No smoke, minimum-Node, manual/E2E,
+real watcher or destructive Git evaluation was performed. Fakes establish
+orchestration, failure and timing semantics, not actual filesystem-event delivery,
+native symlink/race fidelity, real Monaco layout/focus/IME or live Git safety.
