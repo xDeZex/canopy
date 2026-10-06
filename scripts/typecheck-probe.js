@@ -50,15 +50,32 @@ createWorktreeDeletion('/repo').remove('/linked', 42);
 const fakeDocument: Document = new FakeDocument();
 new FakeDocument().querySelector('body');
 renderConversation(document, { id: 'thread', file: 'a.js', messages: [] });
+import { parseComments, appendThread, appendReply } from '../server/comments.js';
+import { createCommentStore } from '../server/comment-store.js';
+import { createCommentLoader } from '../server/comment-loader.js';
+import { checkPath, defaultReadIo } from '../server/sidecar-path.js';
+// Positive controls: native and minimal path capabilities; malformed values
+// still enter the runtime validation boundary without pretending to be valid.
+createCommentLoader(defaultReadIo);
+checkPath({ lstat: defaultReadIo.lstat }, '/repo', '.canopy/comments.yaml');
+createCommentStore().create('/repo', { file: null, line: 'bad', text: 42, revision: false });
+parseComments(42);
+appendThread(null, { file: 42, line: 1, text: 'x' }, { threadId: 't', messageId: 'm', createdAt: 'now' });
+appendReply(null, { threadId: 't', text: 'x' }, { messageId: 'm' });
+createCommentLoader({ ...defaultReadIo, readFile: async () => 42 });
+createCommentStore({ newId: () => 42 });
+checkPath({ lstat: async () => ({ isFile: () => true }) }, '/repo', 'a.js');
+declare const rawYaml: unknown;
+const trustedThread = rawYaml.threads[0];
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   const diagnostics = ts.getPreEmitDiagnostics(program);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345],
-    `Static gate must accept native browser ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation calls, response shapes and unsupported fake DOM capabilities.\n${ts.formatDiagnostics(rejected, {
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046],
+    `Static gate must accept native browser/comment IO and minimal path ports and reject all invalid calls, response shapes, fake capabilities and unchecked YAML access.\n${ts.formatDiagnostics(rejected, {
       getCurrentDirectory: () => root, getCanonicalFileName: (filename) => filename, getNewLine: () => '\n',
     })}`);
-  console.log('Static probes: native browser ports accepted; all nineteen invalid calls, response shapes, fake DOM capabilities and range-less anchors rejected');
+  console.log('Static probes: native browser/comment IO and minimal path ports accepted; all twenty-six invalid calls, response shapes, fake capabilities and unchecked YAML accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

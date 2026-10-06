@@ -9,9 +9,10 @@ const conversation = {
   messages: [{ id: 'm', author: 'user', text: 'Review this', created_at: '2026-10-01T12:00:00Z' }],
 };
 const missing = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
-function fixture(overrides = {}, threads = [conversation]) {
-  const reads = [];
-  const checked = [];
+type Kind = 'file' | 'directory' | 'missing' | 'symlink';
+function fixture(overrides: Record<string, Kind> = {}, threads: readonly unknown[] = [conversation]) {
+  const reads: string[] = [];
+  const checked: string[] = [];
   const loader = createCommentLoader({
     realpath: async (path) => path,
     lstat: async (path) => {
@@ -31,7 +32,7 @@ test('general conversations never check an absent anchor path, alongside unavail
   const result = await f.loader('/repo');
   assert.equal(result.warning, null);
   assert.deepEqual(result.threads[0], general);
-  assert.match(result.threads[1].unavailable, /missing/);
+  assert.match(result.threads[1].unavailable ?? '', /missing/);
   assert.deepEqual(f.checked, ['/repo/.canopy', '/repo/.canopy/comments.yaml', '/repo/src', '/repo/src/app.js']);
 });
 
@@ -52,16 +53,17 @@ test('missing sidecars are empty; unsafe/dangling symlinks and unavailable ancho
     const symlink = fixture({ [target]: 'symlink' });
     const result = await symlink.loader('/repo');
     assert.deepEqual(result.threads, []);
-    assert.match(result.warning, /symlink/i);
+    assert.match(result.warning ?? '', /symlink/i);
     assert.deepEqual(symlink.reads, []);
   }
-  for (const [target, kind, reason] of [
+  const unavailable: [string, Kind, RegExp][] = [
     ['/repo/src', 'symlink', /symlink/i], ['/repo/src/app.js', 'symlink', /symlink/i],
     ['/repo/src/app.js', 'missing', /missing/i], ['/repo/src/app.js', 'directory', /regular file/i],
-  ]) {
+  ];
+  for (const [target, kind, reason] of unavailable) {
     const f = fixture({ [target]: kind });
     const result = await f.loader('/repo');
-    assert.match(result.threads[0].unavailable, reason);
+    assert.match(result.threads[0].unavailable ?? '', reason);
     assert.equal(result.threads[0].messages[0].text, 'Review this');
     assert.deepEqual(f.reads, ['/repo/.canopy/comments.yaml']);
     if (target === '/repo/src') assert.ok(!f.checked.includes('/repo/src/app.js'));

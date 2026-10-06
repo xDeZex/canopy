@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseComments, appendThread, appendReply, validateReply, commentsRevision, validateNewThread, setThreadResolved, validateResolution } from '../../server/comments.js';
 
-export const thread = (patch = {}) => ({
+export const thread = <Patch extends object>(patch?: Patch) => ({
   id: 'thread-1', file: 'public/app.js', side: 'modified', line_range: { start: 1, end: 2 },
   created_at: '2026-10-01T12:00:00Z', resolved: false,
   messages: [
@@ -10,7 +10,7 @@ export const thread = (patch = {}) => ({
     { id: 'first', author: 'user', text: 'Please explain.\nSecond line.', created_at: '2026-10-01T12:00:00Z' },
   ], ...patch,
 });
-const source = (threads) => JSON.stringify({ version: 1, threads });
+const source = (threads: readonly unknown[]) => JSON.stringify({ version: 1, threads });
 
 test('explicit resolution changes only the chosen flag, retaining stored history and unrelated threads', () => {
   const original = thread();
@@ -39,8 +39,8 @@ test('user replies append without rewriting history, reopen even resolved thread
   assert.match(result.source, /User replies append author: user and always set resolved: false/);
   assert.deepEqual(result.thread.messages.at(-1), { id: 'new', author: 'user', text: 'Resolved, fixed, done.', created_at: '2026-10-02T09:00:00Z' });
   assert.deepEqual(loaded[1], parseComments(source([other])).threads[0]);
-  assert.throws(() => appendReply(source([original]), { threadId: 'missing', text: 'x' }, { messageId: 'new' }), /not found/);
-  assert.throws(() => appendReply(source([original]), { threadId: original.id, text: 'x' }, { messageId: 'first' }), /Duplicate/);
+  assert.throws(() => appendReply(source([original]), { threadId: 'missing', text: 'x' }, { messageId: 'new', createdAt: ids.createdAt }), /not found/);
+  assert.throws(() => appendReply(source([original]), { threadId: original.id, text: 'x' }, { messageId: 'first', createdAt: ids.createdAt }), /Duplicate/);
   for (const input of [{}, { threadId: '', text: 'x' }, { threadId: 't', text: ' ' }, { threadId: 't', text: 'x'.repeat(20001) }]) {
     assert.equal(typeof validateReply(input), 'string');
   }
@@ -55,7 +55,7 @@ test('mixed version 1 threads accept only complete anchors or genuinely general 
   assert.deepEqual(result.threads[1].messages.map((message) => message.id), ['first', 'later']);
   for (const anchor of [{ file }, { side }, { line_range }, { file, side }, { file, line_range },
     { side, line_range }, { file: null, side: null, line_range: null }, { file, side, line_range: null }]) {
-    assert.match(parseComments(source([{ ...general, ...anchor }])).warning, /schema/);
+    assert.match(parseComments(source([{ ...general, ...anchor }])).warning ?? '', /schema/);
   }
 });
 
@@ -85,7 +85,7 @@ test('malformed YAML, unsafe tags, unsupported versions and invalid schema fail 
   for (const yaml of invalid) {
     const result = parseComments(yaml);
     assert.deepEqual(result.threads, [], yaml);
-    assert.match(result.warning, /comments/i, yaml);
+    assert.match(result.warning ?? '', /comments/i, yaml);
   }
   assert.deepEqual(parseComments('version: 1\nthreads: []'), { threads: [], warning: null });
 });
@@ -146,7 +146,9 @@ test('serialized timestamps are quoted so external YAML readers keep them as str
 test('a range request creates a thread with the inclusive 1-based line_range', () => {
   const { thread: created, source } = appendThread(null, { ...request, line: 3, endLine: 5 }, ids);
   assert.deepEqual(created.line_range, { start: 3, end: 5 });
-  assert.deepEqual(parseComments(source).threads[0].line_range, { start: 3, end: 5 });
+  const loaded = parseComments(source).threads[0];
+  assert.ok('line_range' in loaded);
+  assert.deepEqual(loaded.line_range, { start: 3, end: 5 });
   assert.deepEqual(appendThread(null, { ...request, line: 4, endLine: 4 }, ids).thread.line_range, { start: 4, end: 4 });
 });
 
@@ -158,8 +160,8 @@ test('range requests validate their end line against the start', () => {
   }
 });
 
-const headerOf = (text) => text.match(/^(?:#.*\n)+/)[0];
-const schemaExample = (header) => header.match(/^# Schema:\n((?:#  .*\n)+)/m)[1].replace(/^# ?/gm, '');
+const headerOf = (text: string) => { const match = text.match(/^(?:#.*\n)+/); assert.ok(match); return match[0]; };
+const schemaExample = (header: string) => { const match = header.match(/^# Schema:\n((?:#  .*\n)+)/m); assert.ok(match); return match[1].replace(/^# ?/gm, ''); };
 
 test('a saved sidecar starts with a comment header that states the contract and still parses', () => {
   const { source, thread: created } = appendThread(null, request, ids);
@@ -181,11 +183,11 @@ test('the schema example in the header is a valid version 1 document, so it cann
 test('a later save keeps the header exactly once', () => {
   const first = appendThread(null, request, ids).source;
   const second = appendThread(first, request, { ...ids, threadId: 'thread-two' }).source;
-  assert.equal(second.match(/Canopy review comments/g).length, 1);
+  assert.equal(second.match(/Canopy review comments/g)?.length, 1);
   assert.equal(parseComments(second).threads.length, 2);
 });
 
 test('unknown fields make the whole file refused rather than repaired', () => {
-  assert.match(parseComments(source([thread({ extra: true })])).warning, /schema/);
-  assert.match(parseComments(JSON.stringify({ version: 1, threads: [], extra: 1 })).warning, /schema/);
+  assert.match(parseComments(source([thread({ extra: true })])).warning ?? '', /schema/);
+  assert.match(parseComments(JSON.stringify({ version: 1, threads: [], extra: 1 })).warning ?? '', /schema/);
 });
