@@ -1,0 +1,4 @@
+#!/bin/sh
+# Canopy pre-push hook: validate the current checkout, not outgoing commits.
+npm run typecheck </dev/null || exit 1
+npm test </dev/null

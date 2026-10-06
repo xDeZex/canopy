@@ -15,6 +15,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
+    "hooks:setup": "node scripts/setup-hooks.js",
     "build": "node scripts/build.js",
     "typecheck": "node scripts/check-inputs.js && tsc --noEmit && node scripts/typecheck-probe.js",
     "predev": "npm run build",
