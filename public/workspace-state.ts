@@ -1,9 +1,25 @@
 import { collectFiles } from './collect-files.js';
 import { pickActiveWorktree } from './worktree-select.js';
 import { commentsAfterLoad } from './comments-after-load.js';
+import { parseFileContent, parseFileTree, parseCommits, parseComments, errorMessage, isRecord } from './workspace-contracts.js';
+import type { WorkspaceWorktree, WorkspaceNode, WorkspaceCommit, FileContent, WorkspaceFetch } from './workspace-contracts.js';
+import type { FileLeaf } from './collect-files.js';
+import type { CommentThread } from './comment-dom.js';
+import type { CommentsLoad } from './comments-after-load.js';
+
+export interface WorkspaceOptions {
+  viewModeStore: { getMode(): 'file' | 'diff'; seed(status?: string): unknown };
+  commitLock: { getLockedCommit(path: string): string | null; pruneToKnownWorktrees(paths: readonly (string | null)[]): unknown };
+  fetch: WorkspaceFetch;
+  onChange(part: 'render' | 'rail' | 'comments-refresh' | 'toolbar' | 'main' | 'comments' | 'metadata'): void;
+  onActivePathChanged(path: string | null): void;
+}
+interface NewComment { file: string; line: number; endLine?: number; text: string }
+interface Reply { threadId: string; text: string; worktree?: string | null }
+interface Resolution { threadId: string; resolved: boolean; worktree?: string | null }
 
 // Ref metadata belongs to the commit picker, not the tabs or mounted viewer.
-function worktreeDetailsEqual(a, b) {
+function worktreeDetailsEqual(a: WorkspaceWorktree[], b: WorkspaceWorktree[]) {
   if (a.length !== b.length) return false;
   return a.every((worktree, i) => {
     const keys = Object.keys(worktree).filter((key) => key !== 'originMainSha');
@@ -14,41 +30,42 @@ function worktreeDetailsEqual(a, b) {
 
 // Owns workspace transitions and accepts only the latest response for each
 // resource. EventSource and DOM rendering remain the caller's responsibility.
-export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request, onChange, onActivePathChanged }) {
-  let worktrees = [];
-  let activePath = null;
-  let activeFile = null;
-  let fileTree = [];
-  let fileTreeError = null;
-  let fileInfoByPath = new Map();
+export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request, onChange, onActivePathChanged }: WorkspaceOptions) {
+  let worktrees: WorkspaceWorktree[] = [];
+  let activePath: string | null = null;
+  let activeFile: string | null = null;
+  let fileTree: WorkspaceNode[] = [];
+  let fileTreeError: Error | null = null;
+  let fileInfoByPath = new Map<string, { status?: string; oldPath?: string }>();
   let treeResolved = false;
-  let fileContent = null;
-  let fileContentError = null;
-  let commits = [];
-  let commitsError = null;
+  let fileContent: FileContent | null = null;
+  let fileContentError: Error | null = null;
+  let commits: WorkspaceCommit[] = [];
+  let commitsError: Error | null = null;
   let treeRequest = 0;
   let contentRequest = 0;
   let commitsRequest = 0;
   let commentsRequest = 0;
-  let comments = { threads: [], warning: null };
-  let mainView = 'file';
-  let selectedThreadId = null;
+  let comments: CommentsLoad<CommentThread> = { threads: [], warning: null };
+  let mainView: 'file' | 'general' = 'file';
+  let selectedThreadId: string | null = null;
   let worktreeGeneration = 0;
   let commentsLoad = Promise.resolve();
 
-  async function fetchJson(url) {
+  async function fetchJson(url: string): Promise<unknown> {
     const res = await request(url);
     if (!res.ok) throw new Error(`request failed with status ${res.status}`);
+    if (!res.json) throw new Error('Missing JSON response');
     return res.json();
   }
 
   // Optional `&name=value` query fragment.
   // The status and, for a renamed file, old path the tree gives each path.
-  function indexFiles(files) {
+  function indexFiles(files: FileLeaf[]) {
     fileInfoByPath = new Map(files.map((node) => [node.path, { status: node.status, oldPath: node.oldPath }]));
   }
 
-  function param(name, value) {
+  function param(name: string, value: string | null | undefined) {
     return value ? `&${name}=${encodeURIComponent(value)}` : '';
   }
 
@@ -61,7 +78,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     contentRequest++;
   }
 
-  function switchWorktree(path) {
+  function switchWorktree(path: string | null) {
     if (path === activePath) return false;
     activePath = path;
     worktreeGeneration++;
@@ -100,9 +117,9 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     }
     const lockedSha = commitLock.getLockedCommit(path);
     const openFile = activeFile;
-    const previousOldPath = fileInfoByPath.get(openFile)?.oldPath;
+    const previousOldPath = openFile ? fileInfoByPath.get(openFile)?.oldPath : undefined;
     try {
-      const tree = await fetchJson(`/api/files?worktree=${encodeURIComponent(path)}${param('ref', lockedSha)}`);
+      const tree = parseFileTree(await fetchJson(`/api/files?worktree=${encodeURIComponent(path)}${param('ref', lockedSha)}`));
       if (generation !== treeRequest) return;
       fileTree = tree;
       fileTreeError = null;
@@ -110,7 +127,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     } catch (err) {
       if (generation !== treeRequest) return;
       fileTree = [];
-      fileTreeError = err;
+      fileTreeError = err instanceof Error ? err : new Error(errorMessage(err));
       indexFiles([]);
     }
     treeResolved = true;
@@ -141,14 +158,14 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       return;
     }
     try {
-      const result = await fetchJson(`/api/commits?worktree=${encodeURIComponent(path)}${param('file', file)}`);
+      const result = parseCommits(await fetchJson(`/api/commits?worktree=${encodeURIComponent(path)}${param('file', file)}`));
       if (generation !== commitsRequest) return;
       commits = result;
       commitsError = null;
     } catch (err) {
       if (generation !== commitsRequest) return;
       commits = [];
-      commitsError = err;
+      commitsError = err instanceof Error ? err : new Error(errorMessage(err));
     }
     onChange('toolbar');
   }
@@ -160,9 +177,9 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     const file = activeFile;
     const lockedSha = commitLock.getLockedCommit(path);
     try {
-      const content = await fetchJson(
+      const content = parseFileContent(await fetchJson(
         `/api/file-content?worktree=${encodeURIComponent(path)}${param('file', file)}${param('oldFile', fileInfoByPath.get(file)?.oldPath)}${param('ref', lockedSha)}`
-      );
+      ));
       if (generation !== contentRequest) return;
       // Both API sides are strings or null. Identical content must not
       // remount the viewer and lose its scroll position or diff navigation.
@@ -173,7 +190,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     } catch (err) {
       if (generation !== contentRequest) return;
       fileContent = null;
-      fileContentError = err;
+      fileContentError = err instanceof Error ? err : new Error(errorMessage(err));
     }
     onChange('main');
   }
@@ -189,9 +206,9 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     if (!path) return;
     let next;
     try {
-      next = await fetchJson(`/api/comments?worktree=${encodeURIComponent(path)}`);
+      next = parseComments(await fetchJson(`/api/comments?worktree=${encodeURIComponent(path)}`));
     } catch (err) {
-      next = { threads: [], warning: `Failed to load comments: ${err.message}` };
+      next = { threads: [], warning: `Failed to load comments: ${errorMessage(err)}` };
     }
     if (generation !== commentsRequest) return;
     next = commentsAfterLoad(comments, next);
@@ -199,7 +216,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     comments = next;
     const selected = (comments?.threads ?? []).find((thread) => thread.id === selectedThreadId);
     if (!selected) selectedThreadId = null;
-    else if (!Object.hasOwn(selected, 'file')) return showGeneralComments();
+    else if (selected.file === undefined) return showGeneralComments();
     else if (selected.file !== activeFile) return selectFile(selected.file, selected.id);
     onChange('comments-refresh');
   }
@@ -207,21 +224,21 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
   // Saves one new thread (a single line, or through `endLine`) against the
   // revision this client has seen. Rejections carry the server's message; the
   // latest comments are reloaded either way so a conflict shows what changed.
-  async function addComment({ file, line, endLine, text }) {
+  async function addComment({ file, line, endLine, text }: NewComment) {
     return saveComment({ file, line, endLine, text });
   }
 
-  async function addReply({ threadId, text, worktree = activePath }) {
+  async function addReply({ threadId, text, worktree = activePath }: Reply) {
     if (worktree !== activePath) throw new Error('The active worktree changed; return to this conversation to retry');
     return saveComment({ threadId, text }, { waitForRefresh: true });
   }
 
-  async function setThreadResolved({ threadId, resolved, worktree = activePath }) {
+  async function setThreadResolved({ threadId, resolved, worktree = activePath }: Resolution) {
     if (worktree !== activePath) throw new Error('The active worktree changed; return to this conversation to retry');
     return saveComment({ action: 'set-resolved', threadId, resolved }, { waitForRefresh: true });
   }
 
-  async function saveComment(input, { waitForRefresh = false } = {}) {
+  async function saveComment(input: NewComment | Pick<Reply, 'threadId' | 'text'> | (Pick<Resolution, 'threadId' | 'resolved'> & { action: 'set-resolved' }), { waitForRefresh = false } = {}) {
     const path = activePath;
     const generation = worktreeGeneration;
     const revision = comments?.revision;
@@ -234,9 +251,9 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
         body: JSON.stringify({ ...input, revision }),
       });
     } catch (err) {
-      throw new Error(`Could not save comment: ${err.message}`);
+      throw new Error(`Could not save comment: ${errorMessage(err)}`);
     }
-    const body = !res.ok ? await res.json().catch(() => ({})) : null;
+    const body: unknown = !res.ok && res.json ? await res.json().catch(() => null) : null;
     if (waitForRefresh && generation !== worktreeGeneration) {
       if (res.ok) return; // The old worktree's draft was saved; do not invite a duplicate retry.
       throw new Error('The active worktree changed; return to this conversation to retry');
@@ -258,7 +275,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
         } while (true);
       }
     }
-    if (!res.ok) throw new Error(body.error || `request failed with status ${res.status}`);
+    if (!res.ok) throw new Error(isRecord(body) && typeof body.error === 'string' && body.error ? body.error : `request failed with status ${res.status}`);
     // A successful POST is not retried when its refresh fails: that would
     // duplicate the reply. The retained conversation shows the read warning.
   }
@@ -269,7 +286,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     onChange('comments');
   }
 
-  function selectFile(file, threadId = null) {
+  function selectFile(file: string | null, threadId: string | null = null) {
     const returningToFile = mainView !== 'file' || selectedThreadId !== null;
     mainView = 'file';
     selectedThreadId = threadId;
@@ -298,7 +315,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
       return { worktrees, activePath, activeFile, fileTree, fileTreeError, fileContent,
         fileContentError, commits, commitsError, comments, mainView, selectedThreadId };
     },
-    updateWorktrees(nextWorktrees) {
+    updateWorktrees(nextWorktrees: WorkspaceWorktree[]) {
       const previousActive = worktrees.find((worktree) => worktree.path === activePath);
       const previousHead = previousActive?.head;
       const previousOrigin = previousActive?.originMainSha;
@@ -325,10 +342,10 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     },
     selectWorktree: switchWorktree,
     selectFile,
-    selectThread(id) {
+    selectThread(id: string) {
       const thread = comments.threads.find((thread) => thread.id === id);
       if (!thread) return;
-      if (!Object.hasOwn(thread, 'file')) return showGeneralComments();
+      if (thread.file === undefined) return showGeneralComments();
       return selectFile(thread.file, id);
     },
     showGeneralComments,
@@ -336,7 +353,7 @@ export function createWorkspaceStore({ viewModeStore, commitLock, fetch: request
     addReply,
     setThreadResolved,
     // A reconnect has no paths: reconcile the tree and any selected content.
-    remoteChange(paths = null) {
+    remoteChange(paths: readonly string[] | null = null) {
       loadFileTree();
       // Any file event can change an anchor's availability; reconnects also
       // reconcile ignored sidecars that the filesystem watcher did not see.

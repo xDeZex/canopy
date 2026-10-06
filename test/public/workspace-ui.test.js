@@ -80,7 +80,8 @@ test('sidebar comments refresh and navigate even with an empty file tree', async
   f.workspace.updateWorktrees([{ path: '/a' }]);
   f.railEl.querySelector('.comment-index__button').click();
   assert.equal(f.workspace.getState().mainView, 'general');
-  await f.reply(f.commentRequests[0], { threads: [{ id: 't', file: 'missing.js', line_range: { start: 2, end: 4 }, messages: [{ text: 'Hidden from sidebar' }] }], warning: null });
+  await f.reply(f.commentRequests[0], { threads: [{ id: 't', file: 'missing.js', side: 'modified', line_range: { start: 2, end: 4 },
+    resolved: false, created_at: '2026-10-01T12:00:00Z', messages: [{ id: 'm', author: 'user', created_at: '2026-10-01T12:00:00Z', text: 'Hidden from sidebar' }] }], warning: null });
   const buttons = f.railEl.querySelectorAll('.comment-index__button');
   assert.deepEqual(buttons.map((button) => button.textContent), ['Comments without a file', 'missing.js:2–4']);
   buttons[1].click();

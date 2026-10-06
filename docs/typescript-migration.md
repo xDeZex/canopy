@@ -25,11 +25,16 @@ Issue #71 migrates the three file-tree/comparison/rename modules and their three
 test files. Combined with #72, the manifest contains **70 strict TS inputs and
 29 remaining JS inputs** (99 total). The original #71 branch had 62 TS / 37 JS;
 its historical evidence below is separate from these integrated counts.
+Issue #76 migrates the workspace/live-update owners and their two direct test
+files, and adds their validated JSON/IO contracts. Combined with #71 and #72,
+the manifest contains **75 strict TS inputs and 25 remaining JS inputs** (100
+total). The original #76 branch had 61 TS / 39 JS; its historical evidence below
+is separate from these integrated counts.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 29-JS ceiling. New code should be TypeScript and listed explicitly.
+a 25-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -53,7 +58,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/comment IO and minimal path ports accepted; thirty-two invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/comment IO and minimal path ports accepted; thirty-eight invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -456,3 +461,104 @@ controls accepted), `npm run build`, and
 No full-suite, smoke, minimum-Node, manual browser or live Git/filesystem rerun
 was performed in this rebase pass. The fake-IO and real-runtime limitations
 documented in the historical evidence remain unchanged.
+## Implementation evidence and limitations for #76
+
+This section records the original #76 branch, not the combined rebase result.
+
+`workspace-state` and `live-updates`, plus their two direct test files, now use
+strict TypeScript. `workspace-contracts` holds consumed structural JSON and fetch
+contracts. Browser `.js` specifiers and compiled serving remain unchanged. The
+explicit manifest contains **61 TS / 39 JS inputs** (100 total); the JS ceiling
+is 39. No new packages or dependency changes were introduced. Existing locked
+dependencies were installed with `npm ci`, including its prepare/build lifecycle.
+
+Fetched resource JSON and mutation error bodies remain `unknown` until narrowed.
+File content requires both API sides as strings or null; recursive trees validate
+their names, paths, status and optional rename/mtime fields. The commit parser
+always gets a first string field from `split`, so the picker requires a string
+SHA, but permits omitted message/date fields from malformed log records rather
+than inventing a complete log record. Worktree paths retain the parser's nullable
+shape; consumed metadata is optional and validated when present. Other metadata
+is retained as unknown extras, including in the existing metadata comparison.
+The existing selection/lock/expansion helpers now admit those nullable paths,
+and the flattened file contract carries the old path used by rename comparisons.
+
+Comment JSON validates the consumed conversation/message and file-range
+structure, not YAML syntax, exact sidecar keys, timestamps or identifier
+uniqueness. Those semantics still belong to the server loader/store, whose #72
+migration preserves its runtime validation.
+Malformed reads follow existing resource errors or the comment warning/retention
+path and cannot enable saves. Caught values are narrowed from unknown; resource
+failures expose an Error message, and malformed mutation error envelopes fall
+back to the existing status message. Minimal conversation/content/tree fixtures
+were made honest API values rather than asserted into domain types; existing
+sidecar warning and failed-JSON negative tests remain.
+
+SSE parsing validates changed paths, worktrees, finite-number-or-null activity
+snapshots and poll-error messages before delivery. Invalid messages are logged
+through the existing console-error channel and ignored without closing a stream,
+changing selection or corrupting activity. Stale/closing/disposed sources are
+checked before decoding. `app.js` remains an unchecked coordinator, but its
+startup and post-deletion worktree fetches use the same validated worktree
+boundary as SSE. Native fetch and EventSource constructors satisfy the narrow
+IO ports; fake sources remain structural capabilities, not assertions to browser
+classes. No private validator/function test seam was added.
+
+Automated implementation evidence on **Node 22.22.1**:
+
+- **Static:** regular `npm run typecheck` and strict builds passed. All **25**
+  negative probes reject the intended invalid calls/shapes, including unchecked
+  JSON access; positive controls accept native browser/fetch/EventSource ports.
+  The native EventSource control was initially compiler-red because an overly
+  narrow zero-argument `onopen` property excluded the browser callback shape,
+  then green after typing the consumed handler properties honestly.
+- **Integration:** all **68** compiled workspace/live-update cases passed using
+  real owners and their real navigation/lock/comment-retention collaborators,
+  with only fetch/EventSource faked. Existing generation, switch-away/back,
+  rename/locked-comparison, metadata/status-only, refresh/mutation-race and
+  reconnect/cleanup cases remain. Individual malformed content, nested tree,
+  commit-marker, comment-range, missing-SHA, SSE and startup-worktree slices were
+  runtime-red before validation and green afterward. Additional decoding-failure
+  and stale-malformed-payload cases characterize established error/generation
+  behavior; no failing typing-only behavior was fabricated.
+- **Focused compatibility/unit:** one final explicit compiled run passed **169
+  tests, 0 failed/skipped/cancelled**: workspace-state, live-updates, app,
+  workspace-ui, reconnect, replies, comments-flow, collect-files, commit-lock,
+  tree-state and worktree-select. This includes the 68 directly migrated cases,
+  81 unchecked app/UI/viewer/sidecar compatibility cases and 20 typed helper cases.
+  Reconnect's three app-level cases remain JavaScript because strict migration
+  would require the broader unchecked app/DOM/editor ports; they are compatibility
+  coverage, not claimed strict test coverage.
+
+- **Independent final validation:** `npm run typecheck` and `npm test` passed;
+  the latter built first and ran compiled `dist/` tests only: **580 passed,
+  0 failed/skipped**. The staged diff whitespace check also passed.
+
+No manual/browser/E2E evaluation, minimum-Node rerun, package/build smoke or real
+watcher/destructive Git test is claimed. Fake IO and DOM/editor capabilities establish orchestration and
+simulated lifecycle behavior, not native layout/focus/IME, network reconnect
+reliability, filesystem watcher delivery or live Git safety.
+
+## Rebase integration validation (#71, #72 and #76)
+
+Replaying #76's original commit `fd35cb3` onto `ee23750` retained the upstream
+file-tree/comparison and durable-comment migrations, the workspace contracts and
+tests, and both sets of static probes. The combined explicit manifest and source
+trees contain **75 TS / 25 JS inputs** (100 total), with a 25-JS ceiling. The
+per-issue evidence above records historical branch checks, not this snapshot.
+
+On Node **22.22.1**, this rebase pass passed `npm run typecheck` (all **38**
+combined negative probes rejected; native browser/fetch/EventSource/comment IO
+and minimal path positive controls accepted), `npm run build`, and a focused
+`node --test` run of eleven explicit compiled paths under `dist/test/public/`:
+`workspace-state.test.js`, `live-updates.test.js`, `app.test.js`,
+`workspace-ui.test.js`, `reconnect.test.js`, `replies.test.js`,
+`comments-flow.test.js`, `collect-files.test.js`, `commit-lock.test.js`,
+`tree-state.test.js` and `worktree-select.test.js`. All **169 tests passed**, with
+zero failures, skips or cancellations. The comments-flow seam includes the real
+migrated server route/loader and browser workspace over fake filesystem IO.
+
+No full-suite, smoke, minimum-Node, manual browser or live Git/filesystem rerun
+was performed in this conflict-resolution pass. The fake-IO and real-runtime
+limitations documented above remain unchanged; full-suite final validation is
+separate.

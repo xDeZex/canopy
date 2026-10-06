@@ -295,7 +295,7 @@ test('workspace refresh, real viewer and native reply form show incoming conflic
         if (holdRefresh) await new Promise((resolve) => { releaseRefresh = resolve; });
         return response(comments);
       }
-      if (url.startsWith('/api/files')) return response([{ type: 'file', path: 'a.js' }]);
+      if (url.startsWith('/api/files')) return response([{ type: 'file', path: 'a.js', name: 'a.js', status: 'modified' }]);
       if (url.startsWith('/api/file-content')) return response({ head: 'before', working: 'one\ntwo\nthree' });
       return response([]);
     },
@@ -396,7 +396,7 @@ test('navigation during post-save refresh closes confirmed saved drafts but reta
             }
             return response({ threads: [thread()], warning: null, revision: 'r2' });
           }
-          if (url.startsWith('/api/files')) return response([{ type: 'file', path: 'a.js' }]);
+          if (url.startsWith('/api/files')) return response([{ type: 'file', path: 'a.js', name: 'a.js', status: 'modified' }]);
           if (url.startsWith('/api/file-content')) return response({ head: 'before', working: 'one\ntwo\nthree' });
           return response([]);
         },

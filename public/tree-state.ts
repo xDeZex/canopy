@@ -31,7 +31,7 @@ export function createTreeExpansionStore() {
     // worktree removal a live, in-session event, so without this a
     // long-running session that repeatedly creates/removes worktrees would
     // otherwise accumulate one forgotten Set per removed worktree forever.
-    pruneToKnownWorktrees(knownPaths: Iterable<string>) {
+    pruneToKnownWorktrees(knownPaths: Iterable<string | null>) {
       const known = new Set(knownPaths);
       for (const worktreePath of expandedPathsByWorktree.keys()) {
         if (!known.has(worktreePath)) expandedPathsByWorktree.delete(worktreePath);

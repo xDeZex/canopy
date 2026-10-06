@@ -3,7 +3,7 @@
 // is open). If the currently active path is still present, keep it; a
 // removed active worktree falls back to the first remaining worktree, or to
 // no selection (empty state) if none remain.
-export function pickActiveWorktree(worktrees: readonly { path: string }[], currentActivePath: string | null) {
+export function pickActiveWorktree(worktrees: readonly { path: string | null }[], currentActivePath: string | null) {
   if (worktrees.some((worktree) => worktree.path === currentActivePath)) {
     return currentActivePath;
   }

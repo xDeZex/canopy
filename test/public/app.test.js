@@ -45,6 +45,20 @@ class EventSourceStub {
   close() {}
 }
 
+test('malformed startup worktrees use the existing error UI without opening live streams', async () => {
+  const browser = browserStub();
+  let opened = 0;
+  class EventSource extends EventSourceStub { constructor() { super(); opened++; } }
+  const app = await startApp({ ...browser, EventSource,
+    fetch: async () => ({ ok: true, json: async () => [{ path: 42 }] }),
+    setInterval: () => { assert.fail('failed startup must not schedule updates'); }, clearInterval() {},
+  });
+  try {
+    assert.match(browser.elements.main.children[0].textContent, /Failed to load worktrees: Invalid worktrees/);
+    assert.equal(opened, 0);
+  } finally { app.dispose(); }
+});
+
 test('sidebar to main navigation retains File preference, same-file mounts and refresh cleanup', async () => {
   const browser = browserStub();
   const anchored = { id: 't', file: 'a.js', side: 'modified', line_range: { start: 1, end: 2 },

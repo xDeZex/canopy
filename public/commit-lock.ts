@@ -21,7 +21,7 @@ export function createCommitLockStore() {
     // removal a live, in-session event, so without this a long-running
     // session that repeatedly creates/removes worktrees would otherwise
     // accumulate one forgotten lock entry per removed worktree forever.
-    pruneToKnownWorktrees(knownPaths: Iterable<string>) {
+    pruneToKnownWorktrees(knownPaths: Iterable<string | null>) {
       const known = new Set(knownPaths);
       for (const worktreePath of lockedShaByWorktree.keys()) {
         if (!known.has(worktreePath)) lockedShaByWorktree.delete(worktreePath);

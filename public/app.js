@@ -16,6 +16,7 @@ import { formatEditTime } from './edit-time.js';
 import { createTreeExpansionStore } from './tree-state.js';
 import { computeTabScrollAffordance } from './tab-scroll.js';
 import { createWorkspaceStore } from './workspace-state.js';
+import { parseWorktrees } from './workspace-contracts.js';
 import { shortcutAction } from './keyboard-shortcuts.js';
 import { changedFiles } from './changed-files.js';
 import { createRailResizer } from './rail-resize.js';
@@ -168,7 +169,7 @@ export async function startApp({
       // branch deletion are not a transaction and cannot honestly roll back.
       if (mutationAttempted) {
         try {
-          treeExpansion.pruneToKnownWorktrees(workspace.updateWorktrees(await fetchJson('/api/worktrees')));
+          treeExpansion.pruneToKnownWorktrees(workspace.updateWorktrees(parseWorktrees(await fetchJson('/api/worktrees'))));
         } catch (err) {
           message = `${message ? `${message}. ` : ''}Failed to refresh worktrees: ${err.message}`;
         }
@@ -256,7 +257,7 @@ export async function startApp({
   try {
     const res = await request('/api/worktrees');
     if (!res.ok) throw new Error(`request failed with status ${res.status}`);
-    worktrees = await res.json();
+    worktrees = parseWorktrees(await res.json());
   } catch (err) {
     ui.renderError(err);
     const message = doc.createElement('p');

@@ -3,23 +3,32 @@ import assert from 'node:assert/strict';
 import { createWorkspaceStore } from '../../public/workspace-state.js';
 import { createCommitLockStore } from '../../public/commit-lock.js';
 import { createViewModeStore } from '../../public/view-mode.js';
+import type { JsonResponse, RequestOptions, WorkspaceFile } from '../../public/workspace-contracts.js';
+import { isRecord } from '../../public/workspace-contracts.js';
+import type { CommentThread } from '../../public/comment-dom.js';
 
 function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  let resolve = (_value: JsonResponse) => {};
+  let reject = (_reason: unknown) => {};
+  const promise = new Promise<JsonResponse>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
 
-function fixture(savedMode = null) {
-  const requests = [];
+type PendingRequest = ReturnType<typeof deferred> & { url: string };
+function posted(request: { options: RequestOptions }) {
+  const body: unknown = JSON.parse(request.options.body);
+  assert.ok(isRecord(body), 'comment posts must be JSON objects');
+  return body;
+}
+function fixture(savedMode: string | null = null) {
+  const requests: PendingRequest[] = [];
   // File-scoped commit refetches (issued on file selection) are tracked apart
   // so tree/content tests can keep addressing `requests` by position.
-  const fileCommitRequests = [];
-  const commentRequests = [];
-  const postRequests = [];
-  const changes = [];
-  const watches = [];
+  const fileCommitRequests: PendingRequest[] = [];
+  const commentRequests: PendingRequest[] = [];
+  const postRequests: (PendingRequest & { options: RequestOptions })[] = [];
+  const changes: string[] = [];
+  const watches: (string | null)[] = [];
   const commitLock = createCommitLockStore();
   const viewModeStore = createViewModeStore({ getItem: () => savedMode, setItem: () => {} });
   const store = createWorkspaceStore({
@@ -41,36 +50,147 @@ function fixture(savedMode = null) {
     onChange: (part) => changes.push(part),
     onActivePathChanged: (path) => watches.push(path),
   });
-  const reply = async (request, body) => {
+  const reply = async (request: PendingRequest | undefined, body: unknown) => {
+    assert.ok(request, 'expected a pending IO request');
     request.resolve({ ok: true, json: async () => body });
     await new Promise((resolve) => setImmediate(resolve));
   };
   return { store, requests, fileCommitRequests, commentRequests, postRequests, changes, watches, commitLock, viewModeStore, reply };
 }
 
-const tree = (name, status = 'modified') => [{ type: 'file', path: name, name, status }];
-const list = (paths) => paths.map((path) => ({ path }));
+const tree = (name: string, status = 'modified'): WorkspaceFile[] => [{ type: 'file', path: name, name, status }];
+const list = (paths: string[]) => paths.map((path) => ({ path }));
+
+function conversation(input: { id: string; file?: string; line_range?: { start: number; end: number }; resolved?: boolean; unavailable?: string; messages?: string[] }): CommentThread {
+  const common = { id: input.id, created_at: '2026-01-01T00:00:00Z', resolved: input.resolved ?? false,
+    messages: (input.messages ?? ['seen']).map((text, index) => ({
+      id: `m${index}`, author: 'user', text, created_at: '2026-01-01T00:00:00Z',
+    })) };
+  return input.file === undefined ? common : { ...common, file: input.file, side: 'modified',
+    line_range: input.line_range ?? { start: 1, end: 1 }, ...(input.unavailable ? { unavailable: input.unavailable } : {}) };
+}
+
+test('malformed comment JSON retains the conversation and blocks saves until recovery', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  const thread = { id: 't', created_at: '2026-01-01T00:00:00Z', resolved: false,
+    messages: [{ id: 'm', author: 'user', text: 'seen', created_at: '2026-01-01T00:00:00Z' }] };
+  await f.reply(f.commentRequests[0], { threads: [thread], warning: null, revision: 'r1' });
+  f.store.loadComments();
+  await f.reply(f.commentRequests.at(-1), { threads: [{ ...thread, file: 'one', line_range: null }], warning: null, revision: 'bad' });
+  assert.deepEqual(f.store.getState().comments.threads, [thread]);
+  assert.match(f.store.getState().comments.warning ?? '', /Invalid comments/);
+  await assert.rejects(f.store.addReply({ threadId: 't', text: 'draft' }), /cannot be read/);
+  assert.equal(f.postRequests.length, 0);
+  f.store.loadComments();
+  await f.reply(f.commentRequests.at(-1), { threads: [thread], warning: null, revision: 'r2' });
+  assert.equal(f.store.getState().comments.warning, null);
+  assert.equal(f.store.getState().comments.revision, 'r2');
+});
+
+test('malformed commit markers use the toolbar error path, while omitted log fields remain valid', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.requests[1], [{ sha: 'abc', touchesFile: 'yes' }]);
+  assert.deepEqual(f.store.getState().commits, []);
+  assert.match(f.store.getState().commitsError?.message ?? '', /Invalid commits/);
+  f.store.loadCommits();
+  await f.reply(f.requests.at(-1), [{ sha: 'abc' }]);
+  assert.deepEqual(f.store.getState().commits, [{ sha: 'abc' }]);
+  assert.equal(f.store.getState().commitsError, null);
+});
+
+test('commits without a string identity cannot reach the commit picker', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.requests[1], [{}]);
+  assert.deepEqual(f.store.getState().commits, []);
+  assert.match(f.store.getState().commitsError?.message ?? '', /Invalid commits/);
+});
+
+test('malformed nested trees clear the tree through its load error path', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  await f.reply(f.requests[0], [{ type: 'dir', path: 'src', name: 'src', children: [{ type: 'file', path: 42, name: 'bad', status: 'clean' }] }]);
+  assert.deepEqual(f.store.getState().fileTree, []);
+  assert.match(f.store.getState().fileTreeError?.message ?? '', /Invalid file tree/);
+});
+
+test('malformed content is shown as a load error and a valid reload recovers', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  f.store.selectFile('open');
+  await f.reply(f.requests[2], { head: 42, working: 'disk' });
+  assert.equal(f.store.getState().fileContent, null);
+  assert.match(f.store.getState().fileContentError?.message ?? '', /Invalid file content/);
+  f.store.loadFileContent();
+  await f.reply(f.requests.at(-1), { head: null, working: 'disk' });
+  assert.deepEqual(f.store.getState().fileContent, { head: null, working: 'disk' });
+  assert.equal(f.store.getState().fileContentError, null);
+});
+
+test('JSON decoding failures follow resource errors and retain the last comment conversation', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a']));
+  const thread = conversation({ id: 't' });
+  await f.reply(f.commentRequests[0], { threads: [thread], warning: null, revision: 'r1' });
+  f.store.selectFile('open');
+  const commentsLoad = f.store.loadComments();
+  const commentsRequest = f.commentRequests.at(-1);
+  assert.ok(commentsRequest);
+  for (const request of [f.requests[0], f.fileCommitRequests[0], f.requests[2], commentsRequest]) {
+    request.resolve({ ok: true, json: async () => { throw new SyntaxError('Unexpected JSON token'); } });
+  }
+  await commentsLoad;
+  await new Promise((resolve) => setImmediate(resolve));
+  const state = f.store.getState();
+  assert.deepEqual(state.fileTree, []);
+  assert.deepEqual(state.commits, []);
+  assert.equal(state.fileContent, null);
+  for (const error of [state.fileTreeError, state.commitsError, state.fileContentError]) {
+    assert.match(error?.message ?? '', /Unexpected JSON token/);
+  }
+  assert.deepEqual(state.comments.threads, [thread]);
+  assert.match(state.comments.warning ?? '', /Failed to load comments: Unexpected JSON token/);
+});
+
+test('malformed older resource payloads cannot notify or overwrite a returned worktree', async () => {
+  const f = fixture();
+  f.store.updateWorktrees(list(['/a', '/b']));
+  f.store.selectFile('open');
+  const stale = [f.requests[0], f.requests[1], f.requests[2], f.commentRequests[0]];
+  f.store.selectWorktree('/b');
+  f.store.selectWorktree('/a');
+  await f.reply(f.requests.at(-2), tree('latest'));
+  await f.reply(f.requests.at(-1), [{ sha: 'latest' }]);
+  await f.reply(f.commentRequests.at(-1), { threads: [conversation({ id: 'latest' })], revision: 'r2', warning: null });
+  const expected = f.store.getState();
+  f.changes.length = 0;
+  for (const request of stale) await f.reply(request, null);
+  assert.deepEqual(f.store.getState(), expected);
+  assert.deepEqual(f.changes, []);
+});
 
 test('resolution conflicts wait for superseding watch refreshes, retry the chosen flag and block unreadable or cross-worktree saves', async () => {
   const f = fixture();
   f.store.updateWorktrees(list(['/a', '/b']));
-  await f.reply(f.commentRequests[0], { threads: [{ id: 't', resolved: false, messages: ['seen'] }], revision: 'r1', warning: null });
+  await f.reply(f.commentRequests[0], { threads: [conversation({ id: 't', resolved: false, messages: ['seen'] })], revision: 'r1', warning: null });
   let settled = false;
   const saved = f.store.setThreadResolved({ threadId: 't', resolved: true });
   const rejected = assert.rejects(saved, /Comments changed/).then(() => { settled = true; });
-  assert.deepEqual(JSON.parse(f.postRequests[0].options.body), { action: 'set-resolved', threadId: 't', resolved: true, revision: 'r1' });
+  assert.deepEqual(posted(f.postRequests[0]), { action: 'set-resolved', threadId: 't', resolved: true, revision: 'r1' });
   f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
   await new Promise((resolve) => setImmediate(resolve));
   f.store.remoteChange(['.canopy/comments.yaml']);
-  await f.reply(f.commentRequests[1], { threads: [{ id: 't', resolved: false, messages: ['stale'] }], revision: 'stale', warning: null });
+  await f.reply(f.commentRequests[1], { threads: [conversation({ id: 't', resolved: false, messages: ['stale'] })], revision: 'stale', warning: null });
   assert.equal(settled, false, 'retry stays pending until the latest watch refresh completes');
-  await f.reply(f.commentRequests[2], { threads: [{ id: 't', resolved: false, messages: ['seen', 'agent'] }], revision: 'r2', warning: null });
+  await f.reply(f.commentRequests[2], { threads: [conversation({ id: 't', resolved: false, messages: ['seen', 'agent'] })], revision: 'r2', warning: null });
   await rejected;
   const retry = f.store.setThreadResolved({ threadId: 't', resolved: true });
-  assert.equal(JSON.parse(f.postRequests[1].options.body).revision, 'r2');
+  assert.equal(posted(f.postRequests[1]).revision, 'r2');
   f.postRequests[1].resolve({ ok: true, status: 201 });
   await new Promise((resolve) => setImmediate(resolve));
-  await f.reply(f.commentRequests[3], { threads: [{ id: 't', resolved: true, messages: ['seen', 'agent'] }], revision: 'r3', warning: null });
+  await f.reply(f.commentRequests[3], { threads: [conversation({ id: 't', resolved: true, messages: ['seen', 'agent'] })], revision: 'r3', warning: null });
   await retry;
   assert.equal(f.store.getState().comments.threads[0].resolved, true);
   const reopen = f.store.setThreadResolved({ threadId: 't', resolved: false });
@@ -88,19 +208,19 @@ test('resolution conflicts wait for superseding watch refreshes, retry the chose
 test('reply conflict waits for refreshed conversation before retry and never posts against a failed refresh', async () => {
   const f = fixture();
   f.store.updateWorktrees(list(['/a', '/b']));
-  await f.reply(f.commentRequests[0], { threads: [{ id: 't', messages: ['seen'] }], revision: 'r1', warning: null });
+  await f.reply(f.commentRequests[0], { threads: [conversation({ id: 't', messages: ['seen'] })], revision: 'r1', warning: null });
   let settled = false;
   const saved = f.store.addReply({ threadId: 't', text: 'my draft' });
   const rejected = assert.rejects(saved, /Comments changed/).then(() => { settled = true; });
-  assert.deepEqual(JSON.parse(f.postRequests[0].options.body), { threadId: 't', text: 'my draft', revision: 'r1' });
+  assert.deepEqual(posted(f.postRequests[0]), { threadId: 't', text: 'my draft', revision: 'r1' });
   f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
-  await f.reply(f.commentRequests[1], { threads: [{ id: 't', messages: ['seen', 'incoming'] }], revision: 'r2', warning: null });
+  await f.reply(f.commentRequests[1], { threads: [conversation({ id: 't', messages: ['seen', 'incoming'] })], revision: 'r2', warning: null });
   await rejected;
-  assert.deepEqual(f.store.getState().comments.threads[0].messages, ['seen', 'incoming']);
+  assert.deepEqual(f.store.getState().comments.threads[0].messages.map((message) => message.text), ['seen', 'incoming']);
   const retry = f.store.addReply({ threadId: 't', text: 'my draft' });
-  assert.equal(JSON.parse(f.postRequests[1].options.body).revision, 'r2');
+  assert.equal(posted(f.postRequests[1]).revision, 'r2');
   f.postRequests[1].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
   const failed = assert.rejects(retry, /Comments changed/);
   await new Promise((resolve) => setImmediate(resolve));
@@ -117,11 +237,11 @@ test('reply conflict waits for refreshed conversation before retry and never pos
 test('reply success refreshes all messages before resolving and worktree round trips invalidate pending saves', async () => {
   const f = fixture();
   f.store.updateWorktrees(list(['/a', '/b']));
-  await f.reply(f.commentRequests[0], { threads: [{ id: 't', messages: [] }], revision: 'r1', warning: null });
+  await f.reply(f.commentRequests[0], { threads: [conversation({ id: 't', messages: ['seen'] })], revision: 'r1', warning: null });
   const saved = f.store.addReply({ threadId: 't', text: 'reply' });
   f.postRequests[0].resolve({ ok: true, status: 201 });
   await new Promise((resolve) => setImmediate(resolve));
-  await f.reply(f.commentRequests[1], { threads: [{ id: 't', messages: ['reply'] }], revision: 'r2', warning: null });
+  await f.reply(f.commentRequests[1], { threads: [conversation({ id: 't', messages: ['seen', 'reply'] })], revision: 'r2', warning: null });
   await saved;
   const late = f.store.addReply({ threadId: 't', text: 'late' });
   const rejected = assert.rejects(late, /worktree/);
@@ -134,8 +254,8 @@ test('reply success refreshes all messages before resolving and worktree round t
 test('comment navigation distinguishes general from unavailable anchors, preserves same-file content and clears removed selections', async () => {
   const f = fixture('file');
   f.store.updateWorktrees(list(['/a', '/b']));
-  const anchored = { id: 't', file: 'one', unavailable: 'missing', line_range: { start: 4, end: 8 } };
-  await f.reply(f.commentRequests[0], { threads: [anchored, { id: 'general' }], warning: null });
+  const anchored = conversation({ id: 't', file: 'one', unavailable: 'missing', line_range: { start: 4, end: 8 } });
+  await f.reply(f.commentRequests[0], { threads: [anchored, conversation({ id: 'general' })], warning: null });
   f.store.selectThread('t');
   assert.equal(f.store.getState().activeFile, 'one');
   assert.equal(f.store.getState().selectedThreadId, 't');
@@ -168,7 +288,7 @@ test('comment navigation distinguishes general from unavailable anchors, preserv
 test('refreshing a selected thread follows changed file attachment without accepting stale file content', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a']));
-  const anchored = { id: 't', file: 'one', line_range: { start: 1, end: 2 } };
+  const anchored = conversation({ id: 't', file: 'one', line_range: { start: 1, end: 2 } });
   await f.reply(f.commentRequests[0], { threads: [anchored], warning: null });
   f.store.selectThread('t');
   const oldContent = f.requests[2];
@@ -180,7 +300,7 @@ test('refreshing a selected thread follows changed file attachment without accep
   assert.equal(f.store.getState().fileContent, null);
   await f.reply(f.requests.at(-1), { head: '', working: 'current two' });
   f.store.loadComments();
-  await f.reply(f.commentRequests.at(-1), { threads: [{ id: 't' }], warning: null });
+  await f.reply(f.commentRequests.at(-1), { threads: [conversation({ id: 't' })], warning: null });
   assert.equal(f.store.getState().mainView, 'general');
   assert.equal(f.store.getState().selectedThreadId, null);
 });
@@ -189,13 +309,14 @@ test('comments load per worktree and reject old responses after switch away/back
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a', '/b']));
   assert.equal(f.commentRequests[0].url, '/api/comments?worktree=%2Fa');
-  await f.reply(f.commentRequests[0], { threads: [{ id: 'a' }], warning: null });
-  assert.deepEqual(f.store.getState().comments.threads, [{ id: 'a' }]);
+  await f.reply(f.commentRequests[0], { threads: [conversation({ id: 'a' })], warning: null });
+  assert.deepEqual(f.store.getState().comments.threads, [conversation({ id: 'a' })]);
   f.store.loadComments();
   const oldA = f.commentRequests.at(-1);
   f.store.selectWorktree('/b');
   assert.deepEqual(f.store.getState().comments, { threads: [], warning: null });
   const oldB = f.commentRequests.at(-1);
+  assert.ok(oldB);
   f.store.selectWorktree('/a');
   const oldReturn = f.commentRequests.at(-1);
   f.store.remoteChange();
@@ -203,7 +324,7 @@ test('comments load per worktree and reject old responses after switch away/back
   f.store.remoteChange(['.canopy/comments.yaml']);
   await f.reply(f.commentRequests.at(-1), { threads: [], warning: 'warning' });
   f.changes.length = 0;
-  await f.reply(oldA, { threads: [{ id: 'stale' }], warning: null });
+  await f.reply(oldA, { threads: [conversation({ id: 'stale' })], warning: null });
   oldB.reject(new Error('old error'));
   await f.reply(oldReturn, { threads: [], warning: null });
   await f.reply(reconnect, { threads: [], warning: null });
@@ -216,14 +337,16 @@ test('comments load per worktree and reject old responses after switch away/back
 test('tree arrival reconciles conversation visibility and current comment failures remain visible until reload', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a']));
-  await f.reply(f.commentRequests[0], { threads: [{ id: 't', file: 'a.js' }], warning: null });
+  await f.reply(f.commentRequests[0], { threads: [conversation({ id: 't', file: 'a.js' })], warning: null });
   f.changes.length = 0;
   await f.reply(f.requests[0], tree('a.js'));
   assert.deepEqual(f.changes, ['rail', 'comments-refresh']);
   const pending = f.store.loadComments();
-  f.commentRequests.at(-1).reject(new Error('offline'));
+  const failed = f.commentRequests.at(-1);
+  assert.ok(failed);
+  failed.reject(new Error('offline'));
   await pending;
-  assert.match(f.store.getState().comments.warning, /offline/);
+  assert.match(f.store.getState().comments.warning ?? '', /offline/);
   const reload = f.store.loadComments();
   await f.reply(f.commentRequests.at(-1), { threads: [], warning: null });
   await reload;
@@ -325,7 +448,7 @@ test('status refresh does not seed an unresolved viewer and older trees cannot o
   const f = fixture();
   f.store.updateWorktrees(list(['/a']));
   f.store.selectFile('open');
-  await f.reply(f.requests[2], { working: 'same disk' });
+  await f.reply(f.requests[2], { head: null, working: 'same disk' });
   f.changes.length = 0;
   f.store.invalidateStatus();
   f.store.invalidateStatus();
@@ -409,12 +532,12 @@ test('stale origin/main refresh successes and errors cannot overwrite a newer re
   for (const transition of ['refresh', 'file', 'worktree', 'removal']) {
     for (const staleResult of ['success', 'error']) {
       const f = fixture();
-      const snapshot = (originMainSha) => ['/a', '/b'].map((path) => ({ path, head: 'bbb', originMainSha }));
+      const snapshot = (originMainSha: string | null) => ['/a', '/b'].map((path) => ({ path, head: 'bbb', originMainSha }));
       f.store.updateWorktrees(snapshot('aaa'));
       f.store.selectFile('one');
       f.store.updateWorktrees(snapshot('bbb'));
       const stale = [f.requests[1], ...f.fileCommitRequests];
-      let current;
+      let current: PendingRequest | undefined;
       if (transition === 'refresh') {
         f.store.updateWorktrees(snapshot(null));
         current = f.fileCommitRequests.at(-1);
@@ -450,7 +573,7 @@ test('active HEAD change in Auto reloads commits, tree and open content without 
   await f.reply(f.requests[0], tree('src/open.txt'));
   f.store.selectFile('src/open.txt');
   await f.reply(f.fileCommitRequests[0], [{ sha: 'old', touchesFile: true }]);
-  await f.reply(f.requests[2], { working: 'before', base: 'old base' });
+  await f.reply(f.requests[2], { working: 'before', head: 'old base' });
   f.changes.length = 0;
 
   assert.deepEqual(f.store.updateWorktrees([{ path: '/a', head: 'new' }]), ['/a']);
@@ -467,10 +590,10 @@ test('active HEAD change in Auto reloads commits, tree and open content without 
 
   await f.reply(f.requests[3], tree('src/open.txt', 'clean'));
   await f.reply(f.fileCommitRequests[1], [{ sha: 'new', touchesFile: false }]);
-  await f.reply(f.requests[4], { working: 'after', base: 'new base' });
+  await f.reply(f.requests[4], { working: 'after', head: 'new base' });
   assert.deepEqual(f.store.getState().fileTree, tree('src/open.txt', 'clean'));
   assert.deepEqual(f.store.getState().commits, [{ sha: 'new', touchesFile: false }]);
-  assert.deepEqual(f.store.getState().fileContent, { working: 'after', base: 'new base' });
+  assert.deepEqual(f.store.getState().fileContent, { working: 'after', head: 'new base' });
   assert.equal(f.viewModeStore.getMode(), 'diff', 'refreshed status does not reset the chosen mode');
   assert.deepEqual(f.changes, ['metadata', 'rail', 'toolbar', 'main']);
 });
@@ -518,13 +641,13 @@ test('active HEAD change preserves the locked ref for refreshed tree and open co
   assert.equal(f.requests[4].url, '/api/file-content?worktree=%2Fa%20b&file=space%20name&ref=sha%3A1');
   assert.equal(f.fileCommitRequests[1].url, '/api/commits?worktree=%2Fa%20b&file=space%20name');
   await f.reply(f.requests[3], tree('space name'));
-  await f.reply(f.requests[4], { working: 'new working', base: 'locked base' });
+  await f.reply(f.requests[4], { working: 'new working', head: 'locked base' });
   await f.reply(f.fileCommitRequests[1], [{ sha: 'new' }, { sha: 'sha:1' }]);
   assert.equal(f.commitLock.getLockedCommit('/a b'), 'sha:1');
   assert.equal(f.viewModeStore.getMode(), 'file');
   assert.equal(f.store.getState().activePath, '/a b');
   assert.equal(f.store.getState().activeFile, 'space name');
-  assert.deepEqual(f.store.getState().fileContent, { working: 'new working', base: 'locked base' });
+  assert.deepEqual(f.store.getState().fileContent, { working: 'new working', head: 'locked base' });
   assert.deepEqual(f.store.getState().commits, [{ sha: 'new' }, { sha: 'sha:1' }]);
   assert.deepEqual(f.watches, ['/a b']);
 });
@@ -537,13 +660,13 @@ test('pre-HEAD tree, commit and content responses cannot overwrite the refreshed
     f.store.updateWorktrees([{ path: '/a', head: 'new' }]);
     await f.reply(f.requests[3], tree('open'));
     await f.reply(f.fileCommitRequests[1], [{ sha: 'new', touchesFile: false }]);
-    await f.reply(f.requests[4], { working: 'new', base: 'new base' });
+    await f.reply(f.requests[4], { working: 'new', head: 'new base' });
     f.changes.length = 0;
     if (staleResult === 'success') {
       await f.reply(f.requests[0], tree('old', 'clean'));
       await f.reply(f.requests[1], [{ sha: 'old unmarked' }]);
       await f.reply(f.fileCommitRequests[0], [{ sha: 'old', touchesFile: true }]);
-      await f.reply(f.requests[2], { working: 'old', base: 'old base' });
+      await f.reply(f.requests[2], { working: 'old', head: 'old base' });
     } else {
       for (const request of [f.requests[0], f.requests[1], f.fileCommitRequests[0], f.requests[2]]) {
         request.reject(new Error('stale pre-HEAD failure'));
@@ -552,7 +675,7 @@ test('pre-HEAD tree, commit and content responses cannot overwrite the refreshed
     }
     assert.deepEqual(f.store.getState().fileTree, tree('open'), staleResult);
     assert.deepEqual(f.store.getState().commits, [{ sha: 'new', touchesFile: false }], staleResult);
-    assert.deepEqual(f.store.getState().fileContent, { working: 'new', base: 'new base' }, staleResult);
+    assert.deepEqual(f.store.getState().fileContent, { working: 'new', head: 'new base' }, staleResult);
     assert.equal(f.store.getState().fileTreeError, null);
     assert.equal(f.store.getState().commitsError, null);
     assert.equal(f.store.getState().fileContentError, null);
@@ -583,7 +706,7 @@ test('first selected clean file seeds after tree arrives, even if content arrive
   f.store.updateWorktrees(list(['/a']));
   f.store.selectFile('clean.txt');
   assert.equal(f.viewModeStore.getMode(), 'diff', 'temporary display mode does not seed the session');
-  await f.reply(f.requests[2], { working: 'content' });
+  await f.reply(f.requests[2], { head: null, working: 'content' });
   f.changes.length = 0;
   await f.reply(f.requests[0], tree('clean.txt', 'clean'));
   assert.equal(f.viewModeStore.getMode(), 'file');
@@ -601,7 +724,7 @@ test('clean status arriving before content updates toolbar and pending viewer', 
   assert.equal(f.viewModeStore.getMode(), 'file');
   assert.deepEqual(f.changes, ['rail', 'toolbar', 'main']);
   f.changes.length = 0;
-  await f.reply(f.requests[2], { working: 'content' });
+  await f.reply(f.requests[2], { head: null, working: 'content' });
   assert.deepEqual(f.changes, ['main']);
   assert.equal(f.viewModeStore.getMode(), 'file');
 });
@@ -643,7 +766,7 @@ test('tree error or missing file resolves initial mode with Diff fallback', asyn
       await f.reply(f.requests[0], tree('other.txt', 'clean'));
     }
     assert.equal(f.viewModeStore.getMode(), 'diff');
-    await f.reply(f.requests[2], { working: 'content' });
+    await f.reply(f.requests[2], { head: null, working: 'content' });
     f.store.selectFile('clean.txt');
     f.store.loadFileTree();
     await f.reply(f.requests.at(-1), tree('clean.txt', 'clean'));
@@ -672,7 +795,7 @@ test('switching worktrees clears file, refetches resources, and keeps lock and v
   f.store.selectFile('clean.txt');
   assert.equal(f.viewModeStore.getMode(), 'file');
   assert.match(f.requests[2].url, /worktree=%2Fa&file=clean.txt$/);
-  await f.reply(f.requests[2], { working: 'old' });
+  await f.reply(f.requests[2], { head: null, working: 'old' });
   f.commitLock.lockCommit('/a', 'abc');
   f.store.selectWorktree('/b');
   assert.deepEqual(f.watches, ['/a', '/b']);
@@ -700,7 +823,7 @@ test('toolbar is notified on file selection and commit arrival, independently of
   f.changes.length = 0;
   await f.reply(f.fileCommitRequests[0], [{ sha: 'abc', message: 'commit' }]);
   assert.deepEqual(f.changes, ['toolbar'], 'commit arrival must not remount the editor');
-  await f.reply(f.requests[2], { working: 'content' });
+  await f.reply(f.requests[2], { head: null, working: 'content' });
   assert.deepEqual(f.changes, ['toolbar', 'main']);
 });
 
@@ -709,9 +832,9 @@ test('out-of-order file, tree, commit and error responses cannot overwrite newer
   f.store.updateWorktrees(list(['/a', '/b'])); // 0 tree, 1 commits
   f.store.selectFile('one'); // 2 content
   f.store.selectFile('two'); // 3 content
-  await f.reply(f.requests[3], { working: 'two' });
-  await f.reply(f.requests[2], { working: 'one' });
-  assert.equal(f.store.getState().fileContent.working, 'two');
+  await f.reply(f.requests[3], { head: null, working: 'two' });
+  await f.reply(f.requests[2], { head: null, working: 'one' });
+  assert.equal(f.store.getState().fileContent?.working, 'two');
   f.store.selectWorktree('/b'); // 4 tree, 5 commits
   f.store.selectWorktree('/a'); // 6 tree, 7 commits
   await f.reply(f.requests[6], tree('new'));
@@ -736,12 +859,12 @@ test('remote changes always reload tree, reload content only for open file, and 
   f.store.remoteChange(['open']); // 4 tree, 5 content
   assert.equal(f.requests.length, 6);
   await f.reply(f.requests[4], tree('open', 'clean'));
-  await f.reply(f.requests[5], { working: 'latest' });
+  await f.reply(f.requests[5], { head: null, working: 'latest' });
   await f.reply(f.requests[3], tree('older'));
   f.requests[2].reject(new Error('stale content'));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.store.getState().fileTree[0].path, 'open');
-  assert.equal(f.store.getState().fileContent.working, 'latest');
+  assert.equal(f.store.getState().fileContent?.working, 'latest');
   assert.equal(f.store.getState().fileContentError, null);
 });
 
@@ -766,9 +889,9 @@ test('lock change refetch uses current ref and ignores prior response', async ()
   f.commitLock.lockCommit('/a', 'sha:1');
   f.store.loadFileContent();
   assert.match(f.requests[3].url, /file=space%20name&ref=sha%3A1$/);
-  await f.reply(f.requests[3], { working: 'locked' });
-  await f.reply(f.requests[2], { working: 'auto' });
-  assert.equal(f.store.getState().fileContent.working, 'locked');
+  await f.reply(f.requests[3], { head: null, working: 'locked' });
+  await f.reply(f.requests[2], { head: null, working: 'auto' });
+  assert.equal(f.store.getState().fileContent?.working, 'locked');
 });
 
 test('tree reload forwards encoded lock ref and rejects an earlier Auto tree and error', async () => {
@@ -816,11 +939,11 @@ test('Auto restores the unreferenced tree and content, without accepting late lo
   assert.equal(f.requests[5].url, '/api/files?worktree=%2Fa');
   assert.equal(f.requests[6].url, '/api/file-content?worktree=%2Fa&file=open');
   await f.reply(f.requests[5], tree('auto'));
-  await f.reply(f.requests[6], { working: 'auto' });
+  await f.reply(f.requests[6], { head: null, working: 'auto' });
   await f.reply(f.requests[3], tree('locked'));
-  await f.reply(f.requests[4], { working: 'locked' });
+  await f.reply(f.requests[4], { head: null, working: 'locked' });
   assert.equal(f.store.getState().fileTree[0].path, 'auto');
-  assert.equal(f.store.getState().fileContent.working, 'auto');
+  assert.equal(f.store.getState().fileContent?.working, 'auto');
 });
 
 test('same selection reloads reject older successes and current errors remain visible', async () => {
@@ -831,10 +954,10 @@ test('same selection reloads reject older successes and current errors remain vi
   f.requests[3].resolve({ ok: false, status: 503 });
   f.requests[4].resolve({ ok: false, status: 404 });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.store.getState().fileTreeError.message, 'request failed with status 503');
-  assert.equal(f.store.getState().fileContentError.message, 'request failed with status 404');
+  assert.equal(f.store.getState().fileTreeError?.message, 'request failed with status 503');
+  assert.equal(f.store.getState().fileContentError?.message, 'request failed with status 404');
   await f.reply(f.requests[0], tree('stale'));
-  await f.reply(f.requests[2], { working: 'stale' });
+  await f.reply(f.requests[2], { head: null, working: 'stale' });
   assert.deepEqual(f.store.getState().fileTree, []);
   assert.equal(f.store.getState().fileContent, null);
   f.store.updateWorktrees(list(['/a']));
@@ -869,7 +992,7 @@ test('deselecting the file refetches unmarked commits', async () => {
   const before = f.requests.length;
   f.store.selectFile(null);
   assert.equal(f.requests.length, before + 1);
-  assert.equal(f.requests.at(-1).url, '/api/commits?worktree=%2Fa');
+  assert.equal(f.requests.at(-1)?.url, '/api/commits?worktree=%2Fa');
 });
 
 test('a renamed file loads its content with the old path, and a pairing found later reloads it', async () => {
@@ -898,12 +1021,12 @@ test('adding a comment posts the loaded revision to the active worktree and relo
   assert.equal(post.url, '/api/comments?worktree=%2Fa');
   assert.equal(post.options.method, 'POST');
   assert.equal(post.options.headers['Content-Type'], 'application/json');
-  assert.deepEqual(JSON.parse(post.options.body), { file: 'one', line: 3, text: 'Why?', revision: 'absent' });
+  assert.deepEqual(posted(post), { file: 'one', line: 3, text: 'Why?', revision: 'absent' });
   post.resolve({ ok: true, json: async () => ({ revision: 'r2' }) });
   await saved;
   assert.equal(f.commentRequests.length, 2);
-  await f.reply(f.commentRequests[1], { threads: [{ id: 'new' }], warning: null, revision: 'r2' });
-  assert.deepEqual(f.store.getState().comments.threads, [{ id: 'new' }]);
+  await f.reply(f.commentRequests[1], { threads: [conversation({ id: 'new' })], warning: null, revision: 'r2' });
+  assert.deepEqual(f.store.getState().comments.threads, [conversation({ id: 'new' })]);
 });
 
 test('a range save sends its end line with the revision it was composed against', async () => {
@@ -911,7 +1034,7 @@ test('a range save sends its end line with the revision it was composed against'
   f.store.updateWorktrees(list(['/a']));
   await f.reply(f.commentRequests[0], { threads: [], warning: null, revision: 'r1' });
   const saved = f.store.addComment({ file: 'one', line: 3, endLine: 5, text: 'Why?' });
-  assert.deepEqual(JSON.parse(f.postRequests[0].options.body), { file: 'one', line: 3, endLine: 5, text: 'Why?', revision: 'r1' });
+  assert.deepEqual(posted(f.postRequests[0]), { file: 'one', line: 3, endLine: 5, text: 'Why?', revision: 'r1' });
   f.postRequests[0].resolve({ ok: false, status: 409, json: async () => ({ error: 'Comments changed', conflict: true }) });
   await assert.rejects(saved, /Comments changed/);
 });
@@ -947,7 +1070,7 @@ test('saving explains an unreadable sidecar instead of claiming comments are loa
 test('a malformed external write keeps the last valid conversation with a warning until a valid write recovers', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a']));
-  const thread = { id: 't', file: 'a.js', resolved: false };
+  const thread = conversation({ id: 't', file: 'a.js', resolved: false });
   await f.reply(f.commentRequests[0], { threads: [thread], warning: null, revision: 'r1' });
   f.store.remoteChange(['.canopy/comments.yaml']);
   await f.reply(f.commentRequests.at(-1), { threads: [], warning: 'Cannot load comments: bad', revision: null });
@@ -961,22 +1084,24 @@ test('a malformed external write keeps the last valid conversation with a warnin
 test('malformed data from the previous worktree never shows in the new one', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a', '/b']));
-  await f.reply(f.commentRequests[0], { threads: [{ id: 'a-thread' }], warning: null });
+  await f.reply(f.commentRequests[0], { threads: [conversation({ id: 'a-thread' })], warning: null });
   f.store.remoteChange();
   const staleA = f.commentRequests.at(-1);
   f.store.selectWorktree('/b');
-  await f.reply(f.commentRequests.at(-1), { threads: [{ id: 'b-thread' }], warning: null });
+  await f.reply(f.commentRequests.at(-1), { threads: [conversation({ id: 'b-thread' })], warning: null });
   await f.reply(staleA, { threads: [], warning: 'Cannot load comments: bad' });
-  assert.deepEqual(f.store.getState().comments, { threads: [{ id: 'b-thread' }], warning: null });
+  assert.deepEqual(f.store.getState().comments, { threads: [conversation({ id: 'b-thread' })], warning: null });
 });
 
 test('a failed comments load keeps the last valid conversation with the failure warning', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a']));
-  const thread = { id: 't' };
+  const thread = conversation({ id: 't' });
   await f.reply(f.commentRequests[0], { threads: [thread], warning: null });
   f.store.remoteChange();
-  f.commentRequests.at(-1).reject(new Error('offline'));
+  const failed = f.commentRequests.at(-1);
+  assert.ok(failed);
+  failed.reject(new Error('offline'));
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(f.store.getState().comments, { threads: [thread], warning: 'Failed to load comments: offline' });
 });
@@ -984,7 +1109,7 @@ test('a failed comments load keeps the last valid conversation with the failure 
 test('a live comments load reports a refresh, not a selection change, so the viewer does not scroll', async () => {
   const f = fixture('diff');
   f.store.updateWorktrees(list(['/a']));
-  const thread = { id: 't', file: 'a.js', resolved: false };
+  const thread = conversation({ id: 't', file: 'a.js', resolved: false });
   await f.reply(f.commentRequests[0], { threads: [thread], warning: null });
   f.changes.length = 0;
   f.store.remoteChange(['.canopy/comments.yaml']);

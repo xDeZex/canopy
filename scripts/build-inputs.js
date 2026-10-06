@@ -37,7 +37,7 @@ export async function checkInputs(program, extraInputs = []) {
   assert.deepEqual(applicationInputs, expectedInputs, 'An import pulled unlisted code into the build');
   const javascript = manifest.filter((filename) => /\.[cm]?jsx?$/.test(filename)).length;
   // The pre-migration baseline was 94 JS inputs. This ceiling only decreases.
-  assert.ok(javascript <= 29, 'JavaScript migration coverage must not grow');
+  assert.ok(javascript <= 25, 'JavaScript migration coverage must not grow');
   // Keep stdout available for npm pack --json during the prepare lifecycle.
   console.error(`Migration coverage: ${manifest.length - javascript} strict TS / ${javascript} temporary JS inputs (target: zero JS)`);
   return manifest;

@@ -53,7 +53,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
   const getComments = createCommentLoader(io);
   const store = createCommentStore({ io, newId: () => 'fixture-temp', now: () => { throw new Error('Resolution must not create timestamps'); } });
   const handle = createRequestHandler({ getWorktrees: async () => [{ path: '/registered' }], getComments, createComment: store.create,
-    getTree: async () => [{ type: 'file', path: 'public/app.js', status: 'modified' }],
+    getTree: async () => [{ type: 'file', path: 'public/app.js', name: 'app.js', status: 'modified' }],
     getContent: async () => ({ head: 'before', working: 'one\ntwo\nthree' }), getCommits: async () => [],
   });
   const element = (tag) => ({ tag, children: [], events: {}, classList: { add() {}, toggle() {} },

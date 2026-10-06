@@ -5,13 +5,21 @@ import { createWorkspaceStore } from '../../public/workspace-state.js';
 import { createTreeExpansionStore } from '../../public/tree-state.js';
 import { createCommitLockStore } from '../../public/commit-lock.js';
 import { createViewModeStore } from '../../public/view-mode.js';
+import type { LiveEventSource } from '../../public/live-updates.js';
+import type { ActivitySnapshot } from '../../public/workspace-contracts.js';
 
 function fixture() {
-  const sources = [];
-  const requests = [];
-  const activity = [];
-  class FakeEventSource {
-    constructor(url) {
+  const sources: FakeEventSource[] = [];
+  const requests: string[] = [];
+  const activity: ActivitySnapshot[] = [];
+  class FakeEventSource implements LiveEventSource {
+    url: string;
+    closeCount: number;
+    listeners: Map<string, (event: unknown) => void>;
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onClose?: () => void;
+    constructor(url: string) {
       this.url = url;
       this.closeCount = 0;
       this.listeners = new Map();
@@ -22,13 +30,14 @@ function fixture() {
       this.closeCount++;
       this.onClose?.();
     }
-    addEventListener(name, handler) { this.listeners.set(name, handler); }
+    addEventListener(name: string, handler: (event: unknown) => void) { this.listeners.set(name, handler); }
     open() { this.onopen?.(); }
-    message(body) { this.onmessage?.({ data: JSON.stringify(body) }); }
-    event(name, body) { this.listeners.get(name)?.({ data: JSON.stringify(body) }); }
+    message(body: unknown) { this.onmessage?.({ data: JSON.stringify(body) }); }
+    raw(data: string) { this.onmessage?.({ data }); }
+    event(name: string, body: unknown) { this.listeners.get(name)?.({ data: JSON.stringify(body) }); }
   }
 
-  let liveUpdates;
+  let liveUpdates: ReturnType<typeof createLiveUpdates>;
   const workspace = createWorkspaceStore({
     viewModeStore: createViewModeStore({ getItem: () => null, setItem: () => {} }),
     commitLock: createCommitLockStore(),
@@ -42,9 +51,52 @@ function fixture() {
   const treeExpansion = createTreeExpansionStore();
   liveUpdates = createLiveUpdates({ workspace, treeExpansion, EventSource: FakeEventSource,
     onActivity: (snapshot) => activity.push(snapshot) });
-  const list = (...paths) => paths.map((path) => ({ path }));
+  const list = (...paths: string[]) => paths.map((path) => ({ path }));
   return { sources, requests, activity, workspace, treeExpansion, liveUpdates, list };
 }
+
+test('malformed live messages warn without changing workspace or activity and streams recover', () => {
+  const f = fixture();
+  f.workspace.updateWorktrees(f.list('/a'));
+  f.workspace.selectFile('open');
+  f.treeExpansion.toggle('/a', 'src');
+  f.liveUpdates.connectWorktrees();
+  f.liveUpdates.connectActivity();
+  const [file, repo, activity] = f.sources;
+  const before = f.requests.length;
+  const original = console.error;
+  const warnings: unknown[][] = [];
+  console.error = (...args) => warnings.push(args);
+  try {
+    for (const source of [file, repo, activity]) assert.doesNotThrow(() => source.raw('{'));
+    file.message({ paths: [42] });
+    file.message({});
+    repo.message([{ path: 42 }]);
+    repo.message([{ path: '/b', head: 42 }]);
+    activity.message({ '/a': 'yesterday' });
+    activity.message([]);
+    repo.event('worktree-poll-error', { message: 42 });
+    repo.event('worktree-poll-error', null);
+    assert.equal(warnings.length, 11);
+    assert.equal(f.requests.length, before);
+    assert.equal(f.workspace.getState().activePath, '/a');
+    assert.equal(f.treeExpansion.isExpanded('/a', 'src'), true);
+    assert.deepEqual(f.activity, []);
+    assert.ok(f.sources.every((source) => source.closeCount === 0));
+    file.message({ paths: ['open'] });
+    assert.equal(f.requests.length, before + 3);
+    activity.message({ '/a': null });
+    assert.deepEqual(f.activity, [{ '/a': null }]);
+    repo.message(f.list('/b'));
+    assert.equal(f.workspace.getState().activePath, '/b');
+    f.liveUpdates.dispose();
+    for (const source of [file, repo, activity]) source.raw('{');
+    assert.equal(warnings.length, 11, 'stale or disposed streams do not even decode messages');
+  } finally {
+    console.error = original;
+    f.liveUpdates.dispose();
+  }
+});
 
 test('switching ignore mode replaces both streams immediately, clears activity and reconciles files', () => {
   const f = fixture();
@@ -275,7 +327,7 @@ test('poll error is logged, without changing selection or closing the repo-wide 
   f.liveUpdates.connectWorktrees();
   const repo = f.sources[1];
   const original = console.error;
-  const logs = [];
+  const logs: unknown[][] = [];
   console.error = (...args) => logs.push(args);
   try {
     repo.event('worktree-poll-error', { message: 'git unavailable' });
