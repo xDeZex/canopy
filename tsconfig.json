@@ -81,6 +81,7 @@
     "test/public/keyboard-shortcuts.test.ts",
     "test/public/live-updates.test.ts",
     "test/public/monaco-fake.ts",
+    "test/public/monaco-loader.test.ts",
     "test/public/monaco-view.test.ts",
     "test/public/rail-resize.test.ts",
     "test/public/reconnect.test.js",

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { clampLine, DIFF_RENDER_MODES, mountDiffEditor as realMountDiffEditor, mountEditor as realMountEditor } from '../../public/monaco-view.js';
 import type { DiffOptions, EditorOptions, Draft } from '../../public/editor-port.js';
-import type { LineChange, CodeEditor, Decoration, Position, MouseEvent, MountSettings } from '../../public/monaco-port.js';
+import type { LineChange, CodeEditor, Decoration, Position, Selection, MouseEvent, MountSettings } from '../../public/monaco-port.js';
 import { Element, FakeDocument } from './fake-dom.js';
-import { setLoaderWindow, fakeZone, present } from './monaco-fake.js';
+import { setLoaderWindow, fakeZone, fakeModel, present } from './monaco-fake.js';
 import type { FakeZone } from './monaco-fake.js';
 
 // These fixtures simulate only mounting/DOM IO, never the controller owner.
@@ -37,7 +37,7 @@ function stubDiffEditor(initialChanges: LineChange[] | null) {
     let nextId = 0;
     panes[side] = {
       decorations,
-      getModel: () => ({ getLineCount: () => 20 }),
+      getModel: () => fakeModel({ getLineCount: () => 20 }),
       revealLineInCenter: (line) => revealed.push(line),
       setPosition: (position) => cursors.push(position),
       focus: () => focused.push(side),
@@ -65,7 +65,7 @@ function stubDiffEditor(initialChanges: LineChange[] | null) {
         },
         dispose() {},
       }),
-      createModel: () => ({ dispose() {} }),
+      createModel: () => fakeModel({ dispose() {} }),
     },
   };
   return {
@@ -137,7 +137,7 @@ test('deletion-only hunks mark deleted original lines and a visible modified anc
   const { panes } = stubDiffEditor([
     { originalStartLineNumber: 1, originalEndLineNumber: 20, modifiedStartLineNumber: 0, modifiedEndLineNumber: 0 },
   ]);
-  panes.modified.getModel = () => ({ getLineCount: () => 1 }); // Empty Monaco models still have one line.
+  panes.modified.getModel = () => fakeModel({ getLineCount: () => 1 }); // Empty Monaco models still have one line.
   const view = await mountDiffEditor({}, { original: 'deleted file', modified: '' });
   view.prevChange();
   assert.deepEqual(markedLines(panes.original), [[1, 20]]);
@@ -261,19 +261,19 @@ test('supported modes and invalid-mode inline fallback retain exact review rails
   assert.deepEqual(DIFF_RENDER_MODES, ['inline', 'side-by-side']);
   for (const mode of [...DIFF_RENDER_MODES, undefined, 'collapsed', 'unknown', 'toString']) {
     const zones: FakeZone[] = [];
-    const removed: (string | number)[] = [];
+    const removed: string[] = [];
     let options: MountSettings | undefined;
     setLoaderWindow({ monaco: true });
     globalThis.monaco = { editor: {
       createDiffEditor(_container, settings) {
         options = settings;
         return { setModel() {}, dispose() {}, onDidUpdateDiff: () => ({ dispose() {} }), getModifiedEditor: () => ({
-          getModel: () => ({ getLineCount: () => 3 }),
+          getModel: () => fakeModel({ getLineCount: () => 3 }),
           updateOptions(settings) { assert.equal(settings.folding, false); },
-          changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.push(zone); return zones.length; }, removeZone: (id) => removed.push(id) }); },
+          changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.push(zone); return String(zones.length); }, removeZone: (id) => removed.push(id), layoutZone() { assert.fail('resize is not configured'); } }); },
         }) };
       },
-      createModel: () => ({ dispose() {} }),
+      createModel: () => fakeModel({ dispose() {} }),
     } };
     const view = await mountDiffEditor({}, { original: 'old', modified: 'a\nb\nc', mode, threads: [thread], document });
     assert.equal(zones.length, 1);
@@ -290,13 +290,13 @@ test('supported modes and invalid-mode inline fallback retain exact review rails
     assert.equal(present(options).renderSideBySide, mode === 'side-by-side');
     assert.equal(present(present(options).hideUnchangedRegions).enabled, false);
     view.dispose();
-    assert.deepEqual(removed, [1]);
+    assert.deepEqual(removed, ['1']);
   }
 });
 
 test('review updates group anchors, resize long conversations, reject invalid ranges and dispose observers', async () => {
-  const zones = new Map<string | number, FakeZone>();
-  const relayout: (string | number)[] = [];
+  const zones = new Map<string, FakeZone>();
+  const relayout: string[] = [];
   const observers: ResizeObserver[] = [];
   let nextId = 0;
   const document = new FakeDocument({ top: 0, height: 450 });
@@ -308,16 +308,16 @@ test('review updates group anchors, resize long conversations, reject invalid ra
     disconnect() { this.disconnected = true; }
   }
   const modifiedEditor: Partial<CodeEditor> = {
-    getModel: () => ({ getLineCount: () => 3 }),
+    getModel: () => fakeModel({ getLineCount: () => 3 }),
     updateOptions() {},
-    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.set(++nextId, zone); return nextId; },
+    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.set(String(++nextId), zone); return String(nextId); },
       removeZone: (id) => zones.delete(id), layoutZone: (id) => relayout.push(id) }); },
   };
   setLoaderWindow({ monaco: true });
   globalThis.monaco = { editor: {
     createDiffEditor: () => ({ setModel() {}, getModifiedEditor: () => modifiedEditor,
       onDidUpdateDiff: () => ({ dispose() {} }), dispose() {} }),
-    createModel: () => ({ dispose() {} }),
+    createModel: () => fakeModel({ dispose() {} }),
   } };
   const t = { id: 't', file: 'a', side: 'modified', line_range: { start: 1, end: 2 },
     messages: [{ id: 'm', author: 'user', text: 'Long conversation', created_at: 'now' }] };
@@ -337,25 +337,25 @@ test('review updates group anchors, resize long conversations, reject invalid ra
 });
 
 test('File conversations reveal their zone without clamping or cursor manipulation and clean up on refresh', async () => {
-  const zones = new Map<string | number, FakeZone>();
+  const zones = new Map<string, FakeZone>();
   const reveals: number[] = [];
   const folding: (boolean | undefined)[] = [];
   const document = new FakeDocument({ top: 0, height: 40 });
   setLoaderWindow({ monaco: true });
-  globalThis.monaco = { editor: { EditorOption: { lineHeight: 1 }, create: () => ({
-    getModel: () => ({ getLineCount: () => 3, getLineMaxColumn: () => 2 }),
+  globalThis.monaco = { editor: { EditorOption: { lineHeight: 66 }, create: () => ({
+    getModel: () => fakeModel({ getLineCount: () => 3, getLineMaxColumn: () => 2 }),
     updateOptions: (options) => folding.push(options.folding),
     getTopForPosition: () => 20,
-    getOption: () => 20,
+    getOption(option) { assert.equal(option, 66, 'Monaco 0.45 lineHeight uses numeric enum lookup'); return 20; },
     getLayoutInfo: () => ({ height: 200, horizontalScrollbarHeight: 0 }),
     setScrollTop: (top) => reveals.push(top), render() {},
     setPosition() { assert.fail('must not change cursor'); },
-    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.set(1, zone); return 1; }, removeZone: (id) => zones.delete(id), layoutZone() {} }); },
+    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.set('1', zone); return '1'; }, removeZone: (id) => zones.delete(id), layoutZone() {} }); },
     dispose() {},
   }) } };
   const thread = { id: 't', file: 'a', side: 'modified', line_range: { start: 1, end: 2 }, messages: [] };
   const view = await mountEditor({}, { content: 'a\nb\nc', threads: [thread], document });
-  assert.equal(present(zones.get(1)).afterLineNumber, 2);
+  assert.equal(present(zones.get('1')).afterLineNumber, 2);
   assert.equal(view.revealThread('t'), true);
   assert.equal(reveals.at(-1), 12, 'reveal the conversation with its last anchor line as context');
   view.updateThreads([{ ...thread, line_range: { start: 2, end: 4 } }]);
@@ -370,7 +370,7 @@ test('File conversations reveal their zone without clamping or cursor manipulati
 
 test('long last-line anchors reveal the chosen shared-end conversation using live wrapped and resized geometry', async () => {
   for (const mode of ['file', 'inline', 'side-by-side']) {
-    const zones = new Map<string | number, FakeZone>();
+    const zones = new Map<string, FakeZone>();
     const positions: number[] = [];
     const observers: ResizeObserver[] = [];
     let nextId = 0;
@@ -398,18 +398,18 @@ test('long last-line anchors reveal the chosen shared-end conversation using liv
       render() { for (const zone of zones.values()) zone.onDomNodeTop?.(anchorTop + 20 - scrollTop); },
       changeViewZones(fn) { fn({ addZone(zone) {
         fakeZone(zone);
-        zones.set(++nextId, zone);
+        zones.set(String(++nextId), zone);
         zone.domNode.getBoundingClientRect = () => ({ top: anchorTop + 20 - scrollTop, height: zone.heightInPx });
         const rail = zone.domNode.children[0];
         rail.getBoundingClientRect = () => ({ top: 0, height: firstHeight + 700 });
         rail.children.forEach((article, index) => {
           article.getBoundingClientRect = () => ({ top: anchorTop + 28 - scrollTop + (index ? firstHeight : 0), height: index ? 700 : firstHeight });
         });
-        return nextId;
+        return String(nextId);
       }, removeZone: (id) => zones.delete(id), layoutZone() {} }); },
     };
     setLoaderWindow({ monaco: true });
-    globalThis.monaco = { editor: { EditorOption: { lineHeight: 1 }, create: () => editor, createModel: () => model,
+    globalThis.monaco = { editor: { EditorOption: { lineHeight: 66 }, create: () => editor, createModel: () => model,
       createDiffEditor: () => ({ setModel() {}, dispose() {}, getModifiedEditor: () => editor,
         onDidUpdateDiff: () => ({ dispose() {} }),
       }),
@@ -498,7 +498,7 @@ test('same-anchor native deletion/alignment zones taller than the viewport canno
         }, removeZone() {}, layoutZone() {} }); },
       };
       setLoaderWindow({ monaco: true });
-      globalThis.monaco = { editor: { EditorOption: { lineHeight: 1 }, create: () => editor, createModel: () => model,
+      globalThis.monaco = { editor: { EditorOption: { lineHeight: 66 }, create: () => editor, createModel: () => model,
         createDiffEditor: () => ({ setModel() {}, dispose() {}, getModifiedEditor: () => editor,
           onDidUpdateDiff: () => ({ dispose() {} }),
         }),
@@ -542,8 +542,8 @@ test('selected conversation reveal wins delayed auto-scroll while hunk highlight
     const { panes, updateDiff, revealed } = stubDiffEditor(null);
     const positions: number[] = [];
     panes.modified.updateOptions = () => {};
-    panes.modified.changeViewZones = (fn) => fn({ addZone: () => 1, removeZone() {}, layoutZone() {} });
-    panes.modified.getModel = () => ({ getLineCount: () => 20, getLineMaxColumn: () => 5 });
+    panes.modified.changeViewZones = (fn) => fn({ addZone: () => '1', removeZone() {}, layoutZone() {} });
+    panes.modified.getModel = () => fakeModel({ getLineCount: () => 20, getLineMaxColumn: () => 5 });
     panes.modified.getTopForPosition = () => 160;
     panes.modified.getLayoutInfo = () => ({ height: 400, horizontalScrollbarHeight: 0 });
     panes.modified.render = () => {};
@@ -552,7 +552,7 @@ test('selected conversation reveal wins delayed auto-scroll while hunk highlight
     panes.modified.getTopForLineNumber = (line) => (line - 1) * 20;
     panes.modified.getOption = () => 20;
     panes.modified.setScrollTop = (position) => positions.push(position);
-    globalThis.monaco.editor.EditorOption = { lineHeight: 1 };
+    globalThis.monaco.editor.EditorOption = { lineHeight: 66 };
     const document = new FakeDocument({ top: 0, height: 40 });
     const thread = { id: 't', file: 'a', side: 'modified', line_range: { start: 7, end: 9 }, messages: [] };
     const view = await mountDiffEditor({}, { mode, autoScroll: true, modified: 'content', threads: [thread], document });
@@ -583,7 +583,7 @@ test('diff controller navigates fresh hunks in both directions, wrapping at the 
           getOriginalEditor: () => ({ deltaDecorations: () => [] }),
           getModifiedEditor: () => ({
             deltaDecorations: () => [],
-            getModel: () => ({ getLineCount: () => 20 }),
+            getModel: () => fakeModel({ getLineCount: () => 20 }),
             revealLineInCenter: (line) => revealed.push(line),
             setPosition() {},
             focus() {},
@@ -591,14 +591,16 @@ test('diff controller navigates fresh hunks in both directions, wrapping at the 
           dispose: () => disposed.push('editor'),
         };
       },
-      createModel() { return { dispose: () => disposed.push('model') }; },
+      createModel() { return fakeModel({ dispose: () => disposed.push('model') }); },
     },
   };
 
   const view = await mountDiffEditor({}, { original: 'old', modified: 'new' });
   view.nextChange();
   assert.deepEqual(revealed, []);
-  changes = [2, 8, 15].map((modifiedStartLineNumber) => ({ modifiedStartLineNumber }));
+  const insertion = (modifiedStartLineNumber: number): LineChange => ({ originalStartLineNumber: 0, originalEndLineNumber: 0,
+    modifiedStartLineNumber, modifiedEndLineNumber: modifiedStartLineNumber });
+  changes = [2, 8, 15].map(insertion);
   view.nextChange();
   view.nextChange();
   view.nextChange();
@@ -607,20 +609,20 @@ test('diff controller navigates fresh hunks in both directions, wrapping at the 
   view.prevChange();
   assert.deepEqual(revealed, [2, 8, 15, 2, 15, 8]);
 
-  changes = [{ modifiedStartLineNumber: 4 }, { modifiedStartLineNumber: 20 }];
+  changes = [4, 20].map(insertion);
   view.nextChange();
   view.prevChange();
   assert.deepEqual(revealed.slice(-2), [20, 4]);
-  changes = [{ modifiedStartLineNumber: 0 }]; // deletion at start of file
+  changes = [{ originalStartLineNumber: 1, originalEndLineNumber: 2, modifiedStartLineNumber: 0, modifiedEndLineNumber: 0 }]; // deletion at start of file
   view.nextChange();
   assert.equal(revealed.at(-1), 1);
   changes = [];
   view.prevChange();
   assert.equal(revealed.length, 9);
-  changes = [{ modifiedStartLineNumber: 25 }]; // deletion past the last modified line
+  changes = [{ originalStartLineNumber: 26, originalEndLineNumber: 27, modifiedStartLineNumber: 25, modifiedEndLineNumber: 0 }]; // deletion past the last modified line
   view.prevChange();
   assert.equal(revealed.at(-1), 20);
-  changes = [{ modifiedStartLineNumber: 2 }, { modifiedStartLineNumber: 8 }];
+  changes = [2, 8].map(insertion);
   view.nextChange(); // no hunks reset navigation to the first change
   assert.equal(revealed.at(-1), 2);
   view.dispose();
@@ -636,6 +638,41 @@ test('File mode controller does not expose change navigation', async () => {
   view.dispose();
 });
 
+test('partial editor capabilities stay bound to their receiver through the real mounted controller', async () => {
+  const editor: Partial<CodeEditor> & { line: number; scroll: number; focused: boolean; disposed: boolean } = {
+    line: 12, scroll: 100, focused: false, disposed: false,
+    getModel() { assert.equal(this, editor); return fakeModel({ getLineCount: () => 30 }); },
+    getPosition() { return { lineNumber: this.line, column: 3 }; },
+    getScrollTop() { return this.scroll; },
+    getTopForLineNumber(line) { assert.equal(this, editor); return (line - 1) * 20; },
+    setScrollTop(top) { this.scroll = top; },
+    setPosition(position) { assert.equal(position.column, 1); this.line = position.lineNumber; },
+    focus() { this.focused = true; },
+    dispose() { this.disposed = true; },
+  };
+  setLoaderWindow({ monaco: true });
+  globalThis.monaco = { editor: { create: () => editor } };
+  const view = await mountEditor({}, { content: 'text' });
+  view.scrollUp();
+  assert.deepEqual([editor.line, editor.scroll, editor.focused], [2, -100, true]);
+  view.dispose();
+  assert.equal(editor.disposed, true);
+});
+
+test('unsupported partial capabilities and nullable models fail when exercised, never inventing editor state', async () => {
+  for (const editor of [
+    { dispose() {} },
+    { getPosition: () => ({ lineNumber: 1, column: 1 }), getModel: () => null, dispose() {} },
+    { getPosition: () => ({ lineNumber: 1, column: 1 }), getModel: () => fakeModel({ dispose() {} }), dispose() {} },
+  ]) {
+    setLoaderWindow({ monaco: true });
+    globalThis.monaco = { editor: { create: () => editor } };
+    const view = await mountEditor({}, { content: 'text' });
+    assert.throws(() => view.scrollDown(), /capability/);
+    view.dispose();
+  }
+});
+
 // A Monaco editor stub that records cursor moves, focus and scrolling, in
 // order. `top` gives a line's vertical pixel offset, so tests can model
 // soft-wrapped lines taking several rows.
@@ -647,7 +684,7 @@ function stubCursorEditor({ lineCount, cursor, scrollTop = 0, top = (line: numbe
       getScrollTop: () => scrollTop,
       setScrollTop(position: number) { calls.push({ scrollTop: position }); scrollTop = position; },
       getTopForLineNumber: top,
-      getModel: () => ({ getLineCount: () => lineCount }),
+      getModel: () => fakeModel({ getLineCount: () => lineCount }),
       getPosition: () => cursor,
       setPosition(position: Position) { calls.push(position); cursor = position; },
       focus() { calls.push('focus'); },
@@ -667,7 +704,7 @@ function withMonacoEditor(editor: Partial<CodeEditor>) {
         getModifiedEditor: () => editor,
         dispose() {},
       }),
-      createModel() { return { dispose() {} }; },
+      createModel() { return fakeModel({ dispose() {} }); },
     },
   };
 }
@@ -741,7 +778,7 @@ test('diff viewer uses Monaco diff word wrap when requested', async () => {
         options = settings;
         return { setModel() {}, onDidUpdateDiff: () => ({ dispose() {} }), dispose() {} };
       },
-      createModel() { return { dispose() {} }; },
+      createModel() { return fakeModel({ dispose() {} }); },
     },
   };
   const view = await mountDiffEditor({}, { original: 'old', modified: 'new', wrap: true });
@@ -790,7 +827,7 @@ test('disposing a pending auto-scroll mount releases its listener and ignores qu
     createDiffEditor: () => ({ setModel() {}, dispose() {},
       onDidUpdateDiff(listener) { updated = listener; return { dispose: () => unsubscribed++ }; },
       getLineChanges() { assert.fail('disposed editor must not navigate'); },
-    }), createModel: () => ({ dispose() {} }),
+    }), createModel: () => fakeModel({ dispose() {} }),
   } };
   const view = await mountDiffEditor({}, { original: '', modified: 'new', autoScroll: true });
   view.dispose();
@@ -800,7 +837,7 @@ test('disposing a pending auto-scroll mount releases its listener and ignores qu
 });
 
 // Mounts an editor with a Monaco stub and returns what the composer glue did.
-async function mountWithComposer({ selection, lineCount = 10, content = 'plain', withComposer = true }: { selection: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }; lineCount?: number; content?: string | null; withComposer?: boolean }) {
+async function mountWithComposer({ selection, lineCount = 10, content = 'plain', withComposer = true }: { selection: Selection | null; lineCount?: number; content?: string | null; withComposer?: boolean }) {
   const mouseDown: ((event: MouseEvent) => void)[] = [];
   const zones: FakeZone[] = [];
   const noop = () => ({ dispose() {} });
@@ -808,16 +845,16 @@ async function mountWithComposer({ selection, lineCount = 10, content = 'plain',
   setLoaderWindow({ monaco: true });
   globalThis.monaco = {
     editor: {
-      MouseTargetType: { GUTTER_GLYPH_MARGIN: 'glyph', GUTTER_LINE_NUMBERS: 'numbers' },
+      MouseTargetType: { GUTTER_GLYPH_MARGIN: 2, GUTTER_LINE_NUMBERS: 3 },
       create: () => ({
         updateOptions() {},
         onMouseMove: noop,
         onMouseLeave: noop,
         onMouseDown: (listener) => { mouseDown.push(listener); return { dispose() {} }; },
-        getModel: () => ({ getLineCount: () => lineCount }),
+        getModel: () => fakeModel({ getLineCount: () => lineCount }),
         getSelection: () => selection,
-        getPosition: () => ({ lineNumber: selection.startLineNumber }),
-        changeViewZones: (callback) => callback({ addZone: (zone) => { fakeZone(zone); return zones.push(zone); }, removeZone() {}, layoutZone() {} }),
+        getPosition: () => selection ? ({ lineNumber: selection.startLineNumber, column: selection.startColumn }) : null,
+        changeViewZones: (callback) => callback({ addZone: (zone) => { fakeZone(zone); zones.push(zone); return String(zones.length); }, removeZone() {}, layoutZone() {} }),
         dispose() {},
       }),
     },
@@ -840,7 +877,7 @@ test('addComment opens the composer after the last line of the selected range', 
 test('a gutter click inside the selected range comments on the whole range, outside it on that line', async () => {
   const selection = sel(3, 2, 5, 4);
   const { view, mouseDown, zones } = await mountWithComposer({ selection });
-  const click = (lineNumber: number) => mouseDown[0]({ target: { type: 'glyph', position: { lineNumber } } });
+  const click = (lineNumber: number) => mouseDown[0]({ target: { type: 2, position: { lineNumber, column: 1 } } });
   click(4);
   assert.equal(present(zones.at(-1)).afterLineNumber, 5);
   click(8);
@@ -852,6 +889,17 @@ test('an invalid selection opens no composer', async () => {
   const { view, zones } = await mountWithComposer({ selection: sel(9, 1, 11, 2) });
   view.addComment();
   assert.deepEqual(zones, []);
+  view.dispose();
+});
+
+test('a null selection or mouse position opens nothing from the keyboard, while a gutter click still targets its line', async () => {
+  const { view, zones, mouseDown } = await mountWithComposer({ selection: null });
+  view.addComment();
+  mouseDown[0]({ target: { type: 2, position: null } });
+  assert.equal(zones.length, 0);
+  mouseDown[0]({ target: { type: 2, position: { lineNumber: 4, column: 1 } } });
+  assert.equal(zones.length, 1);
+  assert.equal(zones[0].afterLineNumber, 4);
   view.dispose();
 });
 

@@ -10,7 +10,7 @@ import { captureCommentFocus } from '../../public/comments-view.js';
 import type { ViewerState, ViewerOptions, ReplyInput, ResolutionInput } from '../../public/viewer.js';
 import type { CodeEditor } from '../../public/monaco-port.js';
 import { Element, FakeDocument } from './fake-dom.js';
-import { setLoaderWindow, fakeZone, present } from './monaco-fake.js';
+import { setLoaderWindow, fakeZone, fakeModel, present } from './monaco-fake.js';
 import type { FakeZone } from './monaco-fake.js';
 import type { CommentThread } from '../../public/comment-dom.js';
 
@@ -31,22 +31,22 @@ function createDocument() {
 
 function fixture(mode: string, { addReply, addComment, setThreadResolved }: Pick<ViewerOptions<Element>, 'addReply' | 'addComment' | 'setThreadResolved'> = {}) {
   const document = createDocument();
-  const zones = new Map<string | number, FakeZone>();
+  const zones = new Map<string, FakeZone>();
   let nextId = 0;
   let adds = 0;
   const createEditor = (container: unknown): Partial<CodeEditor> => {
     assert.ok(container instanceof Element);
-    return { getModel: () => ({ getLineCount: () => 3 }), updateOptions() {}, dispose() {},
-    getSelection: () => ({ startLineNumber: 2, endLineNumber: 2 }), deltaDecorations: () => [],
+    return { getModel: () => fakeModel({ getLineCount: () => 3 }), updateOptions() {}, dispose() {},
+    getSelection: () => ({ startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 1 }), deltaDecorations: () => [],
     onMouseMove: () => ({ dispose() {} }), onMouseLeave: () => ({ dispose() {} }), onMouseDown: () => ({ dispose() {} }),
-    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); container.appendChild(zone.domNode); zones.set(++nextId, zone); adds++; return nextId; },
+    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); container.appendChild(zone.domNode); zones.set(String(++nextId), zone); adds++; return String(nextId); },
       removeZone(id) {
         zones.get(id)?.domNode.remove();
         zones.delete(id);
       }, layoutZone() {} }); },
   }; };
   setLoaderWindow({ monaco: true });
-  globalThis.monaco = { editor: { MouseTargetType: {}, create: createEditor, createModel: () => ({ dispose() {} }),
+  globalThis.monaco = { editor: { MouseTargetType: { GUTTER_GLYPH_MARGIN: 2, GUTTER_LINE_NUMBERS: 3 }, create: createEditor, createModel: () => fakeModel({ dispose() {} }),
     createDiffEditor: (container) => {
       const editor = createEditor(container);
       return { setModel() {}, dispose() {}, getModifiedEditor: () => editor, onDidUpdateDiff: () => ({ dispose() {} }) };

@@ -12,7 +12,7 @@ import { createViewer } from '../../public/viewer.js';
 import { mountDiffEditor } from '../../public/monaco-view.js';
 import { renderCommentIndex } from '../../public/comments-view.js';
 import { Element, FakeDocument } from './fake-dom.js';
-import { setLoaderWindow, fakeZone, present } from './monaco-fake.js';
+import { setLoaderWindow, fakeZone, fakeModel, present } from './monaco-fake.js';
 import type { FakeZone } from './monaco-fake.js';
 
 // Manual version-1 fixture delivered through fake IO, not filesystem/network.
@@ -72,10 +72,10 @@ test('manual YAML flows through registered route, isolated workspace state and t
   setLoaderWindow({ monaco: true });
   globalThis.monaco = { editor: {
     createDiffEditor: () => ({ setModel() {}, dispose() {}, onDidUpdateDiff: () => ({ dispose() {} }), getModifiedEditor: () => ({
-      getModel: () => ({ getLineCount: () => 3 }),
+      getModel: () => fakeModel({ getLineCount: () => 3 }),
       updateOptions() {},
-      changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.push(zone); return zones.length; }, removeZone() {} }); },
-    }) }), createModel: () => ({ dispose() {} }),
+      changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.push(zone); return String(zones.length); }, removeZone() {}, layoutZone() { assert.fail('resize is not configured'); } }); },
+    }) }), createModel: () => fakeModel({ dispose() {} }),
   } };
   let viewer: ReturnType<typeof createViewer<Element>>;
   const workspace = createWorkspaceStore({ viewModeStore: createViewModeStore({ getItem: () => 'diff' }),

@@ -39,6 +39,13 @@ its historical evidence below is separate from these integrated counts.
 Issue #73 migrates the five live-observation/activity modules and their five
 matching test files, adding one narrow observation port and one test helper:
 **96 strict TS / 9 remaining JS inputs** (105 total).
+Issue #78 tightens the already-migrated Monaco/AMD contracts and adds a strict
+loader integration test. Combined with the observation migration, the manifest
+contains **97 strict TS / 9 remaining JS inputs** (106 total).
+It does not replace any JS input: #77 already migrated the scoped editor owners
+and tests. The remaining app/workspace orchestration and server JS are outside
+this consumed-contract refinement; the upstream 9-JS ceiling remains unchanged.
+The original #78 branch had 85 TS / 19 JS; its evidence below is historical.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
@@ -67,7 +74,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, minimal path ports and structural watchers accepted; fifty-two invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, Monaco/AMD, minimal path ports and structural watchers accepted; sixty-seven invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -814,3 +821,169 @@ static-serving cases read compiled assets. No smoke, minimum-Node, manual/E2E,
 real watcher or destructive Git evaluation was performed. Fakes establish
 orchestration, failure and timing semantics, not actual filesystem-event delivery,
 native symlink/race fidelity, real Monaco layout/focus/IME or live Git safety.
+
+## Implementation evidence and limitations for #78
+
+This section records the original #78 branch, not the latest combined rebase.
+
+Starting commit: `d131246`. The editor owners and associated tests are already
+strict TypeScript through #77; this issue refines their consumed contracts,
+rather than claiming the same migration twice. The manifest now contains **85
+strict TS / 19 temporary JS inputs** (104 total), including the new loader test.
+There is **no JS reduction** in this scoped refinement and no dependency change.
+Native browser `.js` imports, the classic CDN AMD script and existing loading
+cache behavior remain unchanged; no bundler or alternative loader was added.
+
+### Version-aligned contracts and one-time release verification
+
+Primary evidence is the official [Monaco 0.45.0 declaration](https://unpkg.com/monaco-editor@0.45.0/monaco.d.ts)
+and the [pinned CDN AMD loader](https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.js),
+the same URL used by `public/index.html`. A one-time verification checked SHA-256
+identities of both downloaded artifacts, then compiled consumed projections
+against the unmodified API text (made module-local in a temporary directory,
+removed afterward). The declaration hash was
+`957cbcf34b58a4278c66e824c92e3b0a43b1e7b72567da9105e4faa6e3ae7b1b`;
+the loader hash was
+`effab18afbb4297a23d9d98be95672e4088c735a0677993c329cf29b48914aed`.
+At the user's request, the temporary verification script and its mutation
+controls are not retained as maintained project tooling. The results below are
+historical implementation evidence, not a repeatable checked-in release gate.
+Neither large API nor loader is vendored or installed as a dependency.
+
+The compatibility checks cover string zone IDs; required position columns;
+nullable model/selection projections; text-model line count, maximum column and
+disposal; all four required diff-line coordinates (the unconsumed `charChanges`
+field is not required of a fake); numeric `monaco.editor.MouseTargetType` values
+and nullable mouse positions; required `layoutZone` and diff pane/navigation
+methods; creation and consumed editor methods; precise word-wrap/diff-word-wrap
+unions; and numeric `EditorOption.lineHeight = 66` lookup. Settings are checked
+against both actual construction-option types. The application diff setter's
+actual parameter tuple supplies the model-pair keys and values to a compiler-only
+native-model projection. Its complete signature is compared with the official
+setter restricted to the supplied pair (Monaco also accepts null/view models).
+Consumed text models are **not** claimed to implement complete native
+`ITextModel` objects.
+
+`MonacoRuntime` describes the full **consumed** runtime projection separately
+from `MonacoPort`/`DiffEditorPort`, which allow partial IO capabilities. Partial
+code-editor capabilities retain receiver binding and fail only when exercised.
+The test-only `fakeModel` likewise supplies guarded consumed methods, throwing
+for unconfigured capabilities rather than pretending disposal alone provides
+line geometry. Fakes claim neither broad Monaco classes nor native DOM classes.
+
+The `unknown` mounting/view-zone node is deliberate at the CDN IO edge only:
+public mount overloads still require native `HTMLElement` or structural viewer
+nodes. The release check substitutes `HTMLElement` **only for those DOM fields**
+when checking official creation/zone signatures; it does not assert an opaque
+or fake node into a native element. Local static gates reject that substitution
+by callers. The separate native ResizeObserver adapter retains its `instanceof
+Element` check. No new external JSON/YAML boundary was introduced.
+
+The native-substituted code-editor projection includes `changeViewZones`, not
+just its other methods: the application callback's complete argument tuple and
+return, and every application accessor method's arguments/returns, are compared
+with the official consumed projection. Only the opaque DOM field is substituted;
+the owner-required `heightInPx` remains required although Monaco additionally
+accepts line-height zones. Full native-substituted diff/code-editor projections
+are used for actual editor, pane and factory assignments.
+
+The one-time verification also executed the exact pinned AMD loader in an isolated VM
+with an in-memory success module and simulated script-load failure. This checks
+the consumed `require.config`, module-array, success and error callback shape,
+not real CDN transport, browser worker behavior or actual Monaco mounting.
+
+### Automated implementation checks (Node 22.22.1)
+
+- **Static:** regular `npm run typecheck` passes, accepting native browser and
+  narrow partial IO controls and rejecting all **56** negative probes (41
+  retained plus 15 Monaco/AMD probes). `npm run build` passes. The incremental
+  zone-ID probe was red while numeric IDs were accepted, then green after making
+  IDs strings and correcting fixture values. The official-declaration check was
+  independently compiler-red for optional position columns, non-null models,
+  broad wrap/mouse types and missing strict consumed model/runtime projections;
+  it now passes. No blanket `any`, compiler suppression, fake-to-native cast or
+  dependency installation was added.
+- **Review follow-up red/green:** virtual application-contract mutations first
+  exposed omissions in the original release probe: renaming the model-pair key
+  or adding an unsupported callback argument was incorrectly accepted. After
+  adding the complete native-substituted projections, the normal probe passes
+  and all four temporary mutation controls produced failed compatibility assertions
+  (TS2344): pair key, disposal-only pair value, callback arity and accessor
+  argument. These controls alter compiler-host text only, never source files or
+  fake models, and require a compatibility failure rather than a syntax error.
+- **Integration:** the real `mountEditor`/`mountDiffEditor` owners over narrow
+  Monaco/DOM/ResizeObserver fakes retain hunk navigation/recomputation, scrolling,
+  one-shot autoscroll, zone topology/geometry/resizing, composer ranges,
+  simulated focus and disposal coverage. New cases characterize bound partial
+  receivers, unsupported/nullable model failures and null selection/mouse
+  positions. The release enum lookup is explicitly asserted as numeric **66**.
+- **AMD integration:** four new test registrations cover preloaded Monaco;
+  exact pinned config/module loading; concurrent file/diff mount gating; fresh
+  model identity and disposal; cached success including late error callbacks;
+  missing loader, config/invocation throws and unknown module-error values;
+  concurrent rejection and persistent rejected-cache behavior without retries.
+  Known local ESM query identities isolate the real owner's module-lifetime
+  cache without exposing a production reset hook. These characterize existing
+  loading behavior, not a runtime retry fix.
+- **Focused unit layer:** the seven existing range tests retain malformed and
+  invalid-input coverage through their `unknown` validation boundary; the
+  `clampLine` unit test remains. No tests or failure assertions were removed.
+
+Focused compiled command after `npm run build`:
+
+```sh
+node --test dist/test/public/monaco-loader.test.js dist/test/public/monaco-view.test.js dist/test/public/comment-range.test.js dist/test/public/viewer.test.js dist/test/public/comments-flow.test.js dist/test/public/replies.test.js
+```
+
+This command passed **74 tests, 0 failed/skipped/cancelled**: 4 loader, 32 Monaco
+owner, 7 range, 21 viewer, 1 comments-flow and 9 replies tests. The final static
+and pinned-release compatibility checks passed, as did `git diff --check`.
+
+### Independent validation and user manual evaluation
+
+An independent check-only worker on Node **22.22.1** passed `npm run typecheck`,
+one full `npm test` run (**598 compiled tests, 0 failed/skipped/cancelled**), the
+pinned-release compatibility check including all four mutation controls, and
+`git diff --check`.
+
+The desktop browser was disconnected, so the primary agent did not operate or
+observe a browser. Instead, the user evaluated the real editor served by
+`npm run dev -- .` from this worktree at `http://localhost:4173` and explicitly
+reported successful checks of:
+
+- Layout in File, inline Diff and side-by-side Diff, including wrapping,
+  resizing and comment alignment near EOF.
+- Keyboard navigation, selection, composer/reply typing, Tab and returning focus.
+- A fresh reload loading Monaco from the CDN without errors.
+- IME composition in a comment or reply.
+
+These are **user-reported manual results**, separate from automated tests; no
+browser/OS/IME details or screenshots were collected. They are not exhaustive
+cross-browser or accessibility evaluation. Automated simulated geometry/focus
+and release type/loader compatibility alone do not establish native layout,
+focus/IME, CDN transport, browser event fidelity, watcher reliability or
+destructive Git safety. No real watcher/destructive Git evaluation, minimum-Node,
+package/Git-install or build smoke rerun is claimed for this implementation.
+
+## Latest-target integration validation (#78 and live observation/activity)
+
+Replaying #78's `31ec55c` onto `origin/main` **`91f89dd`** retains the upstream
+observation migration and all Monaco/AMD contracts and tests. Both evidence
+sections above remain historical; this pass does not rerun the removed optional
+pinned-release checker or restore it as project tooling. The auto-merged manifest
+matches the source trees: **97 strict TS / 9 temporary JS inputs** (106 total),
+including the new loader test, with the upstream 9-JS ceiling unchanged.
+
+On Node **22.22.1**, `npm run typecheck` and `npm run build` passed. All **67
+negative probes** (52 upstream plus 15 Monaco/AMD) reject their invalid inputs;
+native browser/fetch/EventSource/editor/comment/watch/filesystem/timer, Monaco/AMD,
+minimal path and structural watcher positive controls pass. One full `npm test`
+run built and executed the explicit compiled manifest: **600 passed, 0 failed,
+skipped or cancelled**. Working-tree and staged whitespace checks passed. No
+behavioral integration issue was observed, and no dependencies changed.
+
+No focused rerun was needed after the successful full suite. No smoke,
+minimum-Node, browser/manual, real watcher or destructive Git evaluation was
+rerun during this rebase. Earlier user-reported browser results remain separate;
+simulated IO does not prove native layout/focus/IME, CDN/network reliability,
+filesystem-event delivery, races or live Git safety.

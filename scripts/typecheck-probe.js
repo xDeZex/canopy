@@ -131,6 +131,33 @@ watchWorktree('/repo', () => {}, { watch: () => ({ close() {} }) });
 import { FakeWatcher } from '../test/server/observation-fakes.js';
 const simulatedWatch: Watch = () => new FakeWatcher();
 new FakeWatcher().emit('add', 'file.txt', { mtimeMs: 'yesterday' });
+import type { ZoneId, Position, Selection, TextModel, CodeEditor, LineChange, MountSettings, MouseEvent, AmdLoader, MonacoRuntime, ViewZone } from '../public/monaco-port.js';
+const invalidZoneId: ZoneId = 1;
+const invalidPosition: Position = { lineNumber: 1 };
+const invalidSelection: Selection = { startLineNumber: 1, endLineNumber: 2 };
+const invalidModel: TextModel = { dispose() {} };
+declare const code: CodeEditor;
+code.getModel().getLineCount();
+code.getSelection().startLineNumber;
+const invalidChange: LineChange = { modifiedStartLineNumber: 1 };
+const invalidWordWrap: MountSettings['wordWrap'] = 'inherit';
+const invalidDiffWordWrap: MountSettings['diffWordWrap'] = 'bounded';
+const invalidMouseType: MouseEvent['target']['type'] = 'glyph';
+declare const amd: AmdLoader;
+amd.config({ paths: { vs: 42 } });
+amd([42], () => {}, () => {});
+const invalidLineHeight: MonacoRuntime['editor']['EditorOption']['lineHeight'] = 1;
+// Positive controls for supported settings, nullable projections and partial IO.
+const validWordWrap: MountSettings['wordWrap'] = 'wordWrapColumn';
+const validDiffWordWrap: MountSettings['diffWordWrap'] = 'inherit';
+const absentModel: ReturnType<CodeEditor['getModel']> = null;
+const absentSelection: ReturnType<CodeEditor['getSelection']> = null;
+import { codeEditor } from '../public/monaco-port.js';
+codeEditor({ dispose() {} });
+declare const partialEditor: Partial<CodeEditor>;
+const invalidCompleteEditor: CodeEditor = partialEditor;
+declare const opaqueZone: ViewZone;
+const invalidNativeNode: HTMLElement = opaqueZone.domNode;
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   await checkInputs(program, [filename]);
@@ -141,9 +168,9 @@ new FakeWatcher().emit('add', 'file.txt', { mtimeMs: 'yesterday' });
   const projectDiagnostics = diagnostics.filter((diagnostic) => diagnostic.file?.fileName !== filename);
   assert.equal(projectDiagnostics.length, 0, `Project typecheck failed.\n${ts.formatDiagnostics(projectDiagnostics, formatHost)}`);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-   assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322],
-    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
-   console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, minimal path ports and structural watchers accepted; all fifty-two invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2741, 2739, 2739, 2531, 2531, 2739, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322],
+    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, Monaco/AMD, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
+  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, Monaco/AMD, minimal path ports and structural watchers accepted; all sixty-seven invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

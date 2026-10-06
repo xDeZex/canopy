@@ -44,7 +44,7 @@ const DIFF_MODE_OPTIONS = {
   'side-by-side': { renderSideBySide: true, hideUnchangedRegions: { enabled: false } },
 };
 
-const lineCount = (editor: CodeEditor) => editor.getModel().getLineCount();
+const lineCount = (editor: CodeEditor) => required(editor.getModel()).getLineCount();
 
 // Shared public code-editor seam for File and the modified pane of Diff.
 function createThreadZones<E extends ViewerNode<E>>(getEditor: () => CodeEditor, { contentAvailable = true, document, ResizeObserver, composer = null,
@@ -121,8 +121,8 @@ function createThreadZones<E extends ViewerNode<E>>(getEditor: () => CodeEditor,
   if (composer && contentAvailable) {
     const editor = getEditor();
     const MouseTargetType = required(monaco.editor.MouseTargetType);
-    const gutterLine = (event: MouseEvent) => [MouseTargetType.GUTTER_GLYPH_MARGIN, MouseTargetType.GUTTER_LINE_NUMBERS]
-      .includes(event.target.type) ? event.target.position?.lineNumber ?? null : null;
+    const gutterLine = (event: MouseEvent) => (event.target.type === MouseTargetType.GUTTER_GLYPH_MARGIN ||
+      event.target.type === MouseTargetType.GUTTER_LINE_NUMBERS) ? event.target.position?.lineNumber ?? null : null;
     const showHover = (line: number | null) => {
       hoverDecorations = editor.deltaDecorations(hoverDecorations, line === null ? [] : [{
         range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
@@ -174,7 +174,7 @@ function createThreadZones<E extends ViewerNode<E>>(getEditor: () => CodeEditor,
         editor.updateOptions({ folding: !disableFolding });
         foldingDisabled = disableFolding;
       }
-      const count = editor.getModel().getLineCount();
+      const count = lineCount(editor);
       const valid = threads.filter(hasFileAnchor).filter((thread) => {
         const { start, end } = thread.line_range;
         return contentAvailable && !thread.unavailable && thread.side === 'modified' &&
@@ -253,7 +253,7 @@ function createThreadZones<E extends ViewerNode<E>>(getEditor: () => CodeEditor,
       // Monaco 0.45's bottom-for-line query uses column 1, so it stops at the
       // first wrapped segment. The last column plus line height reaches the
       // exact zone boundary, also at EOF, without including following zones.
-      const model = editor.getModel();
+      const model = required(editor.getModel());
       const anchorTop = editor.getTopForPosition(end, required(model.getLineMaxColumn).call(model, end));
       const anchorBottom = anchorTop + editor.getOption(required(monaco.editor.EditorOption).lineHeight);
       // Offscreen native zones are display:none. First expose this zone, then
@@ -329,7 +329,7 @@ async function mountDiffWithDocument<E extends ViewerNode<E>>(container: unknown
 
   const originalModel = required(monaco.editor.createModel).call(monaco.editor, original ?? '', language);
   const modifiedModel = required(monaco.editor.createModel).call(monaco.editor, modified ?? '', language);
-  editor.setModel({ original: originalModel, modified: modifiedModel });
+  required(editor.setModel).call(editor, { original: originalModel, modified: modifiedModel });
   let disposed = false;
   const modifiedEditor = () => codeEditor(required(editor.getModifiedEditor).call(editor));
   const originalEditor = () => codeEditor(required(editor.getOriginalEditor).call(editor));
@@ -370,7 +370,7 @@ async function mountDiffWithDocument<E extends ViewerNode<E>>(container: unknown
     }
 
     const pane = modifiedEditor();
-    const lastLine = pane.getModel().getLineCount();
+    const lastLine = lineCount(pane);
     const lines = changes.map((change) => Math.min(lastLine, Math.max(1, change.modifiedStartLineNumber)));
     const currentIndex = currentChange === null ? -1 : changes.findIndex((change) =>
       change.originalStartLineNumber === currentChange?.originalStartLineNumber
@@ -396,7 +396,7 @@ async function mountDiffWithDocument<E extends ViewerNode<E>>(container: unknown
   }
 
   let pendingAutoScroll = autoScroll;
-  const diffUpdated = editor.onDidUpdateDiff(() => {
+  const diffUpdated = required(editor.onDidUpdateDiff).call(editor, () => {
     if (disposed) return;
     clearMarkers();
     currentLine = null;
@@ -423,7 +423,7 @@ async function mountDiffWithDocument<E extends ViewerNode<E>>(container: unknown
       disposed = true;
       diffUpdated.dispose();
       threadZones.dispose();
-      editor.dispose();
+      required(editor.dispose).call(editor);
       originalModel.dispose();
       modifiedModel.dispose();
     },
@@ -449,7 +449,7 @@ function placeCursor(editor: CodeEditor, lineNumber: number) {
 // soft-wrapped lines and at the ends of the file.
 function scrollWithCursor(editor: CodeEditor, direction: number) {
   const from = required(editor.getPosition()).lineNumber;
-  const to = clampLine(from + direction * SCROLL_LINES, editor.getModel().getLineCount());
+  const to = clampLine(from + direction * SCROLL_LINES, lineCount(editor));
   const distance = editor.getTopForLineNumber(to, true) - editor.getTopForLineNumber(from, true);
   editor.setScrollTop(editor.getScrollTop() + distance);
   placeCursor(editor, to);
