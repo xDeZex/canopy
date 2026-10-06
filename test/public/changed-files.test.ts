@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { changedFiles } from '../../public/changed-files.js';
+import type { FileLeaf, FileNode } from '../../public/collect-files.js';
 
 test('changedFiles lists non-clean files at any depth, sorted by full path', () => {
-  const zAdded = { type: 'file', name: 'z.txt', path: 'z.txt', status: 'added' };
-  const deepModified = { type: 'file', name: 'b.js', path: 'src/deep/b.js', status: 'modified' };
-  const srcDeleted = { type: 'file', name: 'a.js', path: 'src/a.js', status: 'deleted' };
-  const tree = [
+  const zAdded: FileLeaf = { type: 'file', name: 'z.txt', path: 'z.txt', status: 'added' };
+  const deepModified: FileLeaf = { type: 'file', name: 'b.js', path: 'src/deep/b.js', status: 'modified' };
+  const srcDeleted: FileLeaf = { type: 'file', name: 'a.js', path: 'src/a.js', status: 'deleted' };
+  const tree: FileNode[] = [
     zAdded,
     { type: 'file', name: 'clean.txt', path: 'clean.txt', status: 'clean' },
     { type: 'dir', name: 'src', path: 'src', children: [
@@ -19,7 +20,7 @@ test('changedFiles lists non-clean files at any depth, sorted by full path', () 
 });
 
 test('changedFiles sorts alphabetically regardless of letter case', () => {
-  const file = (path) => ({ type: 'file', name: path, path, status: 'modified' });
+  const file = (path: string): FileLeaf => ({ type: 'file', name: path, path, status: 'modified' });
   const tree = [file('Zeta.js'), file('alpha.js'), file('Beta.js')];
 
   assert.deepEqual(changedFiles(tree).map((f) => f.path), ['alpha.js', 'Beta.js', 'Zeta.js']);

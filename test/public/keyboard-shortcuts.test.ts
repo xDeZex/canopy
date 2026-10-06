@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isTypingTarget, shortcutAction } from '../../public/keyboard-shortcuts.js';
+import type { ShortcutEvent } from '../../public/keyboard-shortcuts.js';
 
-const press = (key, extra = {}) => shortcutAction({ key, target: { tagName: 'DIV' }, ...extra });
+const press = (key: string, extra: Partial<ShortcutEvent> = {}) => shortcutAction({ key, target: { tagName: 'DIV' }, ...extra });
 
 test('j and l step back and forward through changes', () => {
   assert.deepEqual(press('j'), { type: 'prev-change' });

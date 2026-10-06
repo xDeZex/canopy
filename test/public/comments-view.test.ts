@@ -1,21 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderCommentIndex, commentsForView, renderComposer, renderConversation } from '../../public/comments-view.js';
+import type { ComposerOptions } from '../../public/comments-view.js';
+import type { CommentThread } from '../../public/comment-dom.js';
+import { Element, FakeDocument } from './fake-dom.js';
 
-const element = (tag) => ({ tag, children: [], textContent: '', events: {},
-  setAttribute(name, value) { this[name] = value; },
-  replaceChildren(...children) { this.children = children; },
-  addEventListener(name, listener) { this.events[name] = listener; },
-});
-const document = { createElement: element };
+const document = new FakeDocument();
 const thread = { id: 't', file: 'missing.js', side: 'modified', line_range: { start: 4, end: 8 },
   created_at: '2026-10-01T12:00:00Z', resolved: true, unavailable: 'missing',
-  messages: [{ id: 'm', author: 'agent', text: 'Secret full text', created_at: 'now' }] };
-const texts = (node) => [node.textContent, ...node.children.flatMap(texts)].join(' ');
+  messages: [{ id: 'm', author: 'agent', text: 'Secret full text', created_at: 'now' }] } satisfies CommentThread;
+const texts = (node: Element): string => [node.textContent, ...node.children.flatMap(texts)].join(' ');
+
+function pendingSave(): { resolve(): void; reject(reason: Error): void } {
+  return { resolve() { throw new Error('No pending save'); }, reject(_reason: Error) { throw new Error('No pending save'); } };
+}
 
 test('sidebar exposes only file/range buttons and the always-useful general navigation button', () => {
   const { file, side, line_range, unavailable, ...general } = { ...thread, id: 'general' };
-  const selected = [];
+  const selected: string[] = [];
   const index = renderCommentIndex(document, { threads: [thread, general] }, {
     onSelectThread: (id) => selected.push(id), onGeneralComments: () => selected.push('general'),
   });
@@ -42,7 +44,7 @@ test('compact rail keeps resolved threads selectable and distinguishes their sta
 });
 
 test('valid inline ranges are available; unavailable anchors never become general', () => {
-  const state = { activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
+  const state: Parameters<typeof commentsForView>[0] = { activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
     fileContent: { working: 'one\ntwo' }, comments: { threads: [
       { ...thread, file: 'a.js', unavailable: null, line_range: { start: 1, end: 2 } }, thread,
       { id: 'general', messages: [] },
@@ -54,16 +56,16 @@ test('valid inline ranges are available; unavailable anchors never become genera
   assert.equal(Object.hasOwn(result.threads[2], 'file'), false);
 });
 
-const tick = () => new Promise((resolve) => setImmediate(resolve));
-const find = (node, tag) => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
-const submit = (form) => form.events.submit({ preventDefault() {} });
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+const find = (node: Element, tag: string): Element[] => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
+const submit = (form: Element) => form.events.submit({ preventDefault() {} });
 
 test('native Resolve/Reopen keeps reply drafts and explicit retry intent across incoming history, without interpreting text', async () => {
-  let finish;
-  const saves = [];
+  let finish = pendingSave();
+  const saves: boolean[] = [];
   const article = renderConversation(document, { ...thread, resolved: false }, { onReply: async () => {}, onSetResolved: (resolved) => {
     saves.push(resolved);
-    return new Promise((resolve, reject) => { finish = { resolve, reject }; });
+    return new Promise<void>((resolve, reject) => { finish = { resolve, reject }; });
   } });
   const reply = find(article, 'button')[0];
   const toggle = find(article, 'button')[1];
@@ -84,7 +86,8 @@ test('native Resolve/Reopen keeps reply drafts and explicit retry intent across 
   assert.equal(find(article, 'textarea')[0], textarea);
   assert.equal(textarea.value, 'Is this resolved? <b>literal draft</b>');
   assert.match(texts(article), /Conflict <img>/);
-  assert.equal(find(article, 'p').at(-1).role, 'alert');
+  assert.equal(find(article, 'p').at(-1)?.role, 'alert');
+  assert.ok(article.updateResolutionState);
   article.updateResolutionState({ blocked: true, warning: 'Cannot refresh; reload comments' });
   assert.equal(toggle.disabled, true);
   await toggle.events.click();
@@ -105,12 +108,12 @@ test('native Resolve/Reopen keeps reply drafts and explicit retry intent across 
 });
 
 test('resolved conversations expose native Reply, retain the same focused draft through updates and show safe retry text', async () => {
-  let finish;
-  const saves = [];
-  const doc = { createElement(tag) { const node = element(tag); node.focus = () => { doc.activeElement = node; }; return node; } };
+  let finish = pendingSave();
+  const saves: string[] = [];
+  const doc = new FakeDocument();
   const article = renderConversation(doc, thread, { onReply: (text) => {
     saves.push(text);
-    return new Promise((resolve, reject) => { finish = { resolve, reject }; });
+    return new Promise<void>((resolve, reject) => { finish = { resolve, reject }; });
   } });
   const reply = find(article, 'button')[0];
   assert.equal(reply.textContent, 'Reply');
@@ -152,6 +155,7 @@ test('an unreadable refresh blocks reply retry until a valid conversation arrive
   find(article, 'button')[0].events.click();
   const textarea = find(article, 'textarea')[0];
   textarea.value = 'keep me';
+  assert.ok(article.updateReplyState);
   article.updateReplyState({ blocked: true, warning: 'Failed to refresh; reload comments before retrying' });
   const form = find(article, 'form')[0];
   assert.equal(find(form, 'button')[0].disabled, true);
@@ -165,8 +169,8 @@ test('an unreadable refresh blocks reply retry until a valid conversation arrive
   assert.equal(textarea.value, 'keep me');
 });
 
-function composer(options = {}) {
-  const calls = [];
+function composer(options: Partial<ComposerOptions> = {}) {
+  const calls: string[][] = [];
   const view = renderComposer(document, { line: 7, onInput: (text) => calls.push(['input', text]),
     onSave: async (text) => { calls.push(['save', text]); }, onCancel: () => calls.push(['cancel']), ...options });
   return { view, calls, form: find(view.node, 'form')[0], textarea: find(view.node, 'textarea')[0] };
@@ -195,7 +199,7 @@ test('composer ignores blank saves and cancels through its button', () => {
 
 test('a failed save shows the error as text, keeps the draft and allows retry; a second submit while saving is ignored', async () => {
   let fail = true;
-  const saves = [];
+  const saves: string[] = [];
   const { view, form, textarea } = composer({ onSave: async (text) => { saves.push(text); if (fail) throw new Error('Comments changed <i>'); } });
   textarea.value = 'my long comment';
   submit(form);
@@ -227,7 +231,7 @@ test('composer retry wording is explicit rather than inferred from save-button t
 });
 
 test('composer labels a range by its inclusive lines and a single line by its line', () => {
-  const label = (options) => find(composer(options).view.node, 'textarea')[0]['aria-label'];
+  const label = (options: Partial<ComposerOptions>) => find(composer(options).view.node, 'textarea')[0]['aria-label'];
   assert.equal(label({ line: 7 }), 'New comment on line 7');
   assert.equal(label({ line: 7, endLine: 7 }), 'New comment on line 7');
   assert.equal(label({ line: 3, endLine: 5 }), 'New comment on lines 3-5');

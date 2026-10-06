@@ -7,9 +7,9 @@
 // worktree's file tree (#4's live status updates) never resets it, since the
 // store is separate from the fetched tree data.
 export function createTreeExpansionStore() {
-  const expandedPathsByWorktree = new Map();
+  const expandedPathsByWorktree = new Map<string, Set<string>>();
 
-  function expandedSetFor(worktreePath) {
+  function expandedSetFor(worktreePath: string) {
     let set = expandedPathsByWorktree.get(worktreePath);
     if (!set) {
       set = new Set();
@@ -19,10 +19,10 @@ export function createTreeExpansionStore() {
   }
 
   return {
-    isExpanded(worktreePath, dirPath) {
+    isExpanded(worktreePath: string, dirPath: string) {
       return expandedSetFor(worktreePath).has(dirPath);
     },
-    toggle(worktreePath, dirPath) {
+    toggle(worktreePath: string, dirPath: string) {
       const set = expandedSetFor(worktreePath);
       if (set.has(dirPath)) set.delete(dirPath);
       else set.add(dirPath);
@@ -31,7 +31,7 @@ export function createTreeExpansionStore() {
     // worktree removal a live, in-session event, so without this a
     // long-running session that repeatedly creates/removes worktrees would
     // otherwise accumulate one forgotten Set per removed worktree forever.
-    pruneToKnownWorktrees(knownPaths) {
+    pruneToKnownWorktrees(knownPaths: Iterable<string>) {
       const known = new Set(knownPaths);
       for (const worktreePath of expandedPathsByWorktree.keys()) {
         if (!known.has(worktreePath)) expandedPathsByWorktree.delete(worktreePath);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composerTarget, rangeFromSelection } from '../../public/comment-range.js';
 
-const sel = (startLineNumber, startColumn, endLineNumber, endColumn) => ({ startLineNumber, startColumn, endLineNumber, endColumn });
+const sel = (startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number) => ({ startLineNumber, startColumn, endLineNumber, endColumn });
 
 test('a cursor or in-line selection anchors to its single line', () => {
   assert.deepEqual(rangeFromSelection(sel(4, 3, 4, 3), 10), { line: 4, endLine: 4 });

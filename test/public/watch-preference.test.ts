@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { createWatchPreferenceStore } from '../../public/watch-preference.js';
 
 test('ignore preference defaults on, persists browser choice, and survives blocked storage', () => {
-  const saved = new Map();
-  const storage = { getItem: (key) => saved.get(key), setItem: (key, value) => saved.set(key, value) };
+  const saved = new Map<string, string>();
+  const storage = { getItem: (key: string) => saved.get(key), setItem: (key: string, value: string) => saved.set(key, value) };
   const preference = createWatchPreferenceStore(storage);
   assert.equal(preference.isEnabled(), true);
   preference.setEnabled(false);

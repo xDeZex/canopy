@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { computeRailWidth, createRailResizer } from '../../public/rail-resize.js';
 import { Element } from './fake-dom.js';
+import type { FakeEvent } from './fake-dom.js';
+import type { PreferenceStorage } from '../../public/preference-storage.js';
 
 test('rail widths default to 220px and leave room for the viewer, even in narrow layouts', () => {
   assert.deepEqual(computeRailWidth(undefined, 1000), { width: 220, min: 160, max: 560 });
@@ -13,23 +15,24 @@ test('rail widths default to 220px and leave room for the viewer, even in narrow
 });
 
 class ResizeElement extends Element {
+  capturedPointer: number | null = null;
   focus() { this.focused = true; }
-  setPointerCapture(id) { this.capturedPointer = id; }
-  hasPointerCapture(id) { return this.capturedPointer === id; }
-  releasePointerCapture(id) {
+  setPointerCapture(id: number) { this.capturedPointer = id; }
+  hasPointerCapture(id: number) { return this.capturedPointer === id; }
+  releasePointerCapture(id: number) {
     if (this.hasPointerCapture(id)) this.capturedPointer = null;
   }
-  removeEventListener(type, listener) {
+  removeEventListener(type: string, listener: (event: FakeEvent) => unknown) {
     if (this.listeners.get(type) === listener) this.listeners.delete(type);
   }
-  emit(type, fields = {}) {
-    const event = { preventDefault() { this.defaultPrevented = true; }, ...fields };
+  emit(type: string, fields: Partial<FakeEvent> = {}) {
+    const event: FakeEvent = { preventDefault() { this.defaultPrevented = true; }, ...fields };
     this.listeners.get(type)?.(event);
     return event;
   }
 }
 
-function setup(storage) {
+function setup(storage?: PreferenceStorage) {
   const bodyEl = new ResizeElement('div');
   const railEl = new ResizeElement('nav');
   const dividerEl = new ResizeElement('div');
@@ -114,10 +117,10 @@ test('cancel, lost capture, window blur, and disposal stop drags and clean up th
 
 test('saved width survives reload and temporary viewport clamping without writes during dragging', () => {
   const values = new Map([['canopy:rail-width', '400']]);
-  const writes = [];
+  const writes: string[][] = [];
   const storage = {
-    getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => { values.set(key, value); writes.push([key, value]); },
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); writes.push([key, value]); },
   };
   const { bodyEl, railEl, dividerEl, window, resizer } = setup(storage);
   assert.equal(railEl.style.width, '400px');

@@ -5,23 +5,23 @@
 // scoped by worktree path — switching the active worktree in the tab bar
 // never carries one worktree's lock into another (#5).
 export function createCommitLockStore() {
-  const lockedShaByWorktree = new Map();
+  const lockedShaByWorktree = new Map<string, string>();
 
   return {
-    lockCommit(worktreePath, sha) {
+    lockCommit(worktreePath: string, sha: string) {
       lockedShaByWorktree.set(worktreePath, sha);
     },
-    setAuto(worktreePath) {
+    setAuto(worktreePath: string) {
       lockedShaByWorktree.delete(worktreePath);
     },
-    getLockedCommit(worktreePath) {
+    getLockedCommit(worktreePath: string) {
       return lockedShaByWorktree.get(worktreePath) ?? null;
     },
     // Drops the lock for any worktree not in `knownPaths`. #12 made worktree
     // removal a live, in-session event, so without this a long-running
     // session that repeatedly creates/removes worktrees would otherwise
     // accumulate one forgotten lock entry per removed worktree forever.
-    pruneToKnownWorktrees(knownPaths) {
+    pruneToKnownWorktrees(knownPaths: Iterable<string>) {
       const known = new Set(knownPaths);
       for (const worktreePath of lockedShaByWorktree.keys()) {
         if (!known.has(worktreePath)) lockedShaByWorktree.delete(worktreePath);

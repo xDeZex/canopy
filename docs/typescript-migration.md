@@ -16,11 +16,14 @@ the HTTP app, request handler and their three test files: **7 strict TS inputs
 and 87 remaining JS inputs**. Issue #70 then migrates four discovery/commit/deletion
 modules and five further test files (the HTTP integration test overlaps #69),
 and adds three narrow port/test helpers: **19 TS / 78 JS inputs**.
+Issue #75 migrates 17 browser helpers/controllers, their 17 test files and the
+shared DOM helper, and adds two narrow port/type modules: **56 strict TS inputs
+and 43 remaining JS inputs**.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 78-JS ceiling. New code should be TypeScript and listed explicitly.
+a 43-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -44,7 +47,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; sixteen deliberately invalid routing/HTTP/discovery/Git/commit/confirmation calls and response shapes rejected by the compiler |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser ports accepted; nineteen invalid routing/HTTP/discovery/Git/commit/confirmation calls, response shapes, fake DOM capabilities and a range-less file anchor rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -251,3 +254,75 @@ reusable fail-closed fake. Unused request capabilities in the live-ref fixture
 now fail closed instead of passing undefined. The polling port accepts readonly
 snapshots and the HTTP adapter narrows unknown polling errors before forwarding
 their message. External Git, filesystem and watcher limitations remain unchanged.
+
+## Implementation evidence and limitations for #75
+
+This section records the original isolated #75 branch, not the cumulative
+integration branch.
+
+Migrated sources: `collect-files`, `changed-files`, `worktree-select`,
+`comments-after-load`, `comments-view`, `comment-range`, `view-mode`,
+`auto-scroll`, `watch-preference`, `commit-lock`, `tree-state`,
+`keyboard-shortcuts`, `relative-time`, `edit-time`, `tab-flash`, `tab-scroll`
+and `rail-resize`. Their matching test files and `test/public/fake-dom` are
+strict TypeScript too (35 JavaScript inputs replaced). `comment-dom` and
+`preference-storage` describe only consumed structural capabilities. The
+manifest, decreasing JS ceiling and static probe are updated; `.js` imports,
+compiled serving, orchestration and dependencies are unchanged.
+
+Automated implementation checks on Node 22.22.1:
+
+- **Static:** regular `npm run typecheck` and builds pass, checking all 39 TS
+  inputs. The added positive native-DOM probe was red because focus restoration
+  inferred an overly broad containment input; it became green after narrowing
+  the focus port and making the document determine its element type. Negative
+  probes reject a fake as `Document`, an unsupported fake-document selector and
+  a file conversation without its required range. There are no casts of fake
+  DOM objects to browser classes or suppressed compiler errors.
+- **Unit/integration:** all **102 tests** in the 17 migrated compiled test files
+  passed. Existing invalid selection tests still enter an `unknown` validation
+  boundary. Preference and rail tests simulate storage/window operations;
+  comment rendering simulates element events, drafts and pending saves. The
+  shared DOM helper is explicitly partial (for example, class-only selectors
+  and one listener per event), not a substitute for native DOM fidelity.
+- **Compatibility integration:** **179 tests** in the compiled app,
+  workspace-state/UI, viewer, Monaco-view, comments-flow, replies and reconnect
+  files passed, exercising remaining JS consumers with the migrated helpers.
+  Comment JSON/YAML parsing and validation remain at their existing loader
+  boundaries; this migration does not reinterpret malformed writes as valid
+  conversations or narrow away their warning/retention tests.
+
+- **Final validation:** `npm run typecheck`, all **565 compiled tests** in one
+  full `npm test` run (zero failures), `npm run smoke:build` and the staged diff
+  whitespace check passed on Node 22.22.1. Build smoke verifies manifest guards,
+  stale-output cleanup and native `.js` module HTTP serving; it does not execute
+  the modules in a browser. Independent Standards and Spec reviews of the full
+  diff against the worktree's starting commit `bcce38b` found no actionable issues.
+
+No manual browser/E2E evaluation or real watcher/destructive Git testing was
+performed. Simulated focus/pointer/storage behavior and compile-time native
+compatibility do not prove actual layout, native focus/selection/IME, pointer
+capture or cross-browser persistence behavior. Larger browser/workspace
+orchestrators and the 57 remaining JS inputs are still outside strict checking.
+
+## Final cumulative integration validation (#69, #70 and #75)
+
+On Node 22.22.1, the #75 integration step passed typecheck, including native
+Document/Window positive controls and all **nineteen** combined negative probes,
+build and all **102** focused compiled browser tests in the 17 migrated files.
+The actual manifest contains **56 TS / 43 JS inputs** (99 total), with a 43-JS
+ceiling. Final `npm test` passed **571 compiled tests, 0 failed/skipped/cancelled**;
+`npm run smoke:build` passed manifest rejection, stale cleanup and real CLI/static
+HTML/CSS/native-module HTTP serving. These are cumulative results, distinct from
+the historical isolated branch counts of 569, 567 and 565 above.
+
+Integration self-review inspected the complete source/test/tooling diff against
+`bcce38b2d357e6b87e55243dd7e625de2aa85264` and the original acceptance criteria
+for #69, #70 and #75. All issue evidence sections, migrated manifest entries,
+invalid-input cases and static probes are retained. No blanket `any`, compiler
+suppression, unsafe assertions or fake-to-native DOM casts were introduced;
+the retained `as const` test tables only preserve literal/readonly inference.
+The cumulative diff whitespace check passed. No independent review, minimum-Node
+rerun, package/Git-install smoke or manual browser evaluation was performed in
+this integration session. Fake capabilities do not establish native browser
+layout/focus/IME, watcher reliability or live destructive Git safety.

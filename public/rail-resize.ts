@@ -1,16 +1,39 @@
 // Reserve 320px for the viewer when possible, or half the available space
 // on small screens. The rail's normal minimum yields to that reservation.
-export function computeRailWidth(requestedWidth, availableWidth) {
+import type { PreferenceStorage } from './preference-storage.js';
+
+export function computeRailWidth(requestedWidth: number | undefined, availableWidth: number) {
   const available = Math.max(0, availableWidth);
   const max = Math.max(0, Math.floor(Math.min(560, available - Math.min(320, available / 2))));
   const min = Math.min(160, max);
-  const requested = Number.isFinite(requestedWidth) ? requestedWidth : 220;
+  const requested = typeof requestedWidth === 'number' && Number.isFinite(requestedWidth) ? requestedWidth : 220;
   return { width: Math.round(Math.max(min, Math.min(max, requested))), min, max };
 }
 
 const STORAGE_KEY = 'canopy:rail-width';
 
-export function createRailResizer({ bodyEl, railEl, dividerEl, window, storage }) {
+export interface ResizeEvent {
+  key?: string; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean;
+  button?: number; pointerId?: number; clientX?: number;
+  preventDefault(): void;
+}
+export type ResizeListener = (event: ResizeEvent) => void;
+export interface ResizeEvents {
+  addEventListener(type: string, listener: ResizeListener): void;
+  removeEventListener(type: string, listener: ResizeListener): void;
+}
+export interface RailResizerOptions {
+  bodyEl: { clientWidth: number; classList: { add(name: string): void; remove(name: string): void } };
+  railEl: { style: { width: string } };
+  dividerEl: ResizeEvents & {
+    offsetWidth: number; setAttribute(name: string, value: string): void; focus(): void;
+    setPointerCapture(id: number): void; hasPointerCapture(id: number): boolean; releasePointerCapture(id: number): void;
+  };
+  window: ResizeEvents;
+  storage?: PreferenceStorage | null;
+}
+
+export function createRailResizer({ bodyEl, railEl, dividerEl, window, storage }: RailResizerOptions) {
   let preferredWidth = 220;
   try {
     const saved = Number(storage?.getItem(STORAGE_KEY));
@@ -19,12 +42,12 @@ export function createRailResizer({ bodyEl, railEl, dividerEl, window, storage }
     // Blocked storage leaves the width as an in-memory preference.
     storage = null;
   }
-  let width;
-  let drag = null;
+  let width = 220;
+  let drag: { pointerId: number; clientX: number; width: number } | null = null;
 
   function saveWidth() {
     try {
-      storage?.setItem(STORAGE_KEY, String(preferredWidth));
+      storage?.setItem?.(STORAGE_KEY, String(preferredWidth));
     } catch {
       storage = null;
     }
@@ -40,7 +63,7 @@ export function createRailResizer({ bodyEl, railEl, dividerEl, window, storage }
     dividerEl.setAttribute('aria-valuetext', `${width} pixels`);
   }
 
-  function onKeyDown(event) {
+  function onKeyDown(event: ResizeEvent) {
     if (drag) return;
     if (event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -51,15 +74,15 @@ export function createRailResizer({ bodyEl, railEl, dividerEl, window, storage }
     saveWidth();
   }
 
-  function onPointerMove(event) {
-    if (event.pointerId !== drag?.pointerId) return;
+  function onPointerMove(event: ResizeEvent) {
+    if (!drag || event.pointerId !== drag.pointerId || typeof event.clientX !== 'number') return;
     event.preventDefault();
     preferredWidth = drag.width + event.clientX - drag.clientX;
     applyWidth();
     preferredWidth = width;
   }
 
-  function endDrag(event) {
+  function endDrag(event?: ResizeEvent) {
     if (!drag || (event && event.pointerId !== drag.pointerId)) return;
     const { pointerId } = drag;
     drag = null;
@@ -77,8 +100,8 @@ export function createRailResizer({ bodyEl, railEl, dividerEl, window, storage }
     endDrag();
   }
 
-  function onPointerDown(event) {
-    if (event.button !== 0 || drag) return;
+  function onPointerDown(event: ResizeEvent) {
+    if (event.button !== 0 || drag || typeof event.pointerId !== 'number' || typeof event.clientX !== 'number') return;
     event.preventDefault();
     dividerEl.focus();
     drag = { pointerId: event.pointerId, clientX: event.clientX, width };

@@ -1,11 +1,17 @@
 import { collectFiles } from './collect-files.js';
+import type { FileNode } from './collect-files.js';
+import { hasFileAnchor } from './comment-dom.js';
+import type { CommentNode, CommentDocument, CommentThread, Comments, ReplyState, FocusElement } from './comment-dom.js';
 
 // Never relocate an invalid range onto a convenient line or a synthetic
 // deleted-file model. Unavailable threads stay readable in the main pane.
-export function commentsForView(state) {
+export function commentsForView(state: {
+  fileTree?: FileNode[]; comments?: Comments; activeFile?: string | null;
+  fileContentError?: unknown; fileContent?: { working: string | null } | null; viewerError?: string | null;
+}) {
   const files = new Set(collectFiles(state.fileTree ?? []).map((file) => file.path));
   const threads = (state.comments?.threads ?? []).map((thread) => {
-    if (!Object.hasOwn(thread, 'file')) return thread;
+    if (!hasFileAnchor(thread)) return thread;
     let unavailable = thread.unavailable;
     if (!unavailable) {
       if (!files.has(thread.file)) unavailable = 'Anchor file is not available in the file tree';
@@ -24,7 +30,7 @@ export function commentsForView(state) {
   return { warning: state.comments?.warning ?? null, threads };
 }
 
-function textNode(document, tag, text, className = '') {
+function textNode<E extends CommentNode<E>>(document: CommentDocument<E>, tag: string, text: string, className = '') {
   const node = document.createElement(tag);
   node.className = className;
   node.textContent = text;
@@ -33,20 +39,25 @@ function textNode(document, tag, text, className = '') {
 
 // DOM moves/remounts blur native inputs. Restore only an input that actually
 // had focus, and never override a later user focus choice during an async mount.
-export function captureCommentFocus(document, root) {
+export function captureCommentFocus<E extends FocusElement>(document: { activeElement?: E | null; body?: NoInfer<E> }, root: { contains(node: NoInfer<E>): boolean } | null | undefined) {
   const active = document.activeElement;
-  if (!active || !root?.contains?.(active)) return null;
+  if (!active || !root?.contains(active)) return null;
   const { selectionStart, selectionEnd, selectionDirection } = active;
   return () => {
     if (active.isConnected === false) return;
     if (document.activeElement && document.activeElement !== document.body && document.activeElement !== active) return;
     active.focus?.();
-    if (Number.isInteger(selectionStart)) active.setSelectionRange?.(selectionStart, selectionEnd, selectionDirection);
+    if (typeof selectionStart === 'number' && Number.isInteger(selectionStart) && typeof selectionEnd === 'number') {
+      active.setSelectionRange?.(selectionStart, selectionEnd, selectionDirection ?? undefined);
+    }
   };
 }
 
-export function renderConversation(document, thread, { onReply, onSetResolved } = {}) {
-  const article = document.createElement('article');
+export function renderConversation<E extends CommentNode<E>>(document: CommentDocument<E>, thread: CommentThread, { onReply, onSetResolved }: {
+  onReply?: (text: string) => unknown; onSetResolved?: (resolved: boolean) => unknown;
+} = {}) {
+  const article: E & { updateThread: (next: CommentThread) => void; updateReplyState?: (next: ReplyState) => void; updateResolutionState?: (next: ReplyState) => void } =
+    Object.assign(document.createElement('article'), { updateThread: (_next: CommentThread) => {} });
   const metadata = textNode(document, 'div', '', 'review-thread__metadata');
   const messages = document.createElement('div');
   messages.className = 'review-thread__messages';
@@ -54,19 +65,19 @@ export function renderConversation(document, thread, { onReply, onSetResolved } 
   const resolutionActions = document.createElement('div');
   resolutionActions.className = 'review-thread__resolution';
   let updateResolution = () => {};
-  let messageSnapshot = null;
+  let messageSnapshot: string | null = null;
   // Only the read-only history changes on refresh. The native form stays put,
   // preserving typing, focus, selection and a pending save across updates.
   article.updateThread = (next) => {
     thread = next;
     article.className = `review-thread${thread.resolved ? ' review-thread--resolved' : ''}`;
     article.setAttribute('aria-label', `Thread ${thread.id}, ${thread.resolved ? 'Resolved' : 'Open'}`);
-    metadata.textContent = `${thread.resolved ? 'Resolved' : 'Open'} · ${Object.hasOwn(thread, 'file') ? `${thread.file}:${thread.line_range.start}–${thread.line_range.end}` : 'Comments without a file'}\n${thread.created_at}`;
+    metadata.textContent = `${thread.resolved ? 'Resolved' : 'Open'} · ${hasFileAnchor(thread) ? `${thread.file}:${thread.line_range.start}–${thread.line_range.end}` : 'Comments without a file'}\n${thread.created_at}`;
     updateResolution();
     const snapshot = JSON.stringify(thread.messages);
     if (snapshot === messageSnapshot) return;
     messageSnapshot = snapshot;
-    messages.replaceChildren(...[...thread.messages].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)).map((message) => {
+    messages.replaceChildren(...[...thread.messages].sort((a, b) => Date.parse(a.created_at ?? '') - Date.parse(b.created_at ?? '')).map((message) => {
       const item = document.createElement('section');
       item.replaceChildren(
         textNode(document, 'p', `${message.author} · ${message.created_at}`, 'review-thread__author'),
@@ -81,7 +92,7 @@ export function renderConversation(document, thread, { onReply, onSetResolved } 
     const reply = textNode(document, 'button', 'Reply');
     reply.type = 'button';
     reply.setAttribute('aria-expanded', 'false');
-    let composer = null;
+    let composer: ReturnType<typeof renderComposer<E>> | null = null;
     let replyState = { blocked: false };
     article.updateReplyState = (next) => {
       replyState = next;
@@ -113,9 +124,9 @@ export function renderConversation(document, thread, { onReply, onSetResolved } 
     status.setAttribute('role', 'alert');
     let saving = false;
     let blocked = false;
-    let warning = null;
-    let error = null;
-    let retryResolved = null;
+    let warning: string | null = null;
+    let error: string | null = null;
+    let retryResolved: boolean | null = null;
     updateResolution = () => {
       const resolved = retryResolved ?? !thread.resolved;
       const action = resolved ? 'resolve' : 'reopen';
@@ -139,7 +150,7 @@ export function renderConversation(document, thread, { onReply, onSetResolved } 
         await onSetResolved(resolved);
         retryResolved = null;
       } catch (err) {
-        error = err.message;
+        error = errorMessage(err);
         retryResolved = resolved;
       } finally {
         saving = false;
@@ -152,7 +163,9 @@ export function renderConversation(document, thread, { onReply, onSetResolved } 
   return article;
 }
 
-export function renderCommentIndex(document, { threads = [], warning = null }, { onSelectThread, onGeneralComments }) {
+export function renderCommentIndex<E extends CommentNode<E>>(document: CommentDocument<E>, { threads = [], warning = null }: Partial<Comments>, { onSelectThread, onGeneralComments }: {
+  onSelectThread?: (id: string) => unknown; onGeneralComments?: () => unknown;
+}) {
   const panel = document.createElement('section');
   panel.className = 'comment-index';
   panel.setAttribute('aria-label', 'Comment index');
@@ -165,7 +178,7 @@ export function renderCommentIndex(document, { threads = [], warning = null }, {
     message.setAttribute('role', 'status');
     children.push(message);
   }
-  for (const thread of threads.filter((thread) => Object.hasOwn(thread, 'file'))) {
+  for (const thread of threads.filter(hasFileAnchor)) {
     const { start, end } = thread.line_range;
     const button = textNode(document, 'button', `${thread.file}:${start}${start === end ? '' : `–${end}`}`, 'comment-index__button');
     if (thread.resolved) button.className += ' comment-index__button--resolved';
@@ -178,7 +191,9 @@ export function renderCommentIndex(document, { threads = [], warning = null }, {
   return panel;
 }
 
-export function renderConversationView(document, { threads = [], warning = null }, { general = false, conversation = (thread) => renderConversation(document, thread) } = {}) {
+export function renderConversationView<E extends CommentNode<E>>(document: CommentDocument<E>, { threads = [], warning = null }: Partial<Comments>, { general = false, conversation = (thread: CommentThread) => renderConversation(document, thread) }: {
+  general?: boolean; conversation?: (thread: CommentThread) => E;
+} = {}) {
   const panel = document.createElement('section');
   panel.className = 'conversation-view';
   panel.setAttribute('aria-label', general ? 'Comments without a file' : 'Review conversation');
@@ -197,10 +212,21 @@ export function renderConversationView(document, { threads = [], warning = null 
 // A native form for a new comment on `line`, through `endLine` for a range.
 // The caller owns the draft: `onInput` reports edits, and a rejected `onSave`
 // shows its message as text while the typed text stays so it can be retried.
-export function renderComposer(document, { line, endLine = line, text = '', error = null, label: labelText, saveLabel = 'Save comment', retryLabel, onInput, onSave, onCancel }) {
+export interface ComposerOptions {
+  line?: number; endLine?: number; text?: string; error?: string | null; label?: string;
+  saveLabel?: string; retryLabel?: string; onInput?: (text: string) => unknown;
+  onSave: (text: string) => unknown; onCancel?: () => unknown;
+}
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') return error.message;
+  return String(error);
+}
+
+export function renderComposer<E extends CommentNode<E>>(document: CommentDocument<E>, { line, endLine = line, text = '', error = null, label: labelText, saveLabel = 'Save comment', retryLabel, onInput, onSave, onCancel }: ComposerOptions) {
   const form = document.createElement('form');
   form.className = 'review-composer';
-  const target = endLine > line ? `lines ${line}-${endLine}` : `line ${line}`;
+  const target = endLine !== undefined && line !== undefined && endLine > line ? `lines ${line}-${endLine}` : `line ${line}`;
   const description = labelText ?? `New comment on ${target}`;
   const label = textNode(document, 'label', description, 'review-composer__label');
   const textarea = document.createElement('textarea');
@@ -208,7 +234,7 @@ export function renderComposer(document, { line, endLine = line, text = '', erro
   textarea.rows = 3;
   textarea.value = text;
   textarea.setAttribute('aria-label', description);
-  textarea.addEventListener('input', () => onInput?.(textarea.value));
+  textarea.addEventListener('input', () => onInput?.(textarea.value ?? ''));
   const status = textNode(document, 'p', error ?? '', 'review-comments__warning');
   status.setAttribute('role', 'alert');
   const save = textNode(document, 'button', saveLabel);
@@ -218,9 +244,9 @@ export function renderComposer(document, { line, endLine = line, text = '', erro
   cancel.addEventListener('click', () => onCancel?.());
   let saving = false;
   let blocked = false;
-  let blockedMessage = null;
+  let blockedMessage: string | null = null;
   let saveError = error;
-  const setBlocked = ({ blocked: next, warning = null }) => {
+  const setBlocked = ({ blocked: next, warning = null }: ReplyState) => {
     blocked = next;
     blockedMessage = warning;
     save.disabled = saving || blocked;
@@ -228,18 +254,18 @@ export function renderComposer(document, { line, endLine = line, text = '', erro
   };
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (saving || blocked || textarea.value.trim() === '') return;
+    if (saving || blocked || (textarea.value ?? '').trim() === '') return;
     saving = true;
     save.disabled = true;
     cancel.disabled = true;
     textarea.readOnly = true;
     status.textContent = '';
     try {
-      await onSave(textarea.value);
+      await onSave(textarea.value ?? '');
       saveError = null;
     } catch (err) {
-      saveError = err.message;
-      status.textContent = blockedMessage ? `${err.message}\n${blockedMessage}` : err.message;
+      saveError = errorMessage(err);
+      status.textContent = blockedMessage ? `${saveError}\n${blockedMessage}` : saveError;
       if (retryLabel) save.textContent = retryLabel;
     } finally {
       saving = false;

@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { createViewModeStore, defaultViewMode } from '../../public/view-mode.js';
 
 function memoryStorage() {
-  const values = new Map();
+  const values = new Map<string, string>();
   return {
-    getItem(key) {
+    getItem(key: string) {
       return values.get(key) ?? null;
     },
-    setItem(key, value) {
+    setItem(key: string, value: string) {
       values.set(key, value);
     },
   };
@@ -128,18 +128,18 @@ test('a blocked storage write still updates the session preference', () => {
 });
 
 test('a blocked localStorage property does not prevent store creation or toggling', () => {
-  const previousWindow = globalThis.window;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   try {
-    globalThis.window = Object.defineProperty({}, 'localStorage', {
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: Object.defineProperty({}, 'localStorage', {
       get() { throw new Error('storage blocked'); },
-    });
+    }) });
     const store = createViewModeStore();
     store.seed('clean');
     assert.equal(store.getMode(), 'file');
     store.setMode('diff');
     assert.equal(store.getMode(), 'diff');
   } finally {
-    if (previousWindow === undefined) delete globalThis.window;
-    else globalThis.window = previousWindow;
+    if (previousWindow === undefined) Reflect.deleteProperty(globalThis, 'window');
+    else Object.defineProperty(globalThis, 'window', previousWindow);
   }
 });

@@ -3,7 +3,7 @@
 // independent of the server response's shape, so the label keeps reading
 // correctly as time passes rather than baking a live-relative string into a
 // cacheable response. `now` is injectable for deterministic tests.
-const UNITS = [
+const UNITS: readonly (readonly [string, number])[] = [
   ['year', 60 * 60 * 24 * 365],
   ['month', 60 * 60 * 24 * 30],
   ['week', 60 * 60 * 24 * 7],
@@ -12,7 +12,7 @@ const UNITS = [
   ['minute', 60],
 ];
 
-export function formatRelativeTime(isoDate, now = new Date()) {
+export function formatRelativeTime(isoDate: string, now = new Date()) {
   const seconds = Math.round((now.getTime() - new Date(isoDate).getTime()) / 1000);
 
   if (seconds < 45) return 'just now'; // covers "just now" and future/skewed timestamps alike

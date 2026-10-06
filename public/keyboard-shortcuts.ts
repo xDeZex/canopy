@@ -4,15 +4,16 @@
 
 // Monaco's hidden input is a textarea; it is read-only here, so it does not
 // count as typing, while its find widget's input does.
-export function isTypingTarget(target) {
-  const tag = target?.tagName;
+export function isTypingTarget(target: unknown) {
+  if (typeof target !== 'object' || target === null) return false;
+  const tag = 'tagName' in target ? target.tagName : undefined;
   if (tag === 'SELECT') return true;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return !target.readOnly;
-  return Boolean(target?.isContentEditable);
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return !('readOnly' in target && target.readOnly);
+  return Boolean('isContentEditable' in target && target.isContentEditable);
 }
 
 // Key to action type, so a binding is one named entry rather than a branch.
-const KEY_ACTIONS = {
+const KEY_ACTIONS: Readonly<Record<string, string>> = {
   j: 'prev-change',
   l: 'next-change',
   s: 'prev-file',
@@ -26,7 +27,9 @@ const KEY_ACTIONS = {
   Escape: 'close',
 };
 
-export function shortcutAction({ key, ctrlKey, metaKey, altKey, target }) {
+export interface ShortcutEvent { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; target?: unknown }
+
+export function shortcutAction({ key, ctrlKey, metaKey, altKey, target }: ShortcutEvent) {
   if (ctrlKey || metaKey || altKey || isTypingTarget(target)) return null;
   if (Object.hasOwn(KEY_ACTIONS, key)) return { type: KEY_ACTIONS[key] };
   if (/^[1-9]$/.test(key)) return { type: 'select-worktree', index: Number(key) - 1 };
