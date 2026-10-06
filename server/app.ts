@@ -1,11 +1,11 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createListWorktrees, defaultDeps } from './default-deps.js';
 import { pollWorktrees } from './worktree-watch.js';
 import { createFanOut } from './fan-out.js';
-import { createRequestHandler } from './handle-request.js';
+import { createRequestHandler, type RequestDependencies, type WorktreeChanges, type PollError } from './handle-request.js';
 import { createActivityFeed } from './worktree-activity.js';
 import { createWorktreeDeletion } from './worktree-delete.js';
 import { createCommentLoader } from './comment-loader.js';
@@ -15,10 +15,13 @@ const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 
 const MAX_BODY_BYTES = 256 * 1024;
 
-async function readBody(req) {
-  const chunks = [];
+async function readBody(req: IncomingMessage): Promise<string | undefined> {
+  const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
+  for await (const value of req) {
+    const input: unknown = value;
+    if (!Buffer.isBuffer(input) && typeof input !== 'string') return undefined;
+    const chunk = typeof input === 'string' ? Buffer.from(input) : input;
     size += chunk.length;
     if (size > MAX_BODY_BYTES) return undefined;
     chunks.push(chunk);
@@ -32,6 +35,21 @@ async function readBody(req) {
 // watching calls. An injected `listCommits(worktreePath, file)` receives the
 // open file (or null) and should set `touchesFile` on each commit only when
 // a file is given (see `markTouching`).
+export type AppOptions = {
+  repoRoot?: string;
+  listWorktrees?: RequestDependencies['getWorktrees'];
+  getFileTree?: RequestDependencies['getTree'];
+  getFileContent?: RequestDependencies['getContent'];
+  listCommits?: RequestDependencies['getCommits'];
+  getComments?: RequestDependencies['getComments'];
+  createComment?: RequestDependencies['createComment'];
+  watchWorktree?: RequestDependencies['watchWorktree'];
+  watchWorktreeList?: (onChange: WorktreeChanges, options: { onError: PollError }) => { close: () => void };
+  activityFeed?: { subscribe: RequestDependencies['subscribeToActivity'] };
+  worktreeDeletion?: RequestDependencies['worktreeDeletion'];
+  readStatic?: RequestDependencies['readStatic'];
+};
+
 export function createApp({
   repoRoot = process.cwd(),
   listWorktrees,
@@ -44,22 +62,25 @@ export function createApp({
   watchWorktreeList,
   activityFeed,
   worktreeDeletion,
-} = {}) {
-  const getWorktrees = listWorktrees ?? createListWorktrees(repoRoot);
+  readStatic = readFile,
+}: AppOptions = {}) {
+  const getWorktrees: RequestDependencies['getWorktrees'] = listWorktrees ?? createListWorktrees(repoRoot);
 
   // Defaults to polling `getWorktrees` itself (see worktree-watch.js for why
   // polling rather than a filesystem watch), so an injected `listWorktrees`
   // fake is also what drives this channel in tests.
-  const watchWorktrees =
-    watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, options));
+  const watchWorktrees: NonNullable<AppOptions['watchWorktreeList']> =
+    // The legacy poller's inferred options omit its onError callback. Include
+    // its existing optional timer field, without changing the runtime default.
+    watchWorktreeList ?? ((onChange, options) => pollWorktrees(getWorktrees, onChange, { ...options, intervalMs: undefined }));
 
   // Shares one poll across every open `/api/watch-worktrees` connection.
-  const subscribeToWorktreeChanges = createFanOut(watchWorktrees);
-  const activity = activityFeed ?? createActivityFeed(getWorktrees);
+  const subscribeToWorktreeChanges: RequestDependencies['subscribeToWorktreeChanges'] = createFanOut(watchWorktrees);
+  const activity: NonNullable<AppOptions['activityFeed']> = activityFeed ?? createActivityFeed(getWorktrees);
 
-  const getTree = getFileTree ?? defaultDeps.getFileTree;
-  const getContent = getFileContent ?? defaultDeps.getFileContent;
-  const getCommits = listCommits ?? defaultDeps.listCommits;
+  const getTree: RequestDependencies['getTree'] = getFileTree ?? defaultDeps.getFileTree;
+  const getContent: RequestDependencies['getContent'] = getFileContent ?? defaultDeps.getFileContent;
+  const getCommits: RequestDependencies['getCommits'] = listCommits ?? defaultDeps.listCommits;
 
   const handleRequest = createRequestHandler({
     getWorktrees,
@@ -71,7 +92,7 @@ export function createApp({
     watchWorktree,
     subscribeToWorktreeChanges,
     subscribeToActivity: (callback, options) => activity.subscribe(callback, options),
-    readStatic: readFile,
+    readStatic,
     publicDir: PUBLIC_DIR,
     worktreeDeletion: worktreeDeletion ?? createWorktreeDeletion(repoRoot),
   });
@@ -79,10 +100,10 @@ export function createApp({
   // Translates between Node's `req`/`res` and the pure request handler.
   return createServer(async (req, res) => {
     try {
-      const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+      const { pathname, searchParams } = new URL(req.url ?? '/', 'http://localhost');
       const body = req.method === 'POST' ? await readBody(req) : undefined;
-      const response = await handleRequest({ method: req.method, pathname, searchParams, headers: req.headers,
-        protocol: req.socket.encrypted ? 'https:' : 'http:', body });
+      const response = await handleRequest({ method: req.method ?? 'GET', pathname, searchParams, headers: req.headers,
+        protocol: 'encrypted' in req.socket && req.socket.encrypted ? 'https:' : 'http:', body });
 
       res.writeHead(response.status, response.headers);
 

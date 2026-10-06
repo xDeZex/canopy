@@ -1,42 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequestHandler } from '../../server/handle-request.js';
+import { createRequestHandler, type RequestDependencies, type RequestDescription } from '../../server/handle-request.js';
+import { createCommentStore } from '../../server/comment-store.js';
 
 const PUBLIC = '/srv/public';
 const worktrees = [{ path: '/main' }, { path: '/linked' }];
 
-function makeHandler(overrides = {}) {
+type Overrides = Omit<Partial<RequestDependencies>, 'worktreeDeletion'> & { worktreeDeletion?: Partial<RequestDependencies['worktreeDeletion']> };
+function makeHandler(overrides: Overrides = {}) {
   return createRequestHandler({
     getWorktrees: async () => worktrees,
     getTree: async (worktreePath, ref) => ({ worktreePath, ref }),
     getContent: async () => ({ head: 'h', working: 'w' }),
     getCommits: async (worktreePath, file) => ({ worktreePath, file }),
+    getComments: async () => ({ threads: [] }),
+    createComment: async () => ({}),
+    subscribeToActivity: () => () => {},
     watchWorktree: () => ({ close() {} }),
     subscribeToWorktreeChanges: () => () => {},
     readStatic: async () => Buffer.from('static'),
     publicDir: PUBLIC,
     ...overrides,
+    worktreeDeletion: { preview: async () => ({}), remove: async () => ({}), ...overrides.worktreeDeletion },
   });
 }
 
-function request(method, url) {
+function request(method: string, url: string): RequestDescription {
   const { pathname, searchParams } = new URL(url, 'http://localhost');
   return { method, pathname, searchParams };
 }
 
-const run = (url, method = 'GET', overrides) => makeHandler(overrides)(request(method, url));
+const run = (url: string, method = 'GET', overrides?: Overrides) => makeHandler(overrides)(request(method, url));
+
+function body(value: string | Buffer | undefined): string {
+  assert.equal(typeof value, 'string');
+  if (typeof value !== 'string') assert.fail('Expected a JSON body');
+  return value;
+}
 
 test('comments route is read-only, membership-scoped and ignores arbitrary sidecar/file/ref parameters', async () => {
-  const calls = [];
+  const calls: string[] = [];
   const handler = makeHandler({ getComments: async (path) => { calls.push(path); return { threads: [], warning: 'Invalid YAML' }; } });
   for (const [url, method, status] of [
     ['/api/comments', 'GET', 400], ['/api/comments?worktree=/unknown', 'GET', 404],
     ['/api/comments?worktree=/linked', 'PUT', 404],
-  ]) assert.equal((await handler(request(method, url))).status, status);
+  ] as const) assert.equal((await handler(request(method, url))).status, status);
   assert.deepEqual(calls, []);
   const result = await handler(request('GET', '/api/comments?worktree=/linked&file=/etc/passwd&ref=other'));
   assert.equal(result.status, 200);
-  assert.deepEqual(JSON.parse(result.body), { threads: [], warning: 'Invalid YAML' });
+  assert.deepEqual(JSON.parse(body(result.body)), { threads: [], warning: 'Invalid YAML' });
   assert.equal(result.headers['Cache-Control'], 'no-store');
   assert.deepEqual(calls, ['/linked']);
   const head = await handler(request('HEAD', '/api/comments?worktree=/linked'));
@@ -46,15 +58,15 @@ test('comments route is read-only, membership-scoped and ignores arbitrary sidec
 });
 
 test('deletion preview and confirmed DELETE validate exact membership, origin and custom confirmation header', async () => {
-  const calls = [];
+  const calls: { path: string; confirmation: string }[] = [];
   const handler = makeHandler({ worktreeDeletion: {
     preview: async (path) => ({ path, confirmation: 'signed-snapshot' }),
     remove: async (path, confirmation) => { calls.push({ path, confirmation }); return { removed: true }; },
   } });
   const url = '/api/worktree-deletion?worktree=/linked';
   const preview = await handler(request('GET', url));
-  assert.deepEqual(JSON.parse(preview.body), { path: '/linked', confirmation: 'signed-snapshot' });
-  assert.match(preview.headers['Cache-Control'], /no-store/);
+  assert.deepEqual(JSON.parse(body(preview.body)), { path: '/linked', confirmation: 'signed-snapshot' });
+  assert.equal(preview.headers['Cache-Control'], 'no-store');
   for (const [target, headers, status] of [
     ['/api/worktree-deletion', { host: 'localhost' }, 400],
     ['/api/worktree-deletion?worktree=/arbitrary', { host: 'localhost', 'x-canopy-confirmation': 'token' }, 404],
@@ -62,7 +74,7 @@ test('deletion preview and confirmed DELETE validate exact membership, origin an
     [url, { host: 'localhost', origin: 'https://evil.example', 'x-canopy-confirmation': 'token' }, 403],
     [url, { host: 'localhost', 'sec-fetch-site': 'cross-site', 'x-canopy-confirmation': 'token' }, 403],
     [url, { host: 'localhost', 'sec-fetch-site': 'same-site', 'x-canopy-confirmation': 'token' }, 403],
-  ]) {
+  ] as const) {
     assert.equal((await handler({ ...request('DELETE', target), headers })).status, status);
   }
   assert.deepEqual(calls, []);
@@ -81,23 +93,23 @@ test('deletion errors disclose details and preserve removal outcomes with defaul
     [{ status: 403, removed: false, branchDeleted: null }, 403, { removed: false, branchDeleted: false, branch: null }],
     [{ status: 500, removed: true, branchDeleted: true, branch: 'feature' }, 500,
       { removed: true, branchDeleted: true, branch: 'feature' }],
-  ]) {
+  ] as const) {
     const fail = async () => { throw Object.assign(new Error('git failed /secret/path'), details); };
     const handler = makeHandler({ worktreeDeletion: { preview: fail, remove: fail } });
     for (const method of ['GET', 'DELETE']) {
       const response = await handler({ ...request(method, '/api/worktree-deletion?worktree=/linked'),
         headers: { host: 'localhost', 'x-canopy-confirmation': 'token' } });
       assert.equal(response.status, status);
-      assert.deepEqual(JSON.parse(response.body), { error: 'git failed /secret/path', ...payload });
+      assert.deepEqual(JSON.parse(body(response.body)), { error: 'git failed /secret/path', ...payload });
       assert.equal(response.headers['Cache-Control'], 'no-store');
-      assert.equal(response.headers['Content-Length'], Buffer.byteLength(response.body));
+      assert.equal(response.headers['Content-Length'], Buffer.byteLength(body(response.body)));
     }
   }
 });
 
 test('deletion HEAD runs preview, retaining GET status and headers without a body', async () => {
   for (const fails of [false, true]) {
-    const calls = [];
+    const calls: string[] = [];
     const handler = makeHandler({ worktreeDeletion: {
       preview: async (path) => {
         calls.push(path);
@@ -124,11 +136,11 @@ test('unsupported mutation methods return 404 before membership validation or st
   for (const [route, methods] of [
     ['/api/worktree-deletion', ['POST', 'PUT', 'PATCH', 'OPTIONS']],
     ['/api/comments', ['DELETE', 'PUT', 'PATCH', 'OPTIONS']],
-  ]) {
+  ] as const) {
     for (const method of methods) {
       const response = await handler(request(method, route));
       assert.equal(response.status, 404);
-      assert.deepEqual(JSON.parse(response.body), { error: 'Not found' });
+      assert.deepEqual(JSON.parse(body(response.body)), { error: 'Not found' });
       assert.equal(response.headers['Cache-Control'], undefined);
     }
   }
@@ -149,22 +161,22 @@ test('mutation validation checks membership before origin or body and only then 
       const response = await handler({ ...request(method, `${route}${query}`),
         headers: { host: 'localhost', origin: 'https://evil.example' }, body: 'not json' });
       assert.equal(response.status, status);
-      assert.deepEqual(JSON.parse(response.body), { error });
+      assert.deepEqual(JSON.parse(body(response.body)), { error });
       assert.equal(response.headers['Cache-Control'], cache);
     }
   }
-  for (const body of [undefined, 'not json', 'null', '[1]', '42', '"text"']) {
+  for (const inputBody of [undefined, 'not json', 'null', '[1]', '42', '"text"']) {
     const response = await handler({ ...request('POST', '/api/comments?worktree=/linked'),
-      headers: { host: 'localhost', 'content-type': 'application/json' }, body });
+      headers: { host: 'localhost', 'content-type': 'application/json' }, body: inputBody });
     assert.equal(response.status, 400);
-    assert.deepEqual(JSON.parse(response.body), { error: 'Invalid JSON body' });
+    assert.deepEqual(JSON.parse(body(response.body)), { error: 'Invalid JSON body' });
     assert.equal(response.headers['Cache-Control'], 'no-store');
   }
 });
 
 test('both observation routes forward the browser ignore mode, defaulting on', async () => {
   for (const [query, expected] of [['', true], ['&ignoreGitignore=true', true], ['&ignoreGitignore=false', false]]) {
-    const observed = [];
+    const observed: boolean[] = [];
     const handler = makeHandler({
       watchWorktree: (_path, _change, options) => {
         observed.push(options.ignoreGitignore);
@@ -177,6 +189,7 @@ test('both observation routes forward the browser ignore mode, defaulting on', a
     });
     for (const route of ['/api/watch', '/api/watch-activity']) {
       const response = await handler(request('GET', `${route}?worktree=/linked${query}`));
+      assert.ok(response.stream);
       response.stream.subscribe(() => {})();
     }
     assert.deepEqual(observed, [expected, expected]);
@@ -187,13 +200,13 @@ test('/api/worktrees responds with the listed worktrees as JSON', async () => {
   const res = await run('/api/worktrees');
   assert.equal(res.status, 200);
   assert.equal(res.headers['Content-Type'], 'application/json; charset=utf-8');
-  assert.equal(res.headers['Content-Length'], Buffer.byteLength(res.body));
-  assert.deepEqual(JSON.parse(res.body), worktrees);
+  assert.equal(res.headers['Content-Length'], Buffer.byteLength(body(res.body)));
+  assert.deepEqual(JSON.parse(body(res.body)), worktrees);
 });
 
 test('/api/watch-activity streams timestamp snapshots and cleans up; HEAD starts no watcher', async () => {
-  const calls = [];
-  const overrides = { subscribeToActivity: (notify) => {
+  const calls: string[] = [];
+  const overrides: Overrides = { subscribeToActivity: (notify) => {
     calls.push('subscribe');
     notify({ '/main': 123, '/linked': null });
     return () => calls.push('close');
@@ -202,7 +215,8 @@ test('/api/watch-activity streams timestamp snapshots and cleans up; HEAD starts
   assert.equal(head.stream, undefined);
   assert.deepEqual(calls, []);
   const response = await run('/api/watch-activity', 'GET', overrides);
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(response.stream);
   const close = response.stream.subscribe((frame) => frames.push(frame));
   assert.deepEqual(frames, ['data: {"/main":123,"/linked":null}\n\n']);
   close();
@@ -220,14 +234,14 @@ test('HEAD keeps status and headers but drops the body', async () => {
 test('non-GET/HEAD methods get a 404', async () => {
   const res = await run('/api/worktrees', 'POST');
   assert.equal(res.status, 404);
-  assert.deepEqual(JSON.parse(res.body), { error: 'Not found' });
+  assert.deepEqual(JSON.parse(body(res.body)), { error: 'Not found' });
 });
 
 test('worktree routes reject a missing worktree param with 400', async () => {
   for (const url of ['/api/files', '/api/watch', '/api/commits']) {
     const res = await run(url);
     assert.equal(res.status, 400, url);
-    assert.deepEqual(JSON.parse(res.body), { error: 'Missing "worktree" query param' });
+    assert.deepEqual(JSON.parse(body(res.body)), { error: 'Missing "worktree" query param' });
   }
 });
 
@@ -235,24 +249,24 @@ test('worktree routes reject an unknown worktree with 404', async () => {
   for (const url of ['/api/files?worktree=/nope', '/api/commits?worktree=/nope', '/api/watch?worktree=/nope']) {
     const res = await run(url);
     assert.equal(res.status, 404, url);
-    assert.deepEqual(JSON.parse(res.body), { error: 'Unknown worktree' });
+    assert.deepEqual(JSON.parse(body(res.body)), { error: 'Unknown worktree' });
   }
 });
 
 test('/api/files defaults ref to HEAD and passes an explicit one through', async () => {
-  assert.deepEqual(JSON.parse((await run('/api/files?worktree=/main')).body), { worktreePath: '/main', ref: 'HEAD' });
-  assert.deepEqual(JSON.parse((await run('/api/files?worktree=/main&ref=dev')).body), { worktreePath: '/main', ref: 'dev' });
+  assert.deepEqual(JSON.parse(body((await run('/api/files?worktree=/main')).body)), { worktreePath: '/main', ref: 'HEAD' });
+  assert.deepEqual(JSON.parse(body((await run('/api/files?worktree=/main&ref=dev')).body)), { worktreePath: '/main', ref: 'dev' });
 });
 
 test('/api/commits passes the file filter, or null when absent', async () => {
-  assert.deepEqual(JSON.parse((await run('/api/commits?worktree=/main')).body), { worktreePath: '/main', file: null });
-  assert.deepEqual(JSON.parse((await run('/api/commits?worktree=/main&file=a.js')).body), { worktreePath: '/main', file: 'a.js' });
+  assert.deepEqual(JSON.parse(body((await run('/api/commits?worktree=/main')).body)), { worktreePath: '/main', file: null });
+  assert.deepEqual(JSON.parse(body((await run('/api/commits?worktree=/main&file=a.js')).body)), { worktreePath: '/main', file: 'a.js' });
 });
 
 test('/api/file-content responds with path, head and working', async () => {
   const res = await run('/api/file-content?worktree=/main&file=a.js');
   assert.equal(res.status, 200);
-  assert.deepEqual(JSON.parse(res.body), { path: 'a.js', head: 'h', working: 'w' });
+  assert.deepEqual(JSON.parse(body(res.body)), { path: 'a.js', head: 'h', working: 'w' });
 });
 
 test('/api/file-content rejects a missing file or worktree with the combined message', async () => {
@@ -260,9 +274,9 @@ test('/api/file-content rejects a missing file or worktree with the combined mes
   const noFile = await run('/api/file-content?worktree=/main');
   const noWorktree = await run('/api/file-content?file=a.js');
   assert.equal(noFile.status, 400);
-  assert.deepEqual(JSON.parse(noFile.body), message);
+  assert.deepEqual(JSON.parse(body(noFile.body)), message);
   assert.equal(noWorktree.status, 400);
-  assert.deepEqual(JSON.parse(noWorktree.body), message);
+  assert.deepEqual(JSON.parse(body(noWorktree.body)), message);
 });
 
 test('/api/file-content forbids paths escaping the worktree', async () => {
@@ -275,11 +289,11 @@ test('/api/file-content is 404 when neither side exists', async () => {
     getContent: async () => ({ head: null, working: null }),
   });
   assert.equal(res.status, 404);
-  assert.deepEqual(JSON.parse(res.body), { error: 'Not found' });
+  assert.deepEqual(JSON.parse(body(res.body)), { error: 'Not found' });
 });
 
 test('/api/watch is described as an SSE stream that watches the worktree and cleans up', async () => {
-  const calls = [];
+  const calls: string[][] = [];
   const res = await run('/api/watch?worktree=/main', 'GET', {
     watchWorktree: (worktreePath, onChange) => {
       calls.push(['watch', worktreePath]);
@@ -295,7 +309,8 @@ test('/api/watch is described as an SSE stream that watches the worktree and cle
   });
   assert.deepEqual(calls, []);
 
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(res.stream);
   const cleanup = res.stream.subscribe((frame) => frames.push(frame));
   assert.deepEqual(frames, ['data: {"paths":["a.js"]}\n\n']);
   cleanup();
@@ -303,7 +318,7 @@ test('/api/watch is described as an SSE stream that watches the worktree and cle
 });
 
 test('/api/watch delivers index invalidations separately from file edits for the requested worktree', async () => {
-  let invalidate;
+  let invalidate: (() => void) | undefined;
   let closed = false;
   const res = await run('/api/watch?worktree=/linked', 'GET', {
     watchWorktree: (worktreePath, onChange, options) => {
@@ -313,9 +328,10 @@ test('/api/watch delivers index invalidations separately from file edits for the
       return { close: () => { closed = true; } };
     },
   });
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(res.stream);
   const cleanup = res.stream.subscribe((frame) => frames.push(frame));
-  assert.equal(typeof invalidate, 'function');
+  assert.ok(invalidate);
   invalidate();
   assert.deepEqual(frames, [
     'data: {"paths":["open.txt"]}\n\n',
@@ -338,7 +354,8 @@ test('/api/watch-worktrees frames snapshots and poll errors, and unsubscribes on
   });
   assert.equal(res.headers['Content-Type'], 'text/event-stream; charset=utf-8');
 
-  const frames = [];
+  const frames: string[] = [];
+  assert.ok(res.stream);
   const cleanup = res.stream.subscribe((frame) => frames.push(frame));
   assert.deepEqual(frames, [
     'data: [{"path":"/a"}]\n\n',
@@ -367,12 +384,13 @@ test('HEAD on every SSE route keeps GET headers without a body, stream or subscr
 });
 
 test('static: / serves index.html with its content type and length', async () => {
-  const read = [];
+  const read: string[] = [];
   const res = await run('/', 'GET', { readStatic: async (p) => (read.push(p), Buffer.from('<html>')) });
   assert.deepEqual(read, ['/srv/public/index.html']);
   assert.equal(res.status, 200);
   assert.equal(res.headers['Content-Type'], 'text/html; charset=utf-8');
   assert.equal(res.headers['Content-Length'], 6);
+  assert.ok(Buffer.isBuffer(res.body));
   assert.equal(res.body.toString(), '<html>');
 });
 
@@ -409,7 +427,7 @@ test('dependency errors propagate to the caller', async () => {
 });
 
 test('/api/file-content passes the old path of a renamed file to getContent', async () => {
-  const calls = [];
+  const calls: Parameters<RequestDependencies['getContent']>[] = [];
   const res = await run('/api/file-content?worktree=/main&file=new.js&oldFile=old.js', 'GET', {
     getContent: async (...args) => { calls.push(args); return { head: 'h', working: 'w' }; },
   });
@@ -423,11 +441,43 @@ test('/api/file-content forbids an old path escaping the worktree', async () => 
 });
 
 const jsonHeaders = { host: 'localhost', 'content-type': 'application/json' };
-const post = (handler, url, headers, body = '{"file":"a.js","line":1,"text":"hi","revision":"absent"}') =>
+const post = (handler: ReturnType<typeof createRequestHandler>, url: string, headers: RequestDescription['headers'], body = '{"file":"a.js","line":1,"text":"hi","revision":"absent"}') =>
   handler({ ...request('POST', url), headers, body });
 
+test('unknown comment objects retain downstream thread, reply and resolution validation without filesystem IO', async () => {
+  let ioCalls = 0;
+  const unexpectedIo = async (): Promise<never> => { ioCalls++; assert.fail('Invalid input must not reach filesystem IO'); };
+  const store = createCommentStore({ io: {
+    realpath: unexpectedIo, lstat: unexpectedIo, readFile: unexpectedIo,
+    mkdir: unexpectedIo, rename: unexpectedIo, rm: unexpectedIo, writeExclusive: unexpectedIo,
+  } });
+  const handler = makeHandler({ createComment: store.create });
+  const valid = { file: 'a.js', line: 1, text: 'hi', revision: 'absent' };
+  for (const [input, error] of [
+    [{}, 'Invalid file path'],
+    [{ ...valid, file: 42 }, 'Invalid file path'],
+    [{ ...valid, line: '1' }, 'Invalid line number'],
+    [{ ...valid, endLine: 0 }, 'Invalid end line number'],
+    [{ ...valid, text: { text: 'hi' } }, 'Comment text is required'],
+    [{ ...valid, revision: 42 }, 'Missing comments revision'],
+    [{ ...valid, action: 'unknown' }, 'Unknown comment action'],
+    [{ ...valid, resolved: false }, 'Resolution requires the set-resolved action'],
+    [{ threadId: 42, text: 'reply', revision: 'absent' }, 'Thread id is required'],
+    [{ threadId: 't', text: ['reply'], revision: 'absent' }, 'Comment text is required'],
+    [{ action: 'set-resolved', threadId: 't', resolved: 'true', revision: 'absent' }, 'Resolved must be a boolean'],
+    [{ action: 'set-resolved', threadId: 't', resolved: true, text: 'reply', revision: 'absent' }, 'Resolution cannot include a reply'],
+  ] as const) {
+    const response = await post(handler, '/api/comments?worktree=/linked', jsonHeaders, JSON.stringify(input));
+    assert.equal(response.status, 400);
+    assert.deepEqual(JSON.parse(body(response.body)), { error, conflict: false, revision: null });
+    assert.equal(response.headers['Cache-Control'], 'no-store');
+    assert.equal(response.headers['Content-Length'], Buffer.byteLength(body(response.body)));
+  }
+  assert.equal(ioCalls, 0);
+});
+
 test('comment creation requires a registered worktree, same-origin JSON and a valid body', async () => {
-  const calls = [];
+  const calls: { path: string; input: Record<string, unknown> }[] = [];
   const handler = makeHandler({ createComment: async (path, input) => { calls.push({ path, input }); return { revision: 'r2', thread: { id: 't' } }; } });
   const url = '/api/comments?worktree=/linked';
   for (const [target, headers, body, status] of [
@@ -441,11 +491,11 @@ test('comment creation requires a registered worktree, same-origin JSON and a va
     [url, jsonHeaders, 'not json', 400],
     [url, jsonHeaders, '[1]', 400],
     [url, jsonHeaders, 'null', 400],
-  ]) assert.equal((await post(handler, target, headers, body)).status, status, `${target} ${JSON.stringify(headers)} ${body}`);
+  ] as const) assert.equal((await post(handler, target, headers, body)).status, status, `${target} ${JSON.stringify(headers)} ${body}`);
   assert.deepEqual(calls, []);
   const ok = await post(handler, url, { ...jsonHeaders, origin: 'http://localhost', 'sec-fetch-site': 'same-origin' });
   assert.equal(ok.status, 201);
-  assert.deepEqual(JSON.parse(ok.body), { revision: 'r2', thread: { id: 't' } });
+  assert.deepEqual(JSON.parse(body(ok.body)), { revision: 'r2', thread: { id: 't' } });
   assert.equal(ok.headers['Cache-Control'], 'no-store');
   assert.deepEqual(calls, [{ path: '/linked', input: { file: 'a.js', line: 1, text: 'hi', revision: 'absent' } }]);
 });
@@ -454,11 +504,11 @@ test('comment creation reports conflicts with the latest revision and hides unex
   const conflict = makeHandler({ createComment: async () => { throw Object.assign(new Error('Comments changed'), { status: 409, conflict: true, revision: 'r9' }); } });
   const response = await post(conflict, '/api/comments?worktree=/linked', jsonHeaders);
   assert.equal(response.status, 409);
-  assert.deepEqual(JSON.parse(response.body), { error: 'Comments changed', conflict: true, revision: 'r9' });
+  assert.deepEqual(JSON.parse(body(response.body)), { error: 'Comments changed', conflict: true, revision: 'r9' });
   assert.equal(response.headers['Cache-Control'], 'no-store');
   const broken = makeHandler({ createComment: async () => { throw new Error('EACCES /secret/path'); } });
   const failure = await post(broken, '/api/comments?worktree=/linked', jsonHeaders);
   assert.equal(failure.status, 500);
-  assert.deepEqual(JSON.parse(failure.body), { error: 'Could not save comment', conflict: false, revision: null });
+  assert.deepEqual(JSON.parse(body(failure.body)), { error: 'Could not save comment', conflict: false, revision: null });
   assert.equal(failure.headers['Cache-Control'], 'no-store');
 });

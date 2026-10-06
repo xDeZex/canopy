@@ -1,7 +1,62 @@
 import path from 'node:path';
 import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from './route-logic.js';
 
-const CONTENT_TYPES = {
+// These are HTTP IO ports, not complete models of the legacy Git/comment data.
+// Payloads that HTTP only serializes stay unknown; consumed fields are explicit.
+export type Cleanup = () => void;
+export type WorktreeSnapshot = readonly { readonly path: string | null }[];
+export type WorktreeChanges = (worktrees: WorktreeSnapshot) => void;
+export type PollError = (error: { readonly message: string }) => void;
+export type ActivityChanges = (timestamps: Readonly<Record<string, number | null>>) => void;
+export type WatchOptions = { ignoreGitignore: boolean; onStatusChange: () => void };
+export type WorktreeDeletion = {
+  preview: (worktreePath: string) => Promise<unknown>;
+  remove: (worktreePath: string, confirmation: string) => Promise<unknown>;
+};
+export type RequestDependencies = {
+  getWorktrees: () => Promise<WorktreeSnapshot>;
+  getTree: (worktreePath: string, ref: string) => Promise<unknown>;
+  getContent: (worktreePath: string, file: string, ref: string, options?: { oldPath: string }) => Promise<{ head: string | null; working: string | null }>;
+  getCommits: (worktreePath: string, file: string | null) => Promise<unknown>;
+  getComments: (worktreePath: string) => Promise<unknown>;
+  createComment: (worktreePath: string, input: Record<string, unknown>) => Promise<unknown>;
+  watchWorktree: (worktreePath: string, onChange: (paths: readonly string[]) => void, options: WatchOptions) => { close: Cleanup };
+  subscribeToWorktreeChanges: (callbacks: { onChange: WorktreeChanges; onError: PollError }) => Cleanup;
+  subscribeToActivity: (callback: ActivityChanges, options: { ignoreGitignore: boolean }) => Cleanup;
+  readStatic: (filePath: string) => Promise<Buffer>;
+  publicDir: string;
+  worktreeDeletion: WorktreeDeletion;
+};
+export type RequestDescription = {
+  method: string;
+  pathname: string;
+  searchParams: URLSearchParams;
+  headers?: Record<string, string | readonly string[] | undefined>;
+  protocol?: string;
+  body?: string;
+};
+export type ResponseDescription = {
+  status: number;
+  headers: Record<string, string | number>;
+} & ({
+  body?: string | Buffer;
+  stream?: never;
+} | {
+  body?: never;
+  stream: { subscribe: (write: (frame: string) => void) => Cleanup };
+});
+
+function isObject(input: unknown): input is Record<string, unknown> {
+  return input !== null && typeof input === 'object' && !Array.isArray(input);
+}
+
+// Legacy services throw Error objects with additional response fields. Do not
+// treat a caught value as an Error or trust its status to be a number.
+function errorDetails(error: unknown): Record<string, unknown> {
+  return isObject(error) ? error : {};
+}
+
+const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -16,7 +71,7 @@ const SSE_HEADERS = {
 // A same-origin check for state-changing requests. No CORS opt-in: cross-site
 // HTML forms cannot set custom headers or a JSON content type. Fetch metadata
 // also excludes sibling origins, and Origin must match Host.
-const crossOrigin = (headers, protocol) => !headers.host || (headers['sec-fetch-site'] && headers['sec-fetch-site'] !== 'same-origin') ||
+const crossOrigin = (headers: NonNullable<RequestDescription['headers']>, protocol: string) => !headers.host || (headers['sec-fetch-site'] && headers['sec-fetch-site'] !== 'same-origin') ||
   (headers.origin && headers.origin !== `${protocol}//${headers.host}`);
 
 // Request handling as a function from a request description to a response
@@ -46,13 +101,13 @@ export function createRequestHandler({
   readStatic,
   publicDir,
   worktreeDeletion,
-}) {
-  return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:', body }) {
+}: RequestDependencies) {
+  return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:', body }: RequestDescription): Promise<ResponseDescription> {
     const isReadable = method === 'GET' || method === 'HEAD';
     const includeBody = method !== 'HEAD';
     const ignoreGitignore = searchParams.get('ignoreGitignore') !== 'false';
-    const json = (status, body) => jsonResponse(status, body, { includeBody });
-    const noStoreJson = (status, payload) => {
+    const json = (status: number, body: unknown) => jsonResponse(status, body, { includeBody });
+    const noStoreJson = (status: number, payload: unknown) => {
       const response = json(status, payload);
       response.headers['Cache-Control'] = 'no-store';
       return response;
@@ -61,7 +116,7 @@ export function createRequestHandler({
     // Reject missing and unknown worktrees before any route operates on a
     // path. Returns `{ worktreePath }` or `{ error }` (a ready response).
     // file-content uses a different missing-param message to preserve its API.
-    const resolveWorktree = async (missingError = 'Missing "worktree" query param') => {
+    const resolveWorktree = async (missingError = 'Missing "worktree" query param'): Promise<{ worktreePath: string; error?: never } | { error: ResponseDescription; worktreePath?: never }> => {
       const worktreePath = searchParams.get('worktree');
       if (!worktreePath) return { error: json(400, { error: missingError }) };
 
@@ -75,19 +130,18 @@ export function createRequestHandler({
     async function handleWorktreeDeletion() {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
-      if (method === 'DELETE') {
-        if (!headers['x-canopy-confirmation'] || typeof headers['x-canopy-confirmation'] !== 'string' ||
-            crossOrigin(headers, protocol)) {
-          return noStoreJson(403, { error: 'Same-origin request with confirmation header required' });
-        }
-      }
+      const confirmation = headers['x-canopy-confirmation'];
       try {
-        const result = method === 'DELETE'
-          ? await worktreeDeletion.remove(worktreePath, headers['x-canopy-confirmation'])
-          : await worktreeDeletion.preview(worktreePath);
-        return noStoreJson(200, result);
-      } catch (err) {
-        return noStoreJson(err.status ?? 500, { error: err.message, removed: err.removed === undefined ? false : err.removed,
+        if (method === 'DELETE') {
+          if (!confirmation || typeof confirmation !== 'string' || crossOrigin(headers, protocol)) {
+            return noStoreJson(403, { error: 'Same-origin request with confirmation header required' });
+          }
+          return noStoreJson(200, await worktreeDeletion.remove(worktreePath, confirmation));
+        }
+        return noStoreJson(200, await worktreeDeletion.preview(worktreePath));
+      } catch (error) {
+        const err = errorDetails(error);
+        return noStoreJson(typeof err.status === 'number' ? err.status : 500, { error: err.message, removed: err.removed === undefined ? false : err.removed,
           branchDeleted: err.branchDeleted ?? false, branch: err.branch ?? null });
       }
     }
@@ -95,16 +149,18 @@ export function createRequestHandler({
     async function handleCommentCreation() {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
-      if (crossOrigin(headers, protocol) || !/^application\/json\b/i.test(headers['content-type'] ?? '')) {
+      const contentType = headers['content-type'];
+      if (crossOrigin(headers, protocol) || !/^application\/json\b/i.test(typeof contentType === 'string' ? contentType : String(contentType ?? ''))) {
         return noStoreJson(403, { error: 'Same-origin JSON request required' });
       }
-      let input;
+      let input: unknown;
       try { input = JSON.parse(body ?? ''); } catch { return noStoreJson(400, { error: 'Invalid JSON body' }); }
-      if (input === null || typeof input !== 'object' || Array.isArray(input)) return noStoreJson(400, { error: 'Invalid JSON body' });
+      if (!isObject(input)) return noStoreJson(400, { error: 'Invalid JSON body' });
       try {
         return noStoreJson(201, await createComment(worktreePath, input));
-      } catch (err) {
-        return noStoreJson(err.status ?? 500, { error: err.status ? err.message : 'Could not save comment',
+      } catch (error) {
+        const err = errorDetails(error);
+        return noStoreJson(typeof err.status === 'number' ? err.status : 500, { error: err.status ? err.message : 'Could not save comment',
           conflict: err.conflict ?? false, revision: err.revision ?? null });
       }
     }
@@ -213,7 +269,7 @@ export function createRequestHandler({
   };
 }
 
-async function serveStatic(pathname, { includeBody, readStatic, publicDir }) {
+async function serveStatic(pathname: string, { includeBody, readStatic, publicDir }: Pick<RequestDependencies, 'readStatic' | 'publicDir'> & { includeBody: boolean }): Promise<ResponseDescription> {
   const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
   const filePath = path.resolve(publicDir, relativePath);
 
@@ -235,14 +291,15 @@ async function serveStatic(pathname, { includeBody, readStatic, publicDir }) {
 }
 
 // HEAD: confirm the endpoint exists without opening a live watcher.
-function sseResponse(includeBody, subscribe) {
+function sseResponse(includeBody: boolean, subscribe: NonNullable<ResponseDescription['stream']>['subscribe']): ResponseDescription {
   return includeBody
     ? { status: 200, headers: SSE_HEADERS, stream: { subscribe } }
     : { status: 200, headers: SSE_HEADERS, body: undefined };
 }
 
-function jsonResponse(status, body, { includeBody = true } = {}) {
+function jsonResponse(status: number, body: unknown, { includeBody = true } = {}): ResponseDescription {
   const payload = JSON.stringify(body);
+  if (payload === undefined) throw new TypeError('Response body is not JSON serializable');
   return {
     status,
     headers: {
