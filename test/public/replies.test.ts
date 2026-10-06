@@ -3,13 +3,20 @@ import assert from 'node:assert/strict';
 import { createViewer } from '../../public/viewer.js';
 import { mountEditor, mountDiffEditor } from '../../public/monaco-view.js';
 import { createWorkspaceStore } from '../../public/workspace-state.js';
+import { isRecord } from '../../public/workspace-contracts.js';
 import { createViewModeStore } from '../../public/view-mode.js';
 import { createCommitLockStore } from '../../public/commit-lock.js';
 import { captureCommentFocus } from '../../public/comments-view.js';
+import type { ViewerState, ViewerOptions, ReplyInput, ResolutionInput } from '../../public/viewer.js';
+import type { CodeEditor } from '../../public/monaco-port.js';
+import { Element, FakeDocument } from './fake-dom.js';
+import { setLoaderWindow, fakeZone, present } from './monaco-fake.js';
+import type { FakeZone } from './monaco-fake.js';
+import type { CommentThread } from '../../public/comment-dom.js';
 
-const tick = () => new Promise((resolve) => setImmediate(resolve));
-const find = (node, tag) => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
-const thread = (patch = {}) => ({ id: 't', file: 'a.js', side: 'modified', line_range: { start: 1, end: 2 },
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+const find = (node: Element, tag: string): Element[] => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
+const thread = (patch: Partial<CommentThread> = {}): CommentThread => ({ id: 't', file: 'a.js', side: 'modified', line_range: { start: 1, end: 2 },
   resolved: true, created_at: '2026-10-01T12:00:00Z', messages: [
     { id: 'm', author: 'agent', created_at: '2026-10-01T12:01:00Z', text: 'Resolved <b>literally</b>' },
   ], ...patch });
@@ -17,61 +24,37 @@ const thread = (patch = {}) => ({ id: 't', file: 'a.js', side: 'modified', line_
 // Only the DOM ownership/focus operations used by these adapters. Moving a
 // connected subtree blurs its focused descendant; detached nodes cannot focus.
 function createDocument() {
-  const document = { activeElement: null, createElement(tag) {
-    return { tag, children: [], parentNode: null, events: {}, focusCalls: 0, classList: { add() {}, toggle() {} },
-      get isConnected() { return this === document.body || Boolean(this.parentNode?.isConnected); },
-      setAttribute(name, value) { this[name] = value; },
-      contains(node) { return this === node || this.children.some((child) => child.contains(node)); },
-      remove() {
-        if (this.isConnected && this.contains(document.activeElement)) document.activeElement = document.body;
-        if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
-        this.parentNode = null;
-      },
-      appendChild(child) {
-        child.remove();
-        child.parentNode = this;
-        this.children.push(child);
-        return child;
-      },
-      replaceChildren(...children) {
-        [...this.children].forEach((child) => child.remove());
-        children.forEach((child) => this.appendChild(child));
-      },
-      addEventListener(name, fn) { this.events[name] = fn; },
-      focus() { this.focusCalls++; if (this.isConnected) document.activeElement = this; },
-      setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; },
-      getBoundingClientRect: () => ({ height: 50, top: 0 }),
-    };
-  } };
-  document.body = document.createElement('body');
+  const document = new FakeDocument({ top: 0, height: 50 }, true);
   document.activeElement = document.body;
   return document;
 }
 
-function fixture(mode, { addReply, addComment, setThreadResolved } = {}) {
+function fixture(mode: string, { addReply, addComment, setThreadResolved }: Pick<ViewerOptions<Element>, 'addReply' | 'addComment' | 'setThreadResolved'> = {}) {
   const document = createDocument();
-  const zones = new Map();
+  const zones = new Map<string | number, FakeZone>();
   let nextId = 0;
   let adds = 0;
-  const createEditor = (container) => ({ getModel: () => ({ getLineCount: () => 3 }), updateOptions() {}, dispose() {},
+  const createEditor = (container: unknown): Partial<CodeEditor> => {
+    assert.ok(container instanceof Element);
+    return { getModel: () => ({ getLineCount: () => 3 }), updateOptions() {}, dispose() {},
     getSelection: () => ({ startLineNumber: 2, endLineNumber: 2 }), deltaDecorations: () => [],
     onMouseMove: () => ({ dispose() {} }), onMouseLeave: () => ({ dispose() {} }), onMouseDown: () => ({ dispose() {} }),
-    changeViewZones(fn) { fn({ addZone(zone) { container.appendChild(zone.domNode); zones.set(++nextId, zone); adds++; return nextId; },
+    changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); container.appendChild(zone.domNode); zones.set(++nextId, zone); adds++; return nextId; },
       removeZone(id) {
         zones.get(id)?.domNode.remove();
         zones.delete(id);
       }, layoutZone() {} }); },
-  });
-  globalThis.window = { monaco: true };
+  }; };
+  setLoaderWindow({ monaco: true });
   globalThis.monaco = { editor: { MouseTargetType: {}, create: createEditor, createModel: () => ({ dispose() {} }),
     createDiffEditor: (container) => {
       const editor = createEditor(container);
       return { setModel() {}, dispose() {}, getModifiedEditor: () => editor, onDidUpdateDiff: () => ({ dispose() {} }) };
     },
   } };
-  let state = { activePath: '/repo', activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
+  let state: ViewerState = { worktrees: [], activePath: '/repo', activeFile: 'a.js', fileTree: [{ type: 'file', path: 'a.js' }],
     fileContent: { head: 'before', working: 'one\ntwo\nthree' }, comments: { threads: [thread()], warning: null, revision: 'r1' } };
-  const saves = [];
+  const saves: ReplyInput[] = [];
   const mainEl = document.createElement('main');
   document.body.appendChild(mainEl);
   const viewer = createViewer({ mainEl, document, getState: () => state,
@@ -82,7 +65,7 @@ function fixture(mode, { addReply, addComment, setThreadResolved } = {}) {
     setThreadResolved,
   });
   return { viewer, mainEl, zones, document, saves, get adds() { return adds; },
-    setState(patch) { state = { ...state, ...patch }; },
+    setState(patch: Partial<ViewerState>) { state = { ...state, ...patch }; },
     article: () => find(mainEl, 'article')[0],
   };
 }
@@ -92,7 +75,7 @@ test('resolution stays available in every diff mode and general/unavailable view
   const oldMonaco = globalThis.monaco;
   try {
     for (const mode of ['file', 'inline', 'side-by-side']) {
-      const saves = [];
+      const saves: ResolutionInput[] = [];
       const f = fixture(mode, { setThreadResolved: async (input) => { saves.push(input); } });
       try {
         f.viewer.render();
@@ -103,24 +86,24 @@ test('resolution stays available in every diff mode and general/unavailable view
         textarea.value = 'Is this resolved?';
         textarea.setSelectionRange(1, 4, 'backward');
         const toggle = find(article, 'button').find((button) => button.textContent === 'Reopen');
-        await toggle.events.click();
+        await present(toggle).events.click();
         assert.deepEqual(saves, [{ threadId: 't', resolved: false, worktree: '/repo' }]);
         f.setState({ comments: { threads: [thread({ resolved: false })], revision: 'r2' } });
         f.viewer.refreshComments({ reveal: false });
         f.viewer.render();
         await tick();
         assert.equal(f.article(), article);
-        assert.equal(toggle.textContent, 'Resolve');
+        assert.equal(present(toggle).textContent, 'Resolve');
         assert.equal(f.document.activeElement, textarea);
         assert.deepEqual([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection], [1, 4, 'backward']);
         const { file, side, line_range, ...general } = thread({ resolved: false });
         f.setState({ mainView: 'general', comments: { threads: [general], revision: 'r3' } });
         f.viewer.refreshComments({ reveal: false });
-        await toggle.events.click();
+        await present(toggle).events.click();
         assert.equal(f.article(), article);
         f.setState({ mainView: 'file', selectedThreadId: 't', comments: { threads: [thread({ resolved: false, unavailable: 'missing' })], revision: 'r4' } });
         f.viewer.refreshComments({ reveal: false });
-        await toggle.events.click();
+        await present(toggle).events.click();
         assert.equal(f.article(), article);
         assert.equal(textarea.value, 'Is this resolved?');
         assert.deepEqual(saves.slice(1), [
@@ -128,12 +111,54 @@ test('resolution stays available in every diff mode and general/unavailable view
         ]);
         f.setState({ activePath: '/other', comments: { threads: [], revision: 'absent' } });
         f.viewer.render();
-        await toggle.events.click();
+        await present(toggle).events.click();
         assert.equal(saves.length, 3, 'detached controls cannot cross-save into another worktree');
-        assert.match(find(article, 'p').at(-1).textContent, /worktree changed/);
+        assert.match(present(find(article, 'p').at(-1)).textContent, /worktree changed/);
       } finally { f.viewer.dispose(); }
     }
-  } finally { globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
+});
+
+test('viewer blocks retained reply and resolution forms until comments have a valid revision and no warning', async () => {
+  const oldWindow = globalThis.window;
+  const oldMonaco = globalThis.monaco;
+  const resolutions: ResolutionInput[] = [];
+  const f = fixture('file', { setThreadResolved: async (input) => { resolutions.push(input); } });
+  try {
+    f.viewer.render();
+    await tick();
+    const article = f.article();
+    find(article, 'button')[0].events.click();
+    const textarea = find(article, 'textarea')[0];
+    textarea.value = 'retained while blocked';
+    const form = find(article, 'form')[0];
+    const save = find(form, 'button')[0];
+    const toggle = present(find(article, 'button').find((button) => button.textContent === 'Reopen'));
+    for (const comments of [
+      { threads: [thread()] },
+      { threads: [thread()], revision: 'r2', warning: 'invalid YAML' },
+    ]) {
+      f.setState({ comments });
+      f.viewer.refreshComments({ reveal: false });
+      assert.equal(find(article, 'textarea')[0], textarea);
+      assert.equal(save.disabled, true);
+      assert.equal(toggle.disabled, true);
+      assert.match(find(form, 'p')[0].textContent, /loading|invalid YAML/);
+      await form.events.submit({ preventDefault() {} });
+      await toggle.events.click();
+      assert.deepEqual(f.saves, []);
+      assert.deepEqual(resolutions, []);
+    }
+    f.setState({ comments: { threads: [thread()], revision: 'r3', warning: null } });
+    f.viewer.refreshComments({ reveal: false });
+    assert.equal(save.disabled, false);
+    assert.equal(toggle.disabled, false);
+    assert.equal(textarea.value, 'retained while blocked');
+    await form.events.submit({ preventDefault() {} });
+    await toggle.events.click();
+    assert.deepEqual(f.saves, [{ threadId: 't', text: 'retained while blocked', worktree: '/repo' }]);
+    assert.deepEqual(resolutions, [{ threadId: 't', resolved: false, worktree: '/repo' }]);
+  } finally { f.viewer.dispose(); setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });
 
 test('real viewer/Monaco seam preserves reply typing, selection and focus through live history and remounts in every mode', async () => {
@@ -176,7 +201,7 @@ test('real viewer/Monaco seam preserves reply typing, selection and focus throug
       assert.equal(find(article, 'textarea').length, 0);
       f.viewer.dispose();
     }
-  } finally { globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });
 
 test('focus capture skips detached inputs and DOM reparenting has one owner and blurs focused descendants', () => {
@@ -188,6 +213,7 @@ test('focus capture skips detached inputs and DOM reparenting has one owner and 
   first.appendChild(textarea);
   textarea.focus();
   const restore = captureCommentFocus(document, first);
+  assert.ok(restore);
   first.remove();
   assert.equal(textarea.isConnected, false);
   assert.equal(document.activeElement, document.body);
@@ -223,7 +249,7 @@ test('topology refresh reparents retained reply DOM and restores selection, but 
         f.viewer.refreshComments({ reveal: false });
         assert.equal(f.article(), article);
         assert.notEqual(article.parentNode, oldRail);
-        assert.equal(oldRail.contains(article), false, 'reparented article no longer belongs to its old rail');
+        assert.equal(present(oldRail).contains(article), false, 'reparented article no longer belongs to its old rail');
         assert.equal(textarea.isConnected, true);
         assert.equal(f.document.activeElement, textarea);
         assert.equal(textarea.focusCalls, focuses + 1, 'zone detach/reparent really required focus restoration');
@@ -240,22 +266,24 @@ test('topology refresh reparents retained reply DOM and restores selection, but 
         assert.equal(f.document.activeElement, f.document.body, 'returning an unfocused draft does not steal focus');
       } finally { f.viewer.dispose(); }
     }
-  } finally { globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });
 
 test('a retained new-comment composer cannot steal reply focus after an editor remount', async () => {
   const oldWindow = globalThis.window;
   const oldMonaco = globalThis.monaco;
   const oldTimeout = globalThis.setTimeout;
-  const timers = [];
-  globalThis.setTimeout = (callback) => { timers.push(callback); };
+  const timers: (() => void)[] = [];
+  // This IO fake queues only the callback used by composer focus; it does not
+  // advertise a Node timer handle or any of its unsupported methods.
+  Object.defineProperty(globalThis, 'setTimeout', { value: (callback: () => void) => { timers.push(callback); }, writable: true, configurable: true });
   const f = fixture('file', { addComment: async () => {} });
   try {
     f.viewer.render();
     await tick();
     f.viewer.addComment();
     timers.splice(0).forEach((callback) => callback());
-    const newComment = [...f.zones.values()].find((zone) => zone.ordinal === 0).domNode;
+    const newComment = present([...f.zones.values()].find((zone) => zone.ordinal === 0)).domNode;
     const newText = find(newComment, 'textarea')[0];
     newText.value = 'also a new comment';
     newText.events.input();
@@ -267,24 +295,27 @@ test('a retained new-comment composer cannot steal reply focus after an editor r
     timers.splice(0).forEach((callback) => callback());
     assert.equal(f.document.activeElement, replyText);
     assert.equal(replyText.value, 'reply draft');
-  } finally { f.viewer.dispose(); globalThis.setTimeout = oldTimeout; globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { f.viewer.dispose(); globalThis.setTimeout = oldTimeout; setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });
 
 test('workspace refresh, real viewer and native reply form show incoming conflict history before retry, then reload the reopened reply', async () => {
   const oldWindow = globalThis.window;
   const oldMonaco = globalThis.monaco;
-  let workspace;
+  let workspace: ReturnType<typeof createWorkspaceStore>;
   const f = fixture('inline', { addReply: (input) => workspace.addReply(input) });
   let comments = { threads: [thread()], warning: null, revision: 'r1' };
-  let releaseRefresh;
+  let releaseRefresh: (() => void) | undefined;
   let holdRefresh = false;
-  const posts = [];
-  const response = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
+  const posts: Record<string, unknown>[] = [];
+  const response = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
   workspace = createWorkspaceStore({ viewModeStore: createViewModeStore({ getItem: () => 'diff' }),
     commitLock: createCommitLockStore(), onActivePathChanged() {},
     async fetch(url, options) {
       if (options?.method === 'POST') {
-        const input = JSON.parse(options.body);
+        const parsed: unknown = JSON.parse(present(options.body));
+        assert.ok(isRecord(parsed));
+        const input = parsed;
+        assert.ok(typeof input.text === 'string');
         posts.push(input);
         if (input.revision !== comments.revision) return response({ error: 'Comments changed; review and retry', conflict: true }, 409);
         comments = { threads: [{ ...comments.threads[0], resolved: false, messages: [...comments.threads[0].messages,
@@ -292,7 +323,7 @@ test('workspace refresh, real viewer and native reply form show incoming conflic
         return response({}, 201);
       }
       if (url.startsWith('/api/comments')) {
-        if (holdRefresh) await new Promise((resolve) => { releaseRefresh = resolve; });
+        if (holdRefresh) await new Promise<void>((resolve) => { releaseRefresh = resolve; });
         return response(comments);
       }
       if (url.startsWith('/api/files')) return response([{ type: 'file', path: 'a.js', name: 'a.js', status: 'modified' }]);
@@ -322,7 +353,7 @@ test('workspace refresh, real viewer and native reply form show incoming conflic
     await tick();
     assert.equal(save.disabled, true);
     assert.equal(textarea.value, 'Is this resolved? <b>keep literal</b>');
-    releaseRefresh();
+    present(releaseRefresh)();
     holdRefresh = false;
     await saving;
     assert.equal(f.article(), article);
@@ -338,7 +369,7 @@ test('workspace refresh, real viewer and native reply form show incoming conflic
     assert.equal(workspace.getState().comments.threads[0].resolved, false);
     assert.deepEqual(workspace.getState().comments.threads[0].messages.map((message) => message.id), ['m', 'unseen', 'saved']);
     assert.equal(find(article, 'textarea').length, 0);
-  } finally { f.viewer.dispose(); globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { f.viewer.dispose(); setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });
 
 test('general and unavailable conversations retain drafts on refresh, navigation and worktree round trips without cross-saving', async () => {
@@ -367,7 +398,7 @@ test('general and unavailable conversations retain drafts on refresh, navigation
     f.setState({ mainView: 'file', selectedThreadId: 't', comments: { threads: [thread({ unavailable: 'missing' })], revision: 'r2' } });
     f.viewer.refreshComments({ reveal: false });
     assert.equal(find(f.article(), 'textarea')[0], textarea, 'anchor changes keep the thread draft');
-  } finally { f.viewer.dispose(); globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { f.viewer.dispose(); setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });
 
 test('navigation during post-save refresh closes confirmed saved drafts but retains failed drafts without another POST', async () => {
@@ -375,24 +406,26 @@ test('navigation during post-save refresh closes confirmed saved drafts but reta
   const oldMonaco = globalThis.monaco;
   try {
     for (const status of [409, 201]) {
-      let workspace;
+      let workspace: ReturnType<typeof createWorkspaceStore>;
       const f = fixture('file', { addReply: (input) => workspace.addReply(input) });
-      const posts = [];
-      let releaseRefresh;
+      const posts: Record<string, unknown>[] = [];
+      let releaseRefresh: (() => void) | undefined;
       let holdNextRefresh = false;
-      const response = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
+      const response = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
       workspace = createWorkspaceStore({ viewModeStore: createViewModeStore({ getItem: () => 'file' }),
         commitLock: createCommitLockStore(), onActivePathChanged() {},
         async fetch(url, options) {
           if (options?.method === 'POST') {
-            posts.push(JSON.parse(options.body));
+            const parsed: unknown = JSON.parse(present(options.body));
+            assert.ok(isRecord(parsed));
+            posts.push(parsed);
             holdNextRefresh = true;
             return response(status === 201 ? {} : { error: 'Comments changed', conflict: true }, status);
           }
           if (url.startsWith('/api/comments')) {
             if (holdNextRefresh) {
               holdNextRefresh = false;
-              await new Promise((resolve) => { releaseRefresh = resolve; });
+              await new Promise<void>((resolve) => { releaseRefresh = resolve; });
             }
             return response({ threads: [thread()], warning: null, revision: 'r2' });
           }
@@ -421,7 +454,7 @@ test('navigation during post-save refresh closes confirmed saved drafts but reta
         workspace.selectWorktree('/repo');
         await workspace.selectFile('a.js');
         await tick();
-        releaseRefresh();
+        present(releaseRefresh)();
         await saving;
         assert.equal(f.article(), article);
         assert.equal(posts.length, 1);
@@ -435,5 +468,5 @@ test('navigation during post-save refresh closes confirmed saved drafts but reta
         }
       } finally { f.viewer.dispose(); }
     }
-  } finally { globalThis.window = oldWindow; globalThis.monaco = oldMonaco; }
+  } finally { setLoaderWindow(oldWindow); globalThis.monaco = oldMonaco; }
 });

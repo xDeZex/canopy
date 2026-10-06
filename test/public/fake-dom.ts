@@ -3,6 +3,7 @@ export interface FakeEvent {
   key?: string; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean;
   button?: number; pointerId?: number; clientX?: number; defaultPrevented?: boolean;
   preventDefault(): void;
+  stopPropagation?(): void;
 }
 type Listener = (event: FakeEvent) => unknown;
 
@@ -13,7 +14,7 @@ export class Element {
   dataset: Record<string, string>;
   style: Record<string, string> & { width: string };
   listeners: Map<string, Listener>;
-  events: Record<string, (event?: FakeEvent) => unknown> = {};
+  events: Record<string, (event?: Partial<FakeEvent>) => unknown> = {};
   textContent = '';
   type = '';
   value = '';
@@ -24,9 +25,17 @@ export class Element {
   isRoot = false;
   ownerDocument?: FakeDocument;
   focused = false;
+  focusCalls = 0;
+  selectionStart: number | null = null;
+  selectionEnd: number | null = null;
+  selectionDirection: 'forward' | 'backward' | 'none' | null = null;
+  getBoundingClientRect = () => ({ top: 0, height: 0 });
+  get tagName() { return this.tag; }
+  get parentNode() { return this.parentElement; }
   clientWidth = 0;
   offsetWidth = 0;
   declare role?: string;
+  declare tabindex?: string;
   declare 'aria-label'?: string;
   declare 'aria-expanded'?: string;
   declare 'aria-valuenow'?: string;
@@ -59,6 +68,7 @@ export class Element {
     for (const child of children) {
       if (child.tag === 'fragment') this.append(...child.children);
       else {
+        child.remove();
         child.parentElement = this;
         this.children.push(child);
       }
@@ -66,9 +76,19 @@ export class Element {
   }
 
   replaceChildren(...children: Element[]) {
-    this.children.forEach((child) => { child.parentElement = null; });
+    [...this.children].forEach((child) => child.remove());
     this.children = [];
     this.append(...children);
+  }
+
+  appendChild(child: Element) { this.append(child); return child; }
+  remove() {
+    if (this.isConnected && this.contains(this.ownerDocument?.activeElement) && this.ownerDocument) this.ownerDocument.activeElement = this.ownerDocument.body;
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+    this.parentElement = null;
+  }
+  setSelectionRange(start: number, end: number, direction: 'forward' | 'backward' | 'none' = 'none') {
+    this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction;
   }
 
   contains(node: unknown): boolean {
@@ -89,7 +109,7 @@ export class Element {
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
   addEventListener(event: string, listener: Listener) {
     this.listeners.set(event, listener);
-    this.events[event] = (fields = { preventDefault() {} }) => listener(fields);
+    this.events[event] = (fields = {}) => listener({ preventDefault() {}, stopPropagation() {}, ...fields });
   }
   removeEventListener(event: string, listener: Listener) {
     if (this.listeners.get(event) === listener) {
@@ -98,7 +118,10 @@ export class Element {
     }
   }
   click() { return this.events.click?.(); }
-  focus() { this.focused = true; if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  focus() {
+    this.focusCalls++; this.focused = true;
+    if (this.ownerDocument && (!this.ownerDocument.requireConnectedFocus || this.isConnected)) this.ownerDocument.activeElement = this;
+  }
   setAttribute(name: string, value: string) {
     Object.defineProperty(this, name, { value, writable: true, configurable: true, enumerable: true });
   }
@@ -107,10 +130,13 @@ export class Element {
 export class FakeDocument {
   activeElement: Element | null = null;
   body = new Element('body');
-  constructor() { this.body.isRoot = true; this.body.ownerDocument = this; }
+  // Older control tests inspect focus requests in detached trees. Lifecycle
+  // tests opt into connected-only focus to simulate native reparenting/blur.
+  constructor(private rect = { top: 0, height: 0 }, public requireConnectedFocus = false) { this.body.isRoot = true; this.body.ownerDocument = this; }
   createElement(tag: string) {
     const node = new Element(tag);
     node.ownerDocument = this;
+    node.getBoundingClientRect = () => ({ ...this.rect });
     return node;
   }
 }

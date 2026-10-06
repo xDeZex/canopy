@@ -21,6 +21,8 @@ import { FakeDocument } from '../test/public/fake-dom.js';
 import { createWorkspaceStore } from '../public/workspace-state.js';
 import type { WorkspaceFetch, FileContent } from '../public/workspace-contracts.js';
 import type { LiveUpdatesOptions } from '../public/live-updates.js';
+import { createViewer, type ViewerOptions } from '../public/viewer.js';
+import { mountEditor, mountDiffEditor, languageForPath } from '../public/monaco-view.js';
 declare const document: Document;
 declare const window: Window;
 // Positive controls: native capabilities must satisfy the same narrow ports.
@@ -29,6 +31,13 @@ captureCommentFocus(document, document.body);
 createRailResizer({ bodyEl: document.body, railEl: document.body, dividerEl: document.body, window });
 const nativeFetch: WorkspaceFetch = fetch;
 const nativeEventSource: LiveUpdatesOptions['EventSource'] = EventSource;
+const nativeViewerOptions: ViewerOptions<Element> = {
+  mainEl: document.body, document, getState: () => ({ activePath: null, activeFile: null, worktrees: [], fileContent: null }),
+  getViewMode: () => 'diff', getDiffRenderMode: () => 'inline', getWrap: () => false, getAutoScroll: () => false,
+  mountEditor, mountDiffEditor, languageForPath,
+};
+createViewer(nativeViewerOptions);
+mountEditor(document.body, { content: 'text', document, ResizeObserver });
 isInsideWorktree('/repo', 42);
 formatChangeEvent([42]);
 formatWorktreeListEvent([{ path: 42 }]);
@@ -92,6 +101,9 @@ workspace.addReply({ threadId: 't', text: 42 });
 const badContent: FileContent = { head: 42, working: null };
 const uncheckedJson = await (await nativeFetch('/api/comments')).json?.();
 uncheckedJson.threads;
+createViewer({ ...nativeViewerOptions, mainEl: 42 });
+mountEditor(document.body, { content: 42 });
+createViewer({ ...nativeViewerOptions, addReply: async (input) => { input.text.toFixed(); } });
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   await checkInputs(program, [filename]);
@@ -102,9 +114,9 @@ uncheckedJson.threads;
   const projectDiagnostics = diagnostics.filter((diagnostic) => diagnostic.file?.fileName !== filename);
   assert.equal(projectDiagnostics.length, 0, `Project typecheck failed.\n${ts.formatDiagnostics(projectDiagnostics, formatHost)}`);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046],
-    `Static gate must accept native browser/fetch/EventSource/comment IO and minimal path ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
-  console.log('Static probes: native browser/fetch/EventSource/comment IO and minimal path ports accepted; all thirty-eight invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551],
+    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment IO and minimal path ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
+  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment IO and minimal path ports accepted; all forty-one invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

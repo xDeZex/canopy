@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCommentLoader } from '../../server/comment-loader.js';
 import { createCommentStore } from '../../server/comment-store.js';
+import type { WriteIo } from '../../server/comment-store.js';
 import { parseComments } from '../../server/comments.js';
 import { createRequestHandler } from '../../server/handle-request.js';
 import { createWorkspaceStore } from '../../public/workspace-state.js';
@@ -10,6 +11,9 @@ import { createCommitLockStore } from '../../public/commit-lock.js';
 import { createViewer } from '../../public/viewer.js';
 import { mountDiffEditor } from '../../public/monaco-view.js';
 import { renderCommentIndex } from '../../public/comments-view.js';
+import { Element, FakeDocument } from './fake-dom.js';
+import { setLoaderWindow, fakeZone, present } from './monaco-fake.js';
+import type { FakeZone } from './monaco-fake.js';
 
 // Manual version-1 fixture delivered through fake IO, not filesystem/network.
 const yaml = `version: 1
@@ -40,46 +44,48 @@ threads:
 `;
 
 test('manual YAML flows through registered route, isolated workspace state and the real modified-side zone adapter', async () => {
-  const reads = [];
+  const reads: string[] = [];
   let source = yaml;
-  const temps = new Map();
-  const io = { realpath: async (path) => path,
-    lstat: async (path) => ({ isSymbolicLink: () => false,
+  const temps = new Map<string, string>();
+  const io: WriteIo = { realpath: async (path: string) => path,
+    lstat: async (path: string) => ({ isSymbolicLink: () => false,
       isFile: () => /\.(yaml|js)$/.test(path), isDirectory: () => !/\.(yaml|js)$/.test(path) }),
-    readFile: async (path) => { reads.push(path); return source; },
-    mkdir: async () => {}, writeExclusive: async (path, text) => { temps.set(path, text); },
-    rename: async (from) => { source = temps.get(from); temps.delete(from); }, rm: async (path) => { temps.delete(path); },
+    readFile: async (path: string) => { reads.push(path); return source; },
+    mkdir: async () => {}, writeExclusive: async (path: string, text: string) => { temps.set(path, text); },
+    rename: async (from: string) => { source = present(temps.get(from)); temps.delete(from); }, rm: async (path: string) => { temps.delete(path); },
   };
   const getComments = createCommentLoader(io);
   const store = createCommentStore({ io, newId: () => 'fixture-temp', now: () => { throw new Error('Resolution must not create timestamps'); } });
   const handle = createRequestHandler({ getWorktrees: async () => [{ path: '/registered' }], getComments, createComment: store.create,
     getTree: async () => [{ type: 'file', path: 'public/app.js', name: 'app.js', status: 'modified' }],
     getContent: async () => ({ head: 'before', working: 'one\ntwo\nthree' }), getCommits: async () => [],
+    watchWorktree() { throw new Error('Unexpected watcher IO'); },
+    subscribeToWorktreeChanges() { throw new Error('Unexpected worktree subscription'); },
+    subscribeToActivity() { throw new Error('Unexpected activity subscription'); },
+    readStatic: async () => { throw new Error('Unexpected static filesystem IO'); }, publicDir: '/unused',
+    worktreeDeletion: { preview: async () => { throw new Error('Unexpected deletion preview'); }, remove: async () => { throw new Error('Unexpected deletion'); } },
   });
-  const element = (tag) => ({ tag, children: [], events: {}, classList: { add() {}, toggle() {} },
-    setAttribute(name, value) { this[name] = value; }, replaceChildren(...children) { this.children = children; },
-    addEventListener(name, fn) { this.events[name] = fn; },
-  });
-  const document = { createElement: element };
-  const zones = [];
+  const document = new FakeDocument();
+  const zones: FakeZone[] = [];
   const previousWindow = globalThis.window;
   const previousMonaco = globalThis.monaco;
-  globalThis.window = { monaco: true };
+  setLoaderWindow({ monaco: true });
   globalThis.monaco = { editor: {
     createDiffEditor: () => ({ setModel() {}, dispose() {}, onDidUpdateDiff: () => ({ dispose() {} }), getModifiedEditor: () => ({
       getModel: () => ({ getLineCount: () => 3 }),
       updateOptions() {},
-      changeViewZones(fn) { fn({ addZone(zone) { zones.push(zone); return zones.length; }, removeZone() {} }); },
+      changeViewZones(fn) { fn({ addZone(zone) { fakeZone(zone); zones.push(zone); return zones.length; }, removeZone() {} }); },
     }) }), createModel: () => ({ dispose() {} }),
   } };
-  let viewer;
+  let viewer: ReturnType<typeof createViewer<Element>>;
   const workspace = createWorkspaceStore({ viewModeStore: createViewModeStore({ getItem: () => 'diff' }),
     commitLock: createCommitLockStore(), onActivePathChanged() {},
     async fetch(url, options) {
       const parsed = new URL(url, 'http://canopy');
       const response = await handle({ method: options?.method ?? 'GET', pathname: parsed.pathname, searchParams: parsed.searchParams,
         headers: { host: 'canopy', ...Object.fromEntries(Object.entries(options?.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value])) }, body: options?.body });
-      return { ok: response.status < 400, status: response.status, json: async () => JSON.parse(response.body) };
+      const body = present(response.body);
+      return { ok: response.status < 400, status: response.status, json: async (): Promise<unknown> => JSON.parse(body.toString()) };
     },
     onChange(part) {
       if (['render', 'main'].includes(part)) viewer.render();
@@ -87,7 +93,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
       if (part === 'comments-refresh') viewer.refreshComments({ reveal: false });
     },
   });
-  viewer = createViewer({ mainEl: element(), document, getState: workspace.getState,
+  viewer = createViewer({ mainEl: document.createElement('main'), document, getState: workspace.getState,
     getViewMode: () => 'diff', getDiffRenderMode: () => 'inline', getWrap: () => true,
     getAutoScroll: () => false, languageForPath: () => 'javascript', mountDiffEditor,
     setThreadResolved: (input) => workspace.setThreadResolved(input), addReply: async () => {},
@@ -95,7 +101,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
   try {
     workspace.updateWorktrees([{ path: '/registered' }]);
     await workspace.selectFile('public/app.js');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(reads, ['/registered/.canopy/comments.yaml']);
     assert.equal(workspace.getState().comments.threads[0].id, 'demo-review');
     assert.equal(zones.length, 1);
@@ -104,7 +110,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
     assert.equal(messages[0].children[1].textContent, 'Please explain.');
     assert.equal(messages[1].children[1].textContent, '<b>Literal text</b>');
     const article = zones[0].domNode.children[0].children[0];
-    const find = (node, tag) => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
+    const find = (node: Element, tag: string): Element[] => [...(node.tag === tag ? [node] : []), ...node.children.flatMap((child) => find(child, tag))];
     const toggle = find(article, 'button').find((button) => button.textContent === 'Resolve');
     assert.ok(toggle, 'the mounted shared conversation exposes Resolve');
     const before = parseComments(source).threads;
@@ -128,7 +134,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
       { id: 'incoming', author: 'agent', text: 'Fixed <b>literally</b>', created_at: '2026-10-02T09:00:00Z' }] }, before[1]] });
     // Save before observing that edit: conflict must refresh before enabling retry.
     await toggle.events.click();
-    assert.match(find(article, 'p').at(-1).textContent, /Comments changed/);
+    assert.match(present(find(article, 'p').at(-1)).textContent, /Comments changed/);
     assert.equal(toggle.textContent, 'Retry resolve');
     assert.equal(find(article, 'textarea')[0], textarea);
     assert.equal(textarea.value, 'Keep this reply draft');
@@ -143,7 +149,7 @@ test('manual YAML flows through registered route, isolated workspace state and t
     assert.equal(toggle.textContent, 'Resolve', 'watch refresh respects the explicit agent flag');
   } finally {
     viewer.dispose();
-    globalThis.window = previousWindow;
+    setLoaderWindow(previousWindow);
     globalThis.monaco = previousMonaco;
   }
 });

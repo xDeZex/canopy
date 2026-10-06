@@ -30,11 +30,17 @@ files, and adds their validated JSON/IO contracts. Combined with #71 and #72,
 the manifest contains **75 strict TS inputs and 25 remaining JS inputs** (100
 total). The original #76 branch had 61 TS / 39 JS; its historical evidence below
 is separate from these integrated counts.
+Issue #77 migrates the two viewer/editor lifecycle owners and their four
+conversation-flow test files, adding two consumed-capability ports and one
+test helper after removing the obsolete legacy workspace wrapper. Combined with
+#71, #72 and #76, the manifest contains **84 strict TS / 19 remaining JS inputs**
+(103 total). The original #77 branch had 66 TS / 37 JS;
+its historical evidence below is separate from these integrated counts.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 25-JS ceiling. New code should be TypeScript and listed explicitly.
+a 19-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -58,7 +64,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/comment IO and minimal path ports accepted; thirty-eight invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment IO and minimal path ports accepted; forty-one invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -562,3 +568,165 @@ No full-suite, smoke, minimum-Node, manual browser or live Git/filesystem rerun
 was performed in this conflict-resolution pass. The fake-IO and real-runtime
 limitations documented above remain unchanged; full-suite final validation is
 separate.
+
+## Implementation evidence and limitations for #77
+
+This section records the original #77 branch, not the combined rebase result.
+
+Starting commit: `aa73323`. `public/viewer` and `public/monaco-view`, plus
+`test/public/{viewer,monaco-view,comments-flow,replies}.test`, now compile as
+strict TypeScript. Native `.js` imports, the real conversation/editor lifecycle
+owners, all existing test registrations and failure/negative cases remain.
+Two incremental characterization cases cover blocked reply/resolution forms
+through the viewer and a late mount rejection after viewer disposal. These
+characterize existing behavior; they are not claims of new runtime fixes.
+
+`editor-port` reuses the recursive comment DOM contracts. `monaco-port` describes
+only consumed CDN mounting capabilities: partial editor capabilities are bound
+to their real receiver, and an unsupported capability throws if exercised.
+Tests do not masquerade as Monaco classes, native Document/Window or native timer
+handles. Mounting nodes are opaque only at the CDN IO port; public mount calls
+require native or structural viewer elements. Native Document, Element and
+ResizeObserver positive static controls remain checked. `ES2023` library types
+cover the already-existing `findLastIndex` use; the emit target stays ES2022.
+
+The shared fake DOM adds measured geometry, selection and single-owner
+reparenting/blur. Lifecycle tests explicitly opt into connected-only focus;
+older control tests retain their detached focus-request convention. It still
+has class-only selectors and one listener per event, not complete browser DOM
+fidelity. The legacy workspace owner stays real behind a test-only boundary
+that reads its unchecked state as `unknown` and validates consumed fields.
+HTTP JSON, mutation JSON and parsed YAML results likewise stay unknown until
+checked. The existing real YAML/comment validation and conflict flow are retained;
+no production YAML/parser or workspace migration is claimed. Adjacent JS changes
+only annotate consumed filesystem/clock/ID and remote-change ports.
+
+### Automated checks (Node 22.22.1)
+
+- `npm ci` installed only existing locked dependencies and passed prepare/build.
+  The first typecheck attempt reported missing TypeScript before this install;
+  dependencies and lockfile are unchanged.
+- Regular `npm run typecheck` and `npm run build` passed throughout the typed
+  slices. The final manifest is **66 TS / 37 JS** and the JS ceiling is 37.
+  All **22 negative static probes** pass, including invalid viewer elements,
+  editor content and reply callback use, alongside native positive controls.
+- Static red/green evidence: the incremental viewer gate failed before typing,
+  initially on the legacy parameter/call shape rather than the desired numeric
+  element diagnostic. A subsequent read-only virtual compiler control using
+  `git show aa73323:public/viewer.js` independently confirmed the complete
+  numeric-`mainEl` call was accepted by the baseline; the final gate rejects it
+  with TS2322. The native positive control also caught a too-narrow HTMLElement
+  focus annotation (TS2322); using Document's actual Element focus domain passed.
+  Compiler-red fixtures drove narrow filesystem and nullable remote-change ports
+  rather than casts to native filesystem/DOM/editor classes.
+- Individual compiled runs passed **21 viewer**, **29 Monaco-view**, **1
+  comments-flow** and **9 replies** tests. The focused command is
+  `node --test dist/test/public/viewer.test.js dist/test/public/monaco-view.test.js dist/test/public/comments-flow.test.js dist/test/public/replies.test.js`:
+  **60 passed, zero failures/skips/cancellations**.
+- `npm run smoke:build` passed unlisted-input rejection, stale-output cleanup,
+  copied assets and real CLI/static HTML/CSS/native-module HTTP serving.
+- The first full `npm test` run found one fake-DOM compatibility regression
+  (**572 passed / 1 failed**): connected-only focus had inadvertently replaced
+  the existing detached-focus convention. After making that behavior an explicit
+  lifecycle-fixture opt-in, the focused comments-view/replies run passed **21**
+  tests. One necessary full-suite rerun then passed **573 compiled tests, zero
+  failures/skips/cancellations**. No existing test was removed or weakened.
+- `git diff --check` passed. No dependency additions were made.
+- Independent final checks passed typecheck (**66 TS / 37 JS**, 22 negative
+  probes), build, all **60 focused compiled tests**, and staged whitespace checks.
+  Standards and Spec reviews inspected the complete staged diff against
+  `aa73323`: no documented-standard breaches or actionable spec findings.
+  Standards noted one optional duplicated error-message helper; it is left as a
+  non-blocking follow-up rather than broadening this migration.
+
+### Manual evaluation and remaining limits
+
+No browser evaluation, minimum-Node rerun, package/Git-install smoke, real watcher
+evaluation or destructive Git action was performed for #77. The build smoke
+fetches modules but does not execute them in a browser. Simulated mounting,
+geometry, focus and selection demonstrate owner orchestration only; they do not
+prove real Monaco layout, keyboard focus, native selection/IME, browser event
+fidelity, watcher reliability or live destructive Git safety. The remaining 37
+JS inputs, including production workspace and YAML/comment services, are not
+claimed to be strictly checked.
+
+## Rebase integration validation (#71, #72 and #77)
+
+This section records rebasing #77's original commit `6c6501f` onto `c700313`,
+the initial target before a subsequent rebase onto #76's `00a5718`. Its checks
+are historical evidence for that initial snapshot only, separate from the
+latest-target validation below and the original #77 evidence above. Both upstream strict
+comment-service and file-tree migrations are retained alongside the real
+viewer/editor lifecycle migration. Deleted service JavaScript is not restored:
+upstream `ReadIo`, `WriteIo` and `CommentStoreOptions` replace #77's adjacent
+legacy JSDoc annotations. The comments-flow fake explicitly implements the real
+`WriteIo` port; conversation-fixture and replies retain their unknown-boundary
+validation and need no API changes. No runtime service behavior is changed.
+
+The auto-merged manifest was checked against all source-tree code by the build
+gate: **80 strict TS / 23 temporary JS inputs** (103 total), with a lowered
+23-JS ceiling. The ES2023/DOM library selection retains ES2022 emit and native
+`.js` imports. All previous static probes are preserved alongside #77's three
+additional probes; no invalid-input or failure coverage was removed.
+
+Automated rebase checks on Node **22.22.1**:
+
+- **Static:** `npm run typecheck` passed, accepting native browser/viewer/editor/
+  comment IO and minimal path positive controls and rejecting all **35** combined
+  negative probes. `npm run build` passed.
+- **Unit/integration:** direct compiled execution of the four #77 test files
+  (`viewer`, `monaco-view`, `comments-flow`, `replies`) plus server `comments`,
+  `comment-loader`, `comment-store`, `handle-request` and `app.integration`
+  passed **136 tests, 0 failed/skipped/cancelled**. This includes 60 viewer/editor
+  cases and 76 durable-comment/adjacent HTTP cases, over simulated IO edges.
+- **Full suite:** one `npm test` run after the resolutions passed **582 compiled
+  tests, 0 failed/skipped/cancelled**, including its pretest build.
+- Working-tree and staged whitespace checks passed. No dependencies were added.
+
+No smoke, minimum-Node, manual browser or live Git/filesystem evaluation was
+rerun during this rebase. Simulated lifecycle and failure coverage does not prove
+native Monaco layout/focus/IME, actual sidecar durability or race freedom, watcher
+reliability or destructive Git safety. The remaining workspace and other legacy
+JS inputs are still unchecked; YAML/comment services are now strictly checked
+through the retained upstream #72 migration, unlike the historical #77 branch.
+
+## Latest-target rebase validation (#71, #72, #76 and #77)
+
+After the initial `c700313` resolution recorded above, the shared upstream ref
+advanced to **`00a5718`**, which includes #76. This pass replays the first resolved
+#77 commit `1e43fa3` onto that actual latest target. The original #77 and initial
+rebase checks remain historical evidence, not results for this latest snapshot.
+
+Upstream `workspace-state.ts`, `live-updates.ts` and `workspace-contracts.ts` are
+retained without runtime changes, including readonly/null remote-change inputs,
+unknown network JSON validation, stale-generation guards and failure retention.
+Comments-flow and replies now import the real typed workspace owner directly.
+The obsolete `conversation-fixture.ts` wrapper and its manifest entry are removed;
+typed server parsing supplies YAML results, while mutation JSON is still inspected
+from unknown using the upstream record guard. Existing honest tree fixture fields
+from #76 are retained. All #77 test registrations and negative/failure assertions
+remain; no deleted production JavaScript is restored and no unsafe casts, blanket
+`any` or compiler suppressions are introduced.
+
+On Node **22.22.1**, this latest integration passed:
+
+- **Static/build:** `npm run typecheck` and `npm run build`; the explicit manifest
+  matches **84 strict TS / 19 temporary JS inputs** (103 total), with a 19-JS
+  ceiling. All **41 negative probes** (38 upstream plus three viewer/editor)
+  reject invalid calls/shapes; native browser/fetch/EventSource/viewer/editor/
+  comment IO and minimal path positive controls pass.
+- **Focused unit/integration:** direct compiled `node --test` execution of
+  `viewer`, `monaco-view`, `comments-flow`, `replies`, `workspace-state` and
+  `live-updates` under `dist/test/public/` passed **128 tests, 0 failed/skipped/
+  cancelled** (60 #77 cases plus 68 upstream workspace/live cases).
+- **Full suite:** one `npm test` run after the latest fixes passed **591 compiled
+  tests, 0 failed/skipped/cancelled**, including its pretest build.
+- Working-tree and staged whitespace checks passed. No dependencies were added.
+
+No smoke, minimum-Node, manual browser or live Git/filesystem evaluation was
+rerun in this pass. Simulated browser and IO capabilities establish owner
+orchestration and failure behavior, not native Monaco layout/focus/IME, network
+reconnect reliability, actual filesystem durability/race freedom, watcher delivery
+or live destructive Git safety. The remaining 19 JS inputs are unchecked; the
+workspace/live and durable-comment owners are now strictly checked through the
+retained upstream migrations.
