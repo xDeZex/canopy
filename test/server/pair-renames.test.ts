@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renameCandidates, pairRenames, applyRenames } from '../../server/pair-renames.js';
 
-const lines = (...n) => n.map((i) => `line ${i}`).join('\n');
-const file = (path, content) => ({ path, content });
-const paired = (from, to) => pairRenames([file('old', from)], [file('new', to)]);
+const lines = (...n: number[]) => n.map((i) => `line ${i}`).join('\n');
+const file = (path: string, content: string | null) => ({ path, content });
+const paired = (from: string, to: string) => pairRenames([file('old', from)], [file('new', to)]);
 const renamed = [{ oldPath: 'old', path: 'new' }];
 
 test('pairs a deleted file with an added file of similar content', () => {

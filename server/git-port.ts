@@ -1,2 +1,3 @@
-// Read stdout at the Git IO edge. Callers here do not need spawn options.
-export type Git = (args: string[], cwd: string) => Promise<string>;
+// Only the spawn option consumed by these loading operations is modelled.
+export interface GitOptions { maxBuffer?: number }
+export type Git = (args: string[], cwd: string, options?: GitOptions) => Promise<string>;

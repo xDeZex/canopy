@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getChangedPaths, getFileTree, parseStatus, parseNameStatus, parseUntracked, combineRefDiff, mergeFileStatuses, listChangedFiles, nestIntoTree, buildFileTree } from '../../server/status.js';
+import type { PathStatus } from '../../server/status.js';
+import { fakeGit } from './fake-git.js';
+import { readFileContent } from '../../server/file-content.js';
 
 test('parses NUL-delimited diff names including a rename, copy and deletion', () => {
   assert.deepEqual(parseNameStatus('R100\0old name -> original\nfile\0new name -> destination\nfile\0C100\0source\0copy\0D\0gone\0A\0new\0M\0changed\0'), [
@@ -162,7 +165,7 @@ test('nestIntoTree sorts directories before files regardless of flat path order'
 
 test('nestIntoTree keeps both a deleted tracked child and its untracked file replacement', () => {
   const paths = ['foo/bar.txt', 'foo', 'foo/baz.txt', 'other.txt'];
-  const statuses = [
+  const statuses: PathStatus[] = [
     { path: 'foo/bar.txt', status: 'deleted' },
     { path: 'foo/baz.txt', status: 'deleted' },
     { path: 'foo', status: 'added' },
@@ -265,18 +268,6 @@ test('buildFileTree keeps a deleted tracked child when its directory is replaced
   );
 });
 
-// A fake runGit keyed by git subcommand; records every call's args and cwd.
-function fakeGit(responses) {
-  const calls = [];
-  const runGit = async (args, cwd) => {
-    calls.push({ args, cwd });
-    const response = responses[args[0]];
-    if (response instanceof Error) throw response;
-    return response;
-  };
-  return { runGit, calls };
-}
-
 test('getChangedPaths on HEAD parses `git status --porcelain -z` in the worktree', async () => {
   const { runGit, calls } = fakeGit({ status: ' M modified.txt\0?? new.txt\0' });
 
@@ -299,7 +290,7 @@ test('getChangedPaths against a ref diffs the resolved sha and appends untracked
     { path: 'untracked.txt', status: 'added' },
   ]);
   assert.deepEqual(calls[0].args, ['rev-parse', '--verify', '--end-of-options', 'v1^{commit}']);
-  assert.deepEqual(calls.find(({ args }) => args[0] === 'diff').args,
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'diff')?.args,
     ['diff', '--no-ext-diff', '--name-status', '-z', 'abc123', '--']);
   assert.ok(calls.every(({ cwd }) => cwd === '/wt'));
 });
@@ -330,13 +321,13 @@ test('getFileTree adds saved edit times only to changed files present on disk', 
     status: ' M src/edit.js\0?? new.txt\0 D old.txt\0',
     'ls-files': 'clean.txt\0src/edit.js\0old.txt\0',
   });
-  const checked = [];
-  const stat = async (path) => {
+  const checked: string[] = [];
+  const stat = async (path: string) => {
     checked.push(path);
     return { mtimeMs: path.endsWith('edit.js') ? 1234 : 5678 };
   };
 
-  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat, async () => null), [
+  assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, stat, async () => { throw new Error('unreadable'); }), [
     { name: 'src', type: 'dir', path: 'src', children: [
       { name: 'edit.js', type: 'file', path: 'src/edit.js', status: 'modified', mtimeMs: 1234 },
     ] },
@@ -349,7 +340,7 @@ test('getFileTree adds saved edit times only to changed files present on disk', 
 
 test('getFileTree keeps changed files when their edit time cannot be read', async () => {
   const { runGit } = fakeGit({ status: ' M missing.txt\0?? present.txt\0', 'ls-files': 'missing.txt\0' });
-  const stat = async (path) => {
+  const stat = async (path: string) => {
     if (path.endsWith('missing.txt')) throw new Error('ENOENT');
     return { mtimeMs: 900 };
   };
@@ -363,13 +354,17 @@ test('getFileTree keeps changed files when their edit time cannot be read', asyn
 test('getChangedPaths on HEAD pairs a deleted file with a similar untracked file as one rename', async () => {
   const content = 'one\ntwo\nthree\n';
   const { runGit, calls } = fakeGit({ status: ' D old.txt\0?? new.txt\0?? other.txt\0', show: content });
-  const files = { '/wt/new.txt': content, '/wt/other.txt': 'unrelated\n' };
+  const files = new Map([['/wt/new.txt', content], ['/wt/other.txt', 'unrelated\n']]);
 
-  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async (path) => files[path]), [
+  assert.deepEqual(await getChangedPaths('/wt', 'HEAD', runGit, async (path) => {
+    const file = files.get(path);
+    if (file === undefined) throw new Error(`Unexpected read: ${path}`);
+    return file;
+  }), [
     { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
     { path: 'other.txt', status: 'added' },
   ]);
-  assert.deepEqual(calls.find(({ args }) => args[0] === 'show').args, ['show', 'HEAD:old.txt']);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'show')?.args, ['show', 'HEAD:old.txt']);
 });
 
 test('getChangedPaths leaves unrelated deletions and additions unpaired', async () => {
@@ -396,7 +391,7 @@ test('getChangedPaths against a ref pairs the deleted file with an untracked fil
   assert.deepEqual(await getChangedPaths('/wt', 'v1', runGit, async () => 'a\nb\n'), [
     { path: 'new.txt', status: 'renamed', oldPath: 'old.txt' },
   ]);
-  assert.deepEqual(calls.find(({ args }) => args[0] === 'show').args, ['show', 'abc123:old.txt']);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'show')?.args, ['show', 'abc123:old.txt']);
 });
 
 test('getChangedPaths does not pair a path deleted and recreated with itself', async () => {
@@ -428,4 +423,86 @@ test('getFileTree shows an unstaged move as one renamed file, not a renamed file
     { name: 'keep.txt', type: 'file', path: 'keep.txt', status: 'clean' },
     { name: 'new.txt', type: 'file', path: 'new.txt', status: 'renamed', oldPath: 'old.txt', mtimeMs: 5678 },
   ]);
+});
+
+test('tree loading rejects Git acquisition failures instead of returning a partial tree', async () => {
+  for (const command of ['status', 'ls-files', 'diff']) {
+    const failure = new Error(`${command} unavailable`);
+    const { runGit } = fakeGit({
+      status: '', 'ls-files': '', 'rev-parse': 'abc123\n', diff: '', [command]: failure,
+    });
+    await assert.rejects(getFileTree('/wt', command === 'diff' ? 'v1' : 'HEAD', runGit,
+      async () => { throw new Error('Unexpected stat'); },
+      async () => { throw new Error('Unexpected read'); }), (err) => err === failure);
+  }
+});
+
+test('unreadable rename candidates keep separate deletion and addition statuses in the loaded tree', async () => {
+  for (const unreadableSide of ['reference', 'working']) {
+    const content = 'same\ncontent\n';
+    const { runGit } = fakeGit({
+      status: ' D src/old.txt\0?? lib/new.txt\0', 'ls-files': 'src/old.txt\0',
+      show: unreadableSide === 'reference' ? new Error('show refused') : content,
+    });
+    const tree = await getFileTree('/wt', 'HEAD', runGit,
+      async () => { throw new Error('stat refused'); },
+      async () => {
+        if (unreadableSide === 'working') throw new Error('read refused');
+        return content;
+      });
+    assert.deepEqual(tree, [
+      { name: 'lib', type: 'dir', path: 'lib', children: [
+        { name: 'new.txt', type: 'file', path: 'lib/new.txt', status: 'added' },
+      ] },
+      { name: 'src', type: 'dir', path: 'src', children: [
+        { name: 'old.txt', type: 'file', path: 'src/old.txt', status: 'deleted' },
+      ] },
+    ]);
+  }
+});
+
+test('tree loading ignores non-finite stat times without losing changed status', async () => {
+  for (const mtimeMs of [NaN, Infinity, -Infinity]) {
+    const { runGit } = fakeGit({ status: ' M src/edit.txt\0', 'ls-files': 'src/edit.txt\0' });
+    assert.deepEqual(await getFileTree('/wt', 'HEAD', runGit, async () => ({ mtimeMs })), [
+      { name: 'src', type: 'dir', path: 'src', children: [
+        { name: 'edit.txt', type: 'file', path: 'src/edit.txt', status: 'modified' },
+      ] },
+    ]);
+  }
+});
+
+test('a locked loaded rename keeps its old reference path and current working path in comparison loading', async () => {
+  const { runGit, calls } = fakeGit((args) => {
+    if (args[0] === 'rev-parse') return 'abc123\n';
+    if (args[0] === 'diff') return 'R100\0src/old.txt\0lib/new.txt\0M\0src/edit.txt\0';
+    if (args[0] === 'ls-files') return args.includes('--others') ? 'notes/new.txt\0' : 'lib/new.txt\0src/edit.txt\0README.md\0';
+    if (args[0] === 'show' && args[1] === 'abc123:src/old.txt') return 'reference\n';
+    throw new Error(`Unexpected Git call: ${args.join(' ')}`);
+  });
+  const tree = await getFileTree('/wt', 'v1', runGit, async () => ({ mtimeMs: 1234 }),
+    async () => { throw new Error('Unexpected rename-candidate read'); });
+  assert.deepEqual(tree, [
+    { name: 'lib', type: 'dir', path: 'lib', children: [
+      { name: 'new.txt', type: 'file', path: 'lib/new.txt', status: 'renamed', oldPath: 'src/old.txt', mtimeMs: 1234 },
+    ] },
+    { name: 'notes', type: 'dir', path: 'notes', children: [
+      { name: 'new.txt', type: 'file', path: 'notes/new.txt', status: 'added', mtimeMs: 1234 },
+    ] },
+    { name: 'src', type: 'dir', path: 'src', children: [
+      { name: 'edit.txt', type: 'file', path: 'src/edit.txt', status: 'modified', mtimeMs: 1234 },
+    ] },
+    { name: 'README.md', type: 'file', path: 'README.md', status: 'clean' },
+  ]);
+  const directory = tree[0];
+  assert.ok(directory?.type === 'dir');
+  const renamed = directory.children[0];
+  assert.ok(renamed?.type === 'file');
+  const read: string[] = [];
+  assert.deepEqual(await readFileContent('/wt', renamed.path, 'v1', {
+    runGit, oldPath: renamed.oldPath,
+    readWorkingFile: async (absolutePath) => { read.push(absolutePath); return 'working\n'; },
+  }), { head: 'reference\n', working: 'working\n' });
+  assert.deepEqual(read, ['/wt/lib/new.txt']);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'show')?.args, ['show', 'abc123:src/old.txt']);
 });

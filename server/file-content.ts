@@ -14,14 +14,22 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runGit as defaultRunGit } from './git.js';
+import type { Git } from './git-port.js';
 
-const defaultReadFile = (absolutePath) => readFile(absolutePath, 'utf8');
+export type ReadWorkingFile = (absolutePath: string) => Promise<string>;
+export interface FileContentOptions {
+  runGit?: Git;
+  readWorkingFile?: ReadWorkingFile;
+  oldPath?: string;
+}
+
+const defaultReadFile = (absolutePath: string) => readFile(absolutePath, 'utf8');
 
 export async function readFileContent(
-  worktreePath,
-  filePath,
+  worktreePath: string,
+  filePath: string,
   ref = 'HEAD',
-  { runGit = defaultRunGit, readWorkingFile = defaultReadFile, oldPath = filePath } = {},
+  { runGit = defaultRunGit, readWorkingFile = defaultReadFile, oldPath = filePath }: FileContentOptions = {},
 ) {
   // A renamed file's ref side is its old path's content, so the diff shows
   // only the edits made on top of the move.
@@ -34,16 +42,20 @@ export async function readFileContent(
 
 // `git show` exits 128 for missing paths or objects, including an unborn HEAD.
 // Explicit locks must confirm path absence before treating this as missing.
-export function isMissingRefSide(err) {
-  return err?.code === 128;
+export function isMissingRefSide(err: unknown) {
+  return errorCode(err) === 128;
 }
 
 // A former directory can now be a file, blocking access to its deleted children.
-export function isMissingWorkingSide(err) {
-  return err?.code === 'ENOENT' || err?.code === 'ENOTDIR';
+export function isMissingWorkingSide(err: unknown) {
+  return errorCode(err) === 'ENOENT' || errorCode(err) === 'ENOTDIR';
 }
 
-async function readRefContent(worktreePath, filePath, ref, runGit) {
+function errorCode(err: unknown): unknown {
+  return err !== null && (typeof err === 'object' || typeof err === 'function') && 'code' in err ? err.code : undefined;
+}
+
+async function readRefContent(worktreePath: string, filePath: string, ref: string, runGit: Git) {
   // Validate explicit locks outside the missing-file catch. An invalid base
   // is an error, not an empty file; Auto retains its unborn-HEAD behavior.
   if (ref !== 'HEAD') {
@@ -64,7 +76,7 @@ async function readRefContent(worktreePath, filePath, ref, runGit) {
   }
 }
 
-async function readWorkingContent(worktreePath, filePath, readWorkingFile) {
+async function readWorkingContent(worktreePath: string, filePath: string, readWorkingFile: ReadWorkingFile) {
   try {
     return await readWorkingFile(path.join(worktreePath, filePath));
   } catch (err) {

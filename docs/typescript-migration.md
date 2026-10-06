@@ -21,11 +21,15 @@ shared DOM helper, and adds two narrow port/type modules: **56 strict TS inputs
 and 43 remaining JS inputs**.
 Issue #72 migrates the five durable-comment modules and their three test files:
 **64 strict TS inputs and 35 remaining JS inputs**.
+Issue #71 migrates the three file-tree/comparison/rename modules and their three
+test files. Combined with #72, the manifest contains **70 strict TS inputs and
+29 remaining JS inputs** (99 total). The original #71 branch had 62 TS / 37 JS;
+its historical evidence below is separate from these integrated counts.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 35-JS ceiling. New code should be TypeScript and listed explicitly.
+a 29-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -49,7 +53,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/comment IO and minimal path ports accepted; twenty-six invalid calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/comment IO and minimal path ports accepted; thirty-two invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -331,6 +335,8 @@ layout/focus/IME, watcher reliability or live destructive Git safety.
 
 ## Implementation evidence and limitations for #72
 
+This section records #72 before integrating #71, not the combined rebase result.
+
 The five durable-comment modules (`comments`, `comments-header`, `comment-loader`,
 `comment-store` and `sidecar-path`) and their three existing test files are now
 strict TypeScript. The manifest contains **64 TS / 35 JS inputs**, with the JS
@@ -376,3 +382,77 @@ the final revision recheck and rename remains documented and unchanged. Build
 smoke establishes real CLI/static HTTP asset serving, not durable-storage or
 browser behavior. No manual browser/E2E, minimum-Node or package/Git-install smoke
 evaluation was performed for this ticket.
+
+## Implementation evidence and limitations for #71
+
+This section records the original #71 branch, not the combined rebase result.
+
+`status`, `file-content`, `pair-renames` and their matching tests are strict
+TypeScript. Status entries and file/directory nodes retain their existing
+metadata and shapes. Filesystem ports consume only UTF-8 text or numeric
+`mtimeMs`; the native default readers and `stat` satisfy those ports without
+casts. The shared Git port now also describes optional numeric `maxBuffer`.
+Comparison loading still requests **32 MiB** for `show`, and the fail-closed
+test fake records that option without pretending to emulate Git. Explicit refs
+still resolve before lookup; missing locked paths still require `ls-tree`
+confirmation. Caught error values are narrowed from `unknown`. No external
+JSON/YAML boundary, dependency or compiled/native `.js` import is changed.
+
+Automated implementation evidence on Node **22.22.1**:
+
+- **Static:** `npm ci` installed existing locked dependencies and passed its
+  prepare build. Repeated `npm run typecheck` and `npm run build` passed with
+  **62 TS / 37 JS inputs**, a lowered 37-JS ceiling and all **25** negative probes
+  rejected. The six additional probes reject a non-string comparison path,
+  non-numeric stat time, unsupported file status, non-numeric Git buffer limit,
+  non-text filesystem result and non-text rename content.
+- **Red/green:** the comparison-path negative probe was red while the legacy
+  loader accepted a numeric path, then green after typing it. The unsupported
+  status probe was separately red while the legacy tree helper accepted it,
+  then green after the status migration. The invalid-stat probe already rejected
+  its input before migration; it is a retained check, not claimed as a new red.
+  Added runtime cases characterize unchanged behavior, not unrelated bug fixes.
+- **Unit/integration:** direct compiled execution of `status.test.js`,
+  `file-content.test.js` and `pair-renames.test.js` under `dist/test/server/`
+  passed **76 tests, 0 failed/skipped/cancelled**. Existing pure parsing/tree/
+  similarity tests remain. Integration cases use the real public loaders with
+  fake Git/filesystem capabilities, covering nested tracked/untracked/ref trees,
+  rename old paths flowing into comparisons, both missing sides, genuine Git/
+  working-read failures, lookup failures, unreadable rename candidates, stat
+  failures/non-finite times and the 32-MiB option. Eight integration registrations
+  were added; all existing registrations and invalid-ref/failure cases remain.
+- **Compatibility integration:** a separate focused compiled run of `commits`,
+  `origin-main-live`, `worktree-delete`, `app.integration`, `app` and
+  `handle-request` passed **90 tests, 0 failed/skipped/cancelled**, checking shared
+  fake-Git users and adjacent HTTP behavior. HTTP adapter tests use real loopback
+  transport; their Git and mutation capabilities are simulated.
+
+Final independent validation on Node **22.22.1** passed `npm run typecheck`,
+the full `npm test` compiled suite (**579 passed, 0 failed/skipped/cancelled**)
+and `git diff --cached --check`. Separate Standards and Spec reviews inspected
+the complete staged diff against the worktree's starting commit `aa73323` and
+found no actionable issues on either axis.
+
+No exact-minimum Node rerun, package/build IO smoke, manual browser evaluation
+or live Git/filesystem loading was performed for #71. Fake failures demonstrate
+orchestration and error semantics,
+not real Git rename fidelity, actual filesystem races, native browser rendering,
+watcher reliability or destructive Git safety.
+
+## Rebase integration validation (#71 and #72)
+
+Rebasing #71's original commit `8bbe30c` onto `166e78a` retained both migrations,
+all manifest entries and both sets of static probes. The combined source trees
+and explicit manifest contain **70 TS / 29 JS inputs** (99 total), with a 29-JS
+ceiling. Historical per-issue validation above is not evidence of rerunning those
+checks on this combined snapshot.
+
+On Node **22.22.1**, this rebase pass ran `npm run typecheck` (all **32** combined
+negative probes rejected; native browser/comment IO and minimal path positive
+controls accepted), `npm run build`, and
+`node --test dist/test/server/status.test.js dist/test/server/file-content.test.js dist/test/server/pair-renames.test.js`:
+**76 passed, 0 failed/skipped/cancelled**.
+
+No full-suite, smoke, minimum-Node, manual browser or live Git/filesystem rerun
+was performed in this rebase pass. The fake-IO and real-runtime limitations
+documented in the historical evidence remain unchanged.

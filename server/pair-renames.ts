@@ -7,11 +7,24 @@ const MIN_SIMILARITY = 0.5;
 // comparisons. Exact matches are found by hashing and are not limited.
 const MAX_FUZZY_COMPARISONS = 40000;
 
+export type FileStatus = 'clean' | 'added' | 'deleted' | 'modified' | 'renamed';
+export interface PathStatus {
+  path: string;
+  status: FileStatus;
+  oldPath?: string;
+  untracked?: boolean;
+  mtimeMs?: number;
+}
+export interface RenamePair { oldPath: string; path: string }
+interface CandidateFile { path: string; content: string | null }
+interface ReadableFile { path: string; content: string }
+interface ContentProfile { content: string; size: number; lines: Map<string, number> }
+
 // The deleted and untracked-added paths worth comparing, or null when there
 // is nothing to pair. Only entries tagged `untracked` are added candidates,
 // so staged additions are left alone, and a path deleted and recreated is
 // one modified file, not a move.
-export function renameCandidates(entries) {
+export function renameCandidates(entries: readonly PathStatus[]) {
   const deleted = entries.filter((entry) => entry.status === 'deleted').map(({ path }) => path);
   const deletedPaths = new Set(deleted);
   const added = entries
@@ -23,8 +36,8 @@ export function renameCandidates(entries) {
 
 // Lines are compared without their newline so a last line that gains or
 // loses one still matches; each line weighs its length plus that newline.
-function contentProfile(content) {
-  const lines = new Map();
+function contentProfile(content: string): ContentProfile {
+  const lines = new Map<string, number>();
   const split = content.split('\n');
   if (split.at(-1) === '') split.pop();
   for (const line of split) lines.set(line, (lines.get(line) ?? 0) + 1);
@@ -34,7 +47,7 @@ function contentProfile(content) {
 // Like git's rename score: the size of the lines the two contents share,
 // divided by the larger content's size. 1 for identical content, 0 for
 // nothing shared.
-function profileSimilarity(from, to) {
+function profileSimilarity(from: ContentProfile, to: ContentProfile) {
   if (from.content === to.content) return 1;
   const largest = Math.max(from.size, to.size);
   // Too different in size to reach the threshold; skip the line comparison.
@@ -47,20 +60,20 @@ function profileSimilarity(from, to) {
 }
 
 // Empty, unreadable (null) and binary (NUL-containing) files never pair.
-function pairable(files) {
-  return files.filter(({ content }) => content && !content.includes('\0'));
+function pairable(files: readonly CandidateFile[]): ReadableFile[] {
+  return files.filter((file): file is ReadableFile => typeof file.content === 'string' && file.content !== '' && !file.content.includes('\0'));
 }
 
-const basename = (path) => path.slice(path.lastIndexOf('/') + 1);
+const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
 // Files with identical content, found by looking the content up. Among
 // several identical deleted files, the one with the same name is preferred.
-function pairExact(deleted, added) {
-  const deletedByContent = new Map();
+function pairExact(deleted: readonly ReadableFile[], added: readonly ReadableFile[]): RenamePair[] {
+  const deletedByContent = new Map<string, ReadableFile[]>();
   for (const file of deleted) {
     deletedByContent.set(file.content, [...(deletedByContent.get(file.content) ?? []), file]);
   }
-  const pairs = [];
+  const pairs: RenamePair[] = [];
   for (const to of added) {
     const candidates = deletedByContent.get(to.content);
     if (!candidates?.length) continue;
@@ -72,10 +85,10 @@ function pairExact(deleted, added) {
 }
 
 // Similar but not identical content, best matches first, each file used once.
-function pairFuzzy(deleted, added) {
+function pairFuzzy(deleted: readonly ReadableFile[], added: readonly ReadableFile[]): RenamePair[] {
   if (deleted.length * added.length > MAX_FUZZY_COMPARISONS) return [];
   const addedProfiles = added.map((file) => ({ path: file.path, ...contentProfile(file.content) }));
-  const scored = [];
+  const scored: (RenamePair & { score: number })[] = [];
   for (const from of deleted.map((file) => ({ path: file.path, ...contentProfile(file.content) }))) {
     for (const to of addedProfiles) {
       const score = profileSimilarity(from, to);
@@ -84,9 +97,9 @@ function pairFuzzy(deleted, added) {
   }
   scored.sort((a, b) => b.score - a.score);
 
-  const usedOld = new Set();
-  const usedNew = new Set();
-  const pairs = [];
+  const usedOld = new Set<string>();
+  const usedNew = new Set<string>();
+  const pairs: RenamePair[] = [];
   for (const { oldPath, path } of scored) {
     if (usedOld.has(oldPath) || usedNew.has(path)) continue;
     usedOld.add(oldPath);
@@ -99,7 +112,7 @@ function pairFuzzy(deleted, added) {
 // `deleted` and `added` are `{ path, content }` lists. Returns `{ oldPath,
 // path }` pairs, each file used at most once: exact matches first, then the
 // remaining files by similarity.
-export function pairRenames(deleted, added) {
+export function pairRenames(deleted: readonly CandidateFile[], added: readonly CandidateFile[]): RenamePair[] {
   const exact = pairExact(pairable(deleted), pairable(added));
   const usedOld = new Set(exact.map((pair) => pair.oldPath));
   const usedNew = new Set(exact.map((pair) => pair.path));
@@ -112,7 +125,7 @@ export function pairRenames(deleted, added) {
 
 // Replaces each paired deletion and addition with one renamed entry, at the
 // addition's position.
-export function applyRenames(entries, pairs) {
+export function applyRenames(entries: readonly PathStatus[], pairs: readonly RenamePair[]): PathStatus[] {
   const oldPathByNewPath = new Map(pairs.map((pair) => [pair.path, pair.oldPath]));
   const oldPaths = new Set(pairs.map((pair) => pair.oldPath));
   return entries

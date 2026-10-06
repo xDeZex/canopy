@@ -67,15 +67,26 @@ createCommentStore({ newId: () => 42 });
 checkPath({ lstat: async () => ({ isFile: () => true }) }, '/repo', 'a.js');
 declare const rawYaml: unknown;
 const trustedThread = rawYaml.threads[0];
+import { readFileContent } from '../server/file-content.js';
+readFileContent('/repo', 42);
+import { getFileTree, nestIntoTree } from '../server/status.js';
+getFileTree('/repo', 'HEAD', undefined, async () => ({ mtimeMs: 'yesterday' }));
+nestIntoTree([{ path: 'a.txt', status: 'unsupported' }]);
+import { pairRenames } from '../server/pair-renames.js';
+import type { Git } from '../server/git-port.js';
+declare const git: Git;
+git(['show', 'HEAD:a.txt'], '/repo', { maxBuffer: 'large' });
+readFileContent('/repo', 'a.txt', 'HEAD', { readWorkingFile: async () => 42 });
+pairRenames([{ path: 'old.txt', content: 42 }], []);
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   const diagnostics = ts.getPreEmitDiagnostics(program);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046],
-    `Static gate must accept native browser/comment IO and minimal path ports and reject all invalid calls, response shapes, fake capabilities and unchecked YAML access.\n${ts.formatDiagnostics(rejected, {
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322],
+    `Static gate must accept native browser/comment IO and minimal path ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment calls, response shapes, fake capabilities and unchecked YAML access.\n${ts.formatDiagnostics(rejected, {
       getCurrentDirectory: () => root, getCanonicalFileName: (filename) => filename, getNewLine: () => '\n',
     })}`);
-  console.log('Static probes: native browser/comment IO and minimal path ports accepted; all twenty-six invalid calls, response shapes, fake capabilities and unchecked YAML accesses rejected');
+  console.log('Static probes: native browser/comment IO and minimal path ports accepted; all thirty-two invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }
