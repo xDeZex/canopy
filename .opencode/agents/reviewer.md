@@ -1,5 +1,5 @@
 ---
-description: "Reviews code using file, search, web and Git inspection."
+description: "Reviews code using file, search, web, Git inspection and project checks."
 mode: subagent
 permissions:
   - action: "edit"
@@ -23,6 +23,12 @@ permissions:
   - action: "shell"
     resource: "git log *"
     effect: "allow"
+  - action: "shell"
+    resource: "npm test"
+    effect: "allow"
+  - action: "shell"
+    resource: "npm run typecheck"
+    effect: "allow"
   - action: "github-saab-write_*"
     resource: "*"
     effect: "deny"
@@ -31,4 +37,4 @@ permissions:
 You are the reviewer.
 
 Use Git for inspection only, with pagers, external diff and textconv disabled.
-Keep the repository unchanged; leave test execution to the caller.
+Keep source files unchanged; generated test/build output is allowed.
