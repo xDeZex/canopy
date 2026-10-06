@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import ts from 'typescript';
+import { checkInputs } from './build-inputs.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const configPath = path.join(root, 'tsconfig.json');
@@ -80,12 +81,16 @@ readFileContent('/repo', 'a.txt', 'HEAD', { readWorkingFile: async () => 42 });
 pairRenames([{ path: 'old.txt', content: 42 }], []);
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
+  await checkInputs(program, [filename]);
   const diagnostics = ts.getPreEmitDiagnostics(program);
+  const formatHost = {
+    getCurrentDirectory: () => root, getCanonicalFileName: (filename) => filename, getNewLine: () => '\n',
+  };
+  const projectDiagnostics = diagnostics.filter((diagnostic) => diagnostic.file?.fileName !== filename);
+  assert.equal(projectDiagnostics.length, 0, `Project typecheck failed.\n${ts.formatDiagnostics(projectDiagnostics, formatHost)}`);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
   assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322],
-    `Static gate must accept native browser/comment IO and minimal path ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment calls, response shapes, fake capabilities and unchecked YAML access.\n${ts.formatDiagnostics(rejected, {
-      getCurrentDirectory: () => root, getCanonicalFileName: (filename) => filename, getNewLine: () => '\n',
-    })}`);
+    `Static gate must accept native browser/comment IO and minimal path ports and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment calls, response shapes, fake capabilities and unchecked YAML access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
   console.log('Static probes: native browser/comment IO and minimal path ports accepted; all thirty-two invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });

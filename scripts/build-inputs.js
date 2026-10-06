@@ -19,7 +19,7 @@ export async function listFiles(directory) {
 
 // tsconfig.files is the explicit migration manifest. Imports must not sneak
 // unlisted application code into the program, or leave new files unbuilt.
-export async function checkInputs() {
+export async function checkInputs(program, extraInputs = []) {
   const config = ts.readConfigFile(path.join(root, 'tsconfig.json'), ts.sys.readFile);
   assert.equal(config.error, undefined);
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
@@ -30,10 +30,11 @@ export async function checkInputs() {
   const files = (await Promise.all(sourceDirectories.map(listFiles))).flat().filter(isCode).sort();
   const manifest = parsed.fileNames.map((filename) => path.relative(root, filename).split(path.sep).join('/')).sort();
   assert.deepEqual(manifest, files, 'Update tsconfig.files explicitly: replace migrated JS entries with TS, never hide uncovered inputs');
-  const program = ts.createProgram(parsed.fileNames, parsed.options);
+  program ??= ts.createProgram(parsed.fileNames, parsed.options);
   const applicationInputs = program.getSourceFiles().filter((file) => !file.isDeclarationFile && !program.isSourceFileFromExternalLibrary(file))
     .map((file) => path.relative(root, file.fileName).split(path.sep).join('/')).sort();
-  assert.deepEqual(applicationInputs, manifest, 'An import pulled unlisted code into the build');
+  const expectedInputs = [...manifest, ...extraInputs.map((filename) => path.relative(root, path.resolve(root, filename)).split(path.sep).join('/'))].sort();
+  assert.deepEqual(applicationInputs, expectedInputs, 'An import pulled unlisted code into the build');
   const javascript = manifest.filter((filename) => /\.[cm]?jsx?$/.test(filename)).length;
   // The pre-migration baseline was 94 JS inputs. This ceiling only decreases.
   assert.ok(javascript <= 29, 'JavaScript migration coverage must not grow');
