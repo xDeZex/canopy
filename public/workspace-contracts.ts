@@ -14,6 +14,7 @@ export interface WorkspaceWorktree {
   lockedReason?: string | null;
   prunable?: boolean;
   prunableReason?: string | null;
+  deletionReason?: string | null;
 }
 
 export interface WorkspaceFile {
@@ -103,7 +104,7 @@ export function parseComments(value: unknown): CommentsLoad<CommentThread> {
 
 function isWorktree(value: unknown): value is WorkspaceWorktree {
   return isRecord(value) && (typeof value.path === 'string' || value.path === null) &&
-    ['head', 'branch', 'originMainSha', 'lockedReason', 'prunableReason'].every((key) =>
+    ['head', 'branch', 'originMainSha', 'lockedReason', 'prunableReason', 'deletionReason'].every((key) =>
       value[key] === undefined || value[key] === null || typeof value[key] === 'string') &&
     ['detached', 'bare', 'locked', 'prunable'].every((key) => value[key] === undefined || typeof value[key] === 'boolean');
 }

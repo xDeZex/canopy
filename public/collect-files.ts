@@ -1,5 +1,5 @@
 // Flatten the file leaves in tree order, regardless of folder expansion state.
-export interface FileLeaf { type: 'file'; path: string; status?: string; name?: string; oldPath?: string }
+export interface FileLeaf { type: 'file'; path: string; status?: string; name?: string; oldPath?: string; mtimeMs?: number }
 export interface DirectoryNode { type: 'dir'; path: string; name?: string; children: FileNode[] }
 export type FileNode = FileLeaf | DirectoryNode;
 

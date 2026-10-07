@@ -50,11 +50,16 @@ Issue #74 completes the server migration with the real Git adapter and CLI:
 **99 strict TS / 7 remaining JS inputs** (106 total). HTTP/default capability
 composition and its associated tests were already strict upstream; they are not
 counted as newly migrated inputs. All server inputs are now TypeScript.
+Issue #79 migrates the workspace controls and their direct integration test,
+adding one consumed structural DOM port. Combined with #74, the manifest contains
+**102 strict TS / 5 remaining JS inputs**
+(107 total). The app coordinator and app-level deletion tests remain unchecked
+JavaScript compatibility coverage, not claimed strict coverage.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 7-JS ceiling. New code should be TypeScript and listed explicitly.
+a 5-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -78,7 +83,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers accepted; seventy-one invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/workspace-control/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers accepted; seventy-seven invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/control/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -1084,3 +1089,97 @@ was performed. Fake capabilities establish orchestration and simulated failure/
 timing behavior, not actual filesystem event delivery, native Monaco layout/
 focus/IME, network reliability, filesystem races or live Git safety. Aside from
 the explicitly approved oversized-POST correction, runtime behavior is unchanged.
+
+## Implementation evidence and limitations for #79
+
+This section records the original #79 branch, before integrating #74.
+
+Starting commit: `ac9e65d`. `workspace-ui` and its direct test now compile as
+strict TypeScript, retaining native `.js` imports and the real
+`DIFF_RENDER_MODES` import from `monaco-view`. The manifest contains **100 strict
+TS / 7 temporary JS inputs** (107 total), with a lowered 7-JS ceiling. There are
+no dependency changes, blanket `any`, compiler suppressions or unsafe assertions.
+
+`workspace-dom` describes the consumed recursive element/document/window
+operations, not full native classes. Queries are nullable and required controls
+are checked before use. Native collections may be array-like or iterable;
+HTML-only properties are optional on the general native Element projection.
+The toolbar mounts its three children directly rather than requiring a fake
+DocumentFragment. Outside-click handling uses the event's composed path, keeping
+inside descendants and detached-listener cleanup at the same DOM IO seam.
+The narrow fake retains class-only selectors and one listener per event, adding
+attribute reads/data attributes and the consumed one-shot animation listener.
+
+The integration fixture wires the real workspace, comparison locks, tree
+expansion, view/auto-scroll/watch preferences and scroll-affordance helper, with
+only DOM, fetch, storage and clock simulated. All **38 original control cases**
+remain; six additional registrations cover per-worktree expansion/refetch,
+deletion presentation/callbacks, actual preference clicks/persistence, branch
+fallbacks/scroll/flashing, malformed resource JSON and malformed deletion metadata.
+`deletionReason` is now validated as an optional string/null at the existing
+unknown worktree-JSON boundary before presentation consumes it. Other JSON and
+YAML validation remains with the real workspace and server validators; no trusted
+YAML cast or replacement parser is introduced.
+
+Automated worker evidence on **Node 22.22.1**:
+
+- **Static:** `npm ci` installed existing locked dependencies and passed prepare;
+  regular `npm run build` and `npm run typecheck` passed. Native Document/Window/
+  Element and structural fake workspace-control positive probes pass. Six new
+  negatives reject numeric comparison SHAs, nonboolean deletion state, nonnumeric
+  edit times, unsupported diff modes, incompatible deletion callbacks and
+  unchecked nullable queries: **73 negatives** overall. The native positive
+  probe was initially compiler-red because HTMLCollection was incorrectly
+  required to be iterable under this project's libraries; admitting its actual
+  array-like capability made it green without assertions or library changes.
+- **Red/green:** the expansion regression failed with the former constant/no-op
+  expansion fixture (zero visible tree files after expansion), then passed with
+  the real expansion store. The malformed deletion-metadata regression failed
+  with missing expected rejection before that consumed field was validated,
+  then passed after validation. Added deletion presentation and other existing-
+  behavior characterizations are not claimed as unrelated runtime bug fixes.
+- **Integration:** the direct compiled control test passed **44 tests**. Final
+  focused compiled execution passed **212 tests, 0 failed/skipped/cancelled**, in
+  `workspace-ui`, `workspace-state`, `app`, `worktree-delete`, `tree-state`,
+  `collect-files`, `changed-files`, `comments-view`, `viewer` and `monaco-view`
+  under `dist/test/public/`. This includes all retained malformed-input,
+  stale-response, comparison-retention and app-level deletion failure cases.
+  The app coordinator and its app/deletion tests remain unchecked JS compatibility
+  coverage. Shared fake-DOM consumers are covered by this focused run.
+
+Final independent check-only validation on **Node 22.22.1** passed
+`npm run typecheck`, `npm test` (**606 passed, 0 failed/skipped**) and
+`git diff --cached --check`. Standards and spec reviews inspected the complete
+staged diff against starting commit `ac9e65d` and found no actionable findings.
+No browser/manual evaluation, exact-minimum Node rerun, package/build/Git-install
+smoke, real watcher or destructive Git evaluation was performed. Prior #78 user-
+reported browser evidence is historical, not a new #79 check. Simulated controls,
+events, storage and geometry establish orchestration and failure behavior, not
+native layout/focus/IME, browser event fidelity, watcher reliability or live Git
+deletion safety.
+
+## Rebase integration validation (#74 and #79)
+
+Replaying #79's `97509e6` onto fetched `origin/main` **`9dca86a`** retains both
+the typed server composition and workspace-control migrations. The overlapping
+documentation and static-probe expectations were combined, and the JavaScript
+ceiling was lowered to 5. The explicit manifest matches **102 strict TS / 5
+temporary JS inputs** (107 total), including `server/git.ts`, `server/index.ts`,
+`public/workspace-dom.ts` and the migrated control owner/test. All server inputs
+are strict TypeScript; the app coordinator and app-level deletion tests remain
+unchecked compatibility coverage.
+
+On **Node 22.22.1**, `npm run typecheck` passed with all **77 negative probes**
+rejected (71 upstream plus six controls); native Git/browser and structural
+control positive probes passed. One full `npm test` built and ran the explicit
+compiled suite: **608 passed, 0 failed/skipped/cancelled**, retaining all **38
+original + 6 additional control cases**, real workspace/preferences over fake
+IO, and the real Monaco diff-mode import. The upstream oversized-POST protocol
+fix and its HTTP regressions remain intact. No additional runtime behavior or
+dependency changes were required for integration. `git diff --check` passed.
+
+The per-issue validation above is historical, separate from this combined
+snapshot. No minimum-Node, smoke/package/Git-install, browser/manual, real watcher
+or destructive Git evaluation was rerun in this rebase. Simulated IO does not
+prove native layout/focus/IME, network reliability, filesystem-event delivery,
+races or live Git safety.

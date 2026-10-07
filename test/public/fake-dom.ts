@@ -3,6 +3,7 @@ export interface FakeEvent {
   key?: string; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean;
   button?: number; pointerId?: number; clientX?: number; defaultPrevented?: boolean;
   preventDefault(): void;
+  target?: unknown;
   stopPropagation?(): void;
 }
 type Listener = (event: FakeEvent) => unknown;
@@ -12,7 +13,7 @@ export class Element {
   children: Element[];
   className: string;
   dataset: Record<string, string>;
-  style: Record<string, string> & { width: string };
+  style: Record<string, string> & { width: string; paddingLeft: string };
   listeners: Map<string, Listener>;
   events: Record<string, (event?: Partial<FakeEvent>) => unknown> = {};
   textContent = '';
@@ -21,6 +22,10 @@ export class Element {
   rows = 0;
   disabled = false;
   readOnly = false;
+  hidden = false;
+  title = '';
+  scrollLeft = 0;
+  scrollWidth = 0;
   parentElement: Element | null = null;
   isRoot = false;
   ownerDocument?: FakeDocument;
@@ -37,6 +42,8 @@ export class Element {
   declare role?: string;
   declare tabindex?: string;
   declare 'aria-label'?: string;
+  declare 'aria-pressed'?: string;
+  declare 'aria-selected'?: string;
   declare 'aria-expanded'?: string;
   declare 'aria-valuenow'?: string;
   declare 'aria-valuemin'?: string;
@@ -47,7 +54,7 @@ export class Element {
     this.children = [];
     this.className = '';
     this.dataset = {};
-    this.style = { width: '' };
+    this.style = { width: '', paddingLeft: '' };
     this.listeners = new Map();
   }
 
@@ -106,10 +113,18 @@ export class Element {
     ]);
   }
 
-  querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
-  addEventListener(event: string, listener: Listener) {
+  querySelector(selector: string): Element | null { return this.querySelectorAll(selector)[0] ?? null; }
+  require(selector: string): Element {
+    const element = this.querySelector(selector);
+    if (!element) throw new Error(`Missing fake control: ${selector}`);
+    return element;
+  }
+  addEventListener(event: string, listener: Listener, options?: { once?: boolean }) {
     this.listeners.set(event, listener);
-    this.events[event] = (fields = {}) => listener({ preventDefault() {}, stopPropagation() {}, ...fields });
+    this.events[event] = (fields = {}) => {
+      if (options?.once) this.removeEventListener(event, listener);
+      return listener({ preventDefault() {}, stopPropagation() {}, target: this, ...fields });
+    };
   }
   removeEventListener(event: string, listener: Listener) {
     if (this.listeners.get(event) === listener) {
@@ -123,7 +138,13 @@ export class Element {
     if (this.ownerDocument && (!this.ownerDocument.requireConnectedFocus || this.isConnected)) this.ownerDocument.activeElement = this;
   }
   setAttribute(name: string, value: string) {
+    if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase())] = value;
     Object.defineProperty(this, name, { value, writable: true, configurable: true, enumerable: true });
+  }
+  getAttribute(name: string): string | null {
+    if (name.startsWith('data-')) return this.dataset[name.slice(5).replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase())] ?? null;
+    const value: unknown = Object.getOwnPropertyDescriptor(this, name)?.value;
+    return typeof value === 'string' ? value : null;
   }
 }
 

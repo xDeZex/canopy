@@ -164,6 +164,23 @@ declare const partialEditor: Partial<CodeEditor>;
 const invalidCompleteEditor: CodeEditor = partialEditor;
 declare const opaqueZone: ViewZone;
 const invalidNativeNode: HTMLElement = opaqueZone.domNode;
+import { createWorkspaceUI, type WorkspaceUIOptions } from '../public/workspace-ui.js';
+import type { WorkspaceElement, WorkspaceDocument } from '../public/workspace-dom.js';
+import { Element as FakeElement } from '../test/public/fake-dom.js';
+declare const workspaceControls: Omit<WorkspaceUIOptions<Element>, 'document' | 'window' | 'tabsEl' | 'railEl' | 'toolbarEl'>;
+createWorkspaceUI<Element>({ ...workspaceControls, document, window, tabsEl: document.body, railEl: document.body, toolbarEl: document.body });
+declare const fakeControls: Omit<WorkspaceUIOptions<FakeElement>, 'document' | 'window' | 'tabsEl' | 'railEl' | 'toolbarEl'>;
+const fakeWorkspaceDocument: WorkspaceDocument<FakeElement> = { createElement: (tag) => new FakeElement(tag), addEventListener() {}, removeEventListener() {} };
+const simulatedControls = createWorkspaceUI({ ...fakeControls, document: fakeWorkspaceDocument, window: { addEventListener() {} }, tabsEl: new FakeElement('div'), railEl: new FakeElement('div'), toolbarEl: new FakeElement('div') });
+simulatedControls.selectComparisonCommit('/repo', null);
+simulatedControls.setDeletionState(false, 'retained error');
+simulatedControls.selectComparisonCommit('/repo', 42);
+simulatedControls.setDeletionState('busy');
+simulatedControls.setEditTimes({ '/repo': 'yesterday' });
+const invalidControlMode: WorkspaceUIOptions<Element>['DIFF_RENDER_MODES'] = ['unified'];
+const invalidDeleteCallback: WorkspaceUIOptions<Element>['onDeleteWorktree'] = (path: number) => {};
+declare const workspaceElement: WorkspaceElement<Element>;
+workspaceElement.querySelector('.missing').className;
 `);
   const program = ts.createProgram([...parsed.fileNames, filename], { ...parsed.options, noEmit: true });
   await checkInputs(program, [filename]);
@@ -174,9 +191,9 @@ const invalidNativeNode: HTMLElement = opaqueZone.domNode;
   const projectDiagnostics = diagnostics.filter((diagnostic) => diagnostic.file?.fileName !== filename);
   assert.equal(projectDiagnostics.length, 0, `Project typecheck failed.\n${ts.formatDiagnostics(projectDiagnostics, formatHost)}`);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2345, 2322, 2353, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2741, 2739, 2739, 2531, 2531, 2739, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322],
-    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
-  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers accepted; all seventy-one invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2345, 2322, 2353, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2741, 2739, 2739, 2531, 2531, 2739, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2345, 2345, 2322, 2322, 2322, 2531],
+    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/workspace-control/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/control/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
+  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/workspace-control/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers accepted; all seventy-seven invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

@@ -1,8 +1,44 @@
 import { changedFiles } from './changed-files.js';
 import { renderCommentIndex } from './comments-view.js';
 import { updatedWorktreePaths } from './tab-flash.js';
+import { requiredElement } from './workspace-dom.js';
+import type { WorkspaceDocument, WorkspaceElement, WorkspaceWindow, OutsideClick } from './workspace-dom.js';
+import type { createWorkspaceStore } from './workspace-state.js';
+import type { WorkspaceCommit, WorkspaceNode, WorkspaceWorktree, ActivitySnapshot } from './workspace-contracts.js';
+import type { createTreeExpansionStore } from './tree-state.js';
+import type { createCommitLockStore } from './commit-lock.js';
+import type { computeTabScrollAffordance } from './tab-scroll.js';
+import type { formatRelativeTime } from './relative-time.js';
+import type { FileLeaf } from './collect-files.js';
+import type { DIFF_RENDER_MODES } from './monaco-view.js';
 
-function commitDivergence(commits, lockedSha) {
+type ViewMode = 'diff' | 'file';
+type DiffRenderMode = typeof DIFF_RENDER_MODES[number];
+export interface WorkspaceUIOptions<E> {
+  tabsWrapperEl?: E; tabsEl: E; railEl: E; toolbarEl: E;
+  workspace: Pick<ReturnType<typeof createWorkspaceStore>, 'getState' | 'selectThread' | 'showGeneralComments' | 'selectWorktree' | 'selectFile' | 'loadFileTree' | 'loadFileContent'>;
+  treeExpansion: Pick<ReturnType<typeof createTreeExpansionStore>, 'isExpanded' | 'toggle'>;
+  viewModeStore: { getMode(): ViewMode };
+  autoScrollStore: { isEnabled(): boolean };
+  commitLock: Pick<ReturnType<typeof createCommitLockStore>, 'getLockedCommit' | 'lockCommit' | 'setAuto'>;
+  computeTabScrollAffordance: typeof computeTabScrollAffordance;
+  formatRelativeTime: typeof formatRelativeTime;
+  formatEditTime(timestamp: number | null | undefined, now: number): string;
+  now?: () => number;
+  DIFF_RENDER_MODES: readonly DiffRenderMode[];
+  onViewModeChanged(mode: ViewMode): void;
+  onDiffRenderModeChanged(mode: DiffRenderMode): void;
+  getDiffRenderMode(): DiffRenderMode;
+  onAutoScrollChanged(enabled: boolean): void;
+  onNextChange(): void; onPrevChange(): void; onToggleHelp(): void;
+  getWrap(): boolean; onWrapChanged(): void;
+  onDeleteWorktree?(path: string | null): void;
+  getIgnoreGitignore?(): boolean;
+  onIgnoreGitignoreChanged(enabled: boolean): void;
+  document: WorkspaceDocument<E>; window: WorkspaceWindow;
+}
+
+function commitDivergence(commits: WorkspaceCommit[], lockedSha: string | null) {
   const originIndex = commits.findIndex((commit) => commit.isOriginMain);
   const selectedIndex = lockedSha ? commits.findIndex((commit) => commit.sha === lockedSha) : 0;
   if (originIndex < 0 || selectedIndex < 0) return null;
@@ -14,7 +50,7 @@ function commitDivergence(commits, lockedSha) {
 // toolbar (commit picker, Diff/File toggle #5, diff render modes #6, per
 // worktree tree expansion #13, tab-bar scroll affordance #14). The editor and
 // the initial-load error message in #main belong to the app coordinator.
-export function createWorkspaceUI({
+export function createWorkspaceUI<E extends WorkspaceElement<E>>({
   tabsWrapperEl, tabsEl, railEl, toolbarEl, workspace, treeExpansion,
   viewModeStore, autoScrollStore, commitLock, computeTabScrollAffordance, formatRelativeTime,
   formatEditTime, now = Date.now,
@@ -24,17 +60,17 @@ export function createWorkspaceUI({
   onDeleteWorktree,
   getIgnoreGitignore = () => true, onIgnoreGitignoreChanged,
   document, window,
-}) {
-  let toolbarPath = null;
-  let toolbarCommits = null;
-  let toolbarCommitsError = null;
-  let toolbarLockedSha = null;
-  let editTimes = {};
-  const flashingPaths = new Set();
+}: WorkspaceUIOptions<E>) {
+  let toolbarPath: string | null = null;
+  let toolbarCommits: WorkspaceCommit[] | null = null;
+  let toolbarCommitsError: Error | null = null;
+  let toolbarLockedSha: string | null = null;
+  let editTimes: ActivitySnapshot = {};
+  const flashingPaths = new Set<string>();
   let deletionBusy = false;
   let deletionMessage = '';
-  let commentIndex = null;
-  let commentsSnapshot = null;
+  let commentIndex: E | null = null;
+  let commentsSnapshot: string | null = null;
 
   function refreshComments() {
     const { activePath, comments } = workspace.getState();
@@ -45,33 +81,33 @@ export function createWorkspaceUI({
       onSelectThread: (id) => workspace.selectThread(id),
       onGeneralComments: () => workspace.showGeneralComments(),
     });
-    if (commentIndex) commentIndex.replaceChildren(...next.children);
+    if (commentIndex) commentIndex.replaceChildren(...Array.from(next.children));
     else commentIndex = next;
   }
 
   function updateCommitTimes(currentTime = now()) {
     const currentDate = new Date(currentTime);
-    toolbarEl.querySelectorAll('.commit-picker__item-time').forEach((label) => {
-      label.textContent = formatRelativeTime(label.dataset.date, currentDate);
+    Array.from(toolbarEl.querySelectorAll('.commit-picker__item-time')).forEach((label) => {
+      label.textContent = formatRelativeTime(label.getAttribute('data-date') ?? 'undefined', currentDate);
     });
   }
 
   function updateEditTimes(currentTime = now()) {
-    tabsEl.querySelectorAll('.tabs__tab').forEach((tab) => {
-      const timestamp = editTimes[tab.dataset.path];
-      const label = tab.querySelector('.tabs__edit-time');
+    Array.from(tabsEl.querySelectorAll('.tabs__tab')).forEach((tab) => {
+      const timestamp = editTimes[tab.getAttribute('data-path') ?? ''];
+      const label = requiredElement(tab, '.tabs__edit-time');
       label.textContent = formatEditTime(timestamp, currentTime);
       label.title = timestamp == null ? 'Last saved edit unknown' : `Last saved edit: ${new Date(timestamp).toLocaleString()}`;
     });
-    railEl.querySelectorAll('.changed-files__age').forEach((label) => {
-      label.textContent = formatEditTime(Number(label.dataset.mtimeMs), currentTime);
+    Array.from(railEl.querySelectorAll('.changed-files__age')).forEach((label) => {
+      label.textContent = formatEditTime(Number(label.getAttribute('data-mtime-ms')), currentTime);
     });
     updateCommitTimes(currentTime);
   }
 
   // Restart the flash animation on the tab of each worktree that was just saved to.
   // Flashing paths are remembered so a tab re-render keeps the flash running.
-  function flashTab(tab, path) {
+  function flashTab(tab: E, path: string) {
     flashingPaths.add(path);
     tab.classList.remove('is-flashing');
     void tab.offsetWidth;
@@ -83,13 +119,14 @@ export function createWorkspaceUI({
     }, { once: true });
   }
 
-  function flashTabs(paths) {
-    tabsEl.querySelectorAll('.tabs__tab').forEach((tab) => {
-      if (paths.includes(tab.dataset.path)) flashTab(tab, tab.dataset.path);
+  function flashTabs(paths: string[]) {
+    Array.from(tabsEl.querySelectorAll('.tabs__tab')).forEach((tab) => {
+      const path = tab.getAttribute('data-path');
+      if (path !== null && paths.includes(path)) flashTab(tab, path);
     });
   }
 
-  function setEditTimes(timestamps) {
+  function setEditTimes(timestamps: ActivitySnapshot) {
     const updated = updatedWorktreePaths(editTimes, timestamps);
     editTimes = timestamps;
     updateEditTimes();
@@ -99,9 +136,9 @@ export function createWorkspaceUI({
   function updateTabScrollAffordance() {
     if (!tabsWrapperEl) return;
     const { showLeft, showRight } = computeTabScrollAffordance({
-      scrollLeft: tabsEl.scrollLeft,
-      scrollWidth: tabsEl.scrollWidth,
-      clientWidth: tabsEl.clientWidth,
+      scrollLeft: tabsEl.scrollLeft ?? 0,
+      scrollWidth: tabsEl.scrollWidth ?? 0,
+      clientWidth: tabsEl.clientWidth ?? 0,
     });
     tabsWrapperEl.classList.toggle('has-scroll-left', showLeft);
     tabsWrapperEl.classList.toggle('has-scroll-right', showRight);
@@ -110,7 +147,7 @@ export function createWorkspaceUI({
   tabsEl.addEventListener('scroll', updateTabScrollAffordance);
   window.addEventListener('resize', updateTabScrollAffordance);
 
-  function branchLabel(worktree) {
+  function branchLabel(worktree: WorkspaceWorktree) {
     if (worktree.branch) return worktree.branch;
     if (worktree.bare) return '(bare)';
     if (worktree.detached) return `detached @ ${worktree.head?.slice(0, 7) ?? '?'}`;
@@ -135,12 +172,12 @@ export function createWorkspaceUI({
 
         const tab = document.createElement('button');
         tab.type = 'button';
-        tab.dataset.path = worktree.path;
+        tab.setAttribute('data-path', String(worktree.path));
         tab.className = `tabs__tab${isActive ? ' is-active' : ''}`;
         tab.setAttribute('role', 'tab');
         tab.setAttribute('aria-selected', String(isActive));
         tab.append(branch, pathLabel, editTime);
-        if (flashingPaths.has(worktree.path)) flashTab(tab, worktree.path);
+        if (worktree.path !== null && flashingPaths.has(worktree.path)) flashTab(tab, worktree.path);
         tab.addEventListener('click', () => workspace.selectWorktree(worktree.path));
         return tab;
       })
@@ -149,10 +186,10 @@ export function createWorkspaceUI({
     updateTabScrollAffordance();
   }
 
-  function renderNode(node, depth) {
+  function renderNode(node: WorkspaceNode, depth: number): E {
     const { activePath } = workspace.getState();
     if (node.type === 'dir') {
-      const isExpanded = treeExpansion.isExpanded(activePath, node.path);
+      const isExpanded = activePath !== null && treeExpansion.isExpanded(activePath, node.path);
 
       const caret = document.createElement('span');
       caret.className = 'rail__caret';
@@ -163,10 +200,10 @@ export function createWorkspaceUI({
 
       const label = document.createElement('div');
       label.className = 'rail__dir';
-      label.style.paddingLeft = `${depth * 12 + 10}px`;
+      if (label.style) label.style.paddingLeft = `${depth * 12 + 10}px`;
       label.append(caret, name);
       label.addEventListener('click', () => {
-        treeExpansion.toggle(activePath, node.path);
+        if (activePath !== null) treeExpansion.toggle(activePath, node.path);
         renderRail();
       });
 
@@ -178,17 +215,17 @@ export function createWorkspaceUI({
     }
 
     const file = renderFileRow(node, node.name, 'rail__file');
-    file.style.paddingLeft = `${depth * 12 + 10}px`;
+    if (file.style) file.style.paddingLeft = `${depth * 12 + 10}px`;
     return file;
   }
 
-  function fileLabel(node, fallback) {
+  function fileLabel(node: FileLeaf, fallback: string) {
     return node.status === 'renamed' ? `${node.oldPath} → ${node.path}` : fallback;
   }
 
   // A clickable file row, shared by the tree and the changed-files list so
   // status colors, the active highlight and click-to-open stay identical.
-  function renderFileRow(node, label, className) {
+  function renderFileRow(node: FileLeaf, label: string, className: string) {
     const { activeFile } = workspace.getState();
     const row = document.createElement('div');
     row.className = `${className} status-${node.status}${node.path === activeFile ? ' is-active' : ''}`;
@@ -219,10 +256,10 @@ export function createWorkspaceUI({
         path.className = 'changed-files__path';
         path.textContent = fileLabel(node, node.path);
         row.replaceChildren(path);
-        if (node.status !== 'deleted' && Number.isFinite(node.mtimeMs)) {
+        if (node.status !== 'deleted' && node.mtimeMs !== undefined && Number.isFinite(node.mtimeMs)) {
           const age = document.createElement('span');
           age.className = 'changed-files__age';
-          age.dataset.mtimeMs = String(node.mtimeMs);
+          age.setAttribute('data-mtime-ms', String(node.mtimeMs));
           age.textContent = formatEditTime(node.mtimeMs, now());
           age.title = `Last saved edit: ${new Date(node.mtimeMs).toLocaleString()}`;
           row.append(age);
@@ -245,13 +282,13 @@ export function createWorkspaceUI({
       const tree = document.createElement('div');
       tree.className = 'rail__tree';
       tree.append(message);
-      railEl.replaceChildren(tree, renderChangedFiles(), commentIndex);
+      railEl.replaceChildren(tree, renderChangedFiles(), ...(commentIndex ? [commentIndex] : []));
       return;
     }
     const tree = document.createElement('div');
     tree.className = 'rail__tree';
     tree.append(...fileTree.map((node) => renderNode(node, 0)));
-    railEl.replaceChildren(tree, renderChangedFiles(), commentIndex);
+    railEl.replaceChildren(tree, renderChangedFiles(), ...(commentIndex ? [commentIndex] : []));
   }
 
   // Re-fetch the tree regardless of whether a file is open; the selected
@@ -263,14 +300,14 @@ export function createWorkspaceUI({
     if (activeFile) workspace.loadFileContent();
   }
 
-  function selectComparisonCommit(activePath, sha) {
+  function selectComparisonCommit(activePath: string, sha: string | null) {
     if (sha === null) commitLock.setAuto(activePath);
     else commitLock.lockCommit(activePath, sha);
     closeMenus();
     onCommitLockChanged();
   }
 
-  function renderCommitMenuItem(commit, isSelected, activePath) {
+  function renderCommitMenuItem(commit: WorkspaceCommit, isSelected: boolean, activePath: string) {
     const item = document.createElement('div');
     item.className = [
       'commit-picker__item',
@@ -284,13 +321,13 @@ export function createWorkspaceUI({
 
     const messageEl = document.createElement('span');
     messageEl.className = 'commit-picker__item-message';
-    messageEl.textContent = commit.message;
+    messageEl.textContent = commit.message ?? '';
     messageEl.title = commit.message;
 
     const timeEl = document.createElement('span');
     timeEl.className = 'commit-picker__item-time';
-    timeEl.dataset.date = commit.date;
-    timeEl.textContent = formatRelativeTime(commit.date, new Date(now()));
+    timeEl.setAttribute('data-date', String(commit.date));
+    timeEl.textContent = formatRelativeTime(String(commit.date), new Date(now()));
 
     item.append(shaEl, messageEl, timeEl);
     item.addEventListener('click', () => {
@@ -299,23 +336,23 @@ export function createWorkspaceUI({
     return item;
   }
 
-  function updateCommitPicker(activePath, commits, commitsError) {
+  function updateCommitPicker(activePath: string, commits: WorkspaceCommit[], commitsError: Error | null) {
     const lockedSha = commitLock.getLockedCommit(activePath);
     if (toolbarCommits === commits && toolbarCommitsError === commitsError && toolbarLockedSha === lockedSha) return;
     toolbarCommits = commits;
     toolbarCommitsError = commitsError;
     toolbarLockedSha = lockedSha;
-    const picker = toolbarEl.querySelector('.commit-picker');
-    const trigger = picker.querySelector('.commit-picker__trigger');
+    const picker = requiredElement(toolbarEl, '.commit-picker');
+    const trigger = requiredElement(picker, '.commit-picker__trigger');
     const divergence = commitDivergence(commits, lockedSha);
     trigger.className = `commit-picker__trigger${divergence ? ` commit-picker__trigger--${divergence}` : ''}`;
     trigger.title = divergence ? `Selected commit is ${divergence === 'ahead' ? 'ahead of' : divergence} the origin/main divergence` : '';
     const selectedCommit = commits.find((commit) => commit.sha === lockedSha);
-    const titleEl = picker.querySelector('.commit-picker__trigger-title');
+    const titleEl = requiredElement(picker, '.commit-picker__trigger-title');
     titleEl.textContent = lockedSha ? selectedCommit?.message || lockedSha.slice(0, 7) : 'HEAD';
-    titleEl.title = titleEl.textContent;
-    picker.querySelector('.commit-picker__trigger-label').textContent = lockedSha ? 'locked' : 'since last commit';
-    const menu = picker.querySelector('.commit-picker__menu');
+    titleEl.title = titleEl.textContent ?? '';
+    requiredElement(picker, '.commit-picker__trigger-label').textContent = lockedSha ? 'locked' : 'since last commit';
+    const menu = requiredElement(picker, '.commit-picker__menu');
     const autoItem = document.createElement('div');
     autoItem.className = `commit-picker__item${lockedSha ? '' : ' is-selected'}`;
     autoItem.textContent = 'Auto (since last commit)';
@@ -358,10 +395,10 @@ export function createWorkspaceUI({
       if (menu.classList.contains('is-open')) updateCommitTimes();
     });
     // The toolbar is replaced on worktree change, so drop the listener once detached.
-    const closeOnOutsideClick = (event) => {
+    const closeOnOutsideClick = (event: OutsideClick) => {
       if (!wrapper.isConnected) {
         document.removeEventListener('click', closeOnOutsideClick);
-      } else if (!wrapper.contains(event.target)) {
+      } else if (!event.composedPath().includes(wrapper)) {
         menu.classList.remove('is-open');
       }
     };
@@ -370,11 +407,11 @@ export function createWorkspaceUI({
     return wrapper;
   }
 
-  function renderToggleButton(mode, label) {
+  function renderToggleButton(mode: ViewMode, label: string) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `view-toggle__btn${viewModeStore.getMode() === mode ? ' is-active' : ''}`;
-    button.dataset.mode = mode;
+    button.setAttribute('data-mode', mode);
     button.textContent = label;
     button.addEventListener('click', () => onViewModeChanged(mode));
     return button;
@@ -392,7 +429,7 @@ export function createWorkspaceUI({
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `view-toggle__btn${getDiffRenderMode() === mode ? ' is-active' : ''}`;
-      button.dataset.mode = mode;
+      button.setAttribute('data-mode', mode);
       button.textContent = DIFF_RENDER_MODE_LABELS[mode];
       button.addEventListener('click', () => onDiffRenderModeChanged(mode));
       return button;
@@ -405,7 +442,8 @@ export function createWorkspaceUI({
     nav.className = 'change-nav';
     const steps = document.createElement('div');
     steps.className = 'view-toggle change-nav__steps';
-    for (const [label, glyph, onClick] of [['Previous change', '▲', onPrevChange], ['Next change', '▼', onNextChange]]) {
+    const controls: [string, string, () => void][] = [['Previous change', '▲', onPrevChange], ['Next change', '▼', onNextChange]];
+    for (const [label, glyph, onClick] of controls) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'view-toggle__btn change-nav__step';
@@ -470,7 +508,6 @@ export function createWorkspaceUI({
   }
 
   function createToolbar() {
-    const toolbar = document.createDocumentFragment();
     const pathLabel = document.createElement('span');
     pathLabel.className = 'viewer__path';
     const directory = document.createElement('span');
@@ -490,8 +527,7 @@ export function createWorkspaceUI({
     deletionStatus.className = 'viewer__deletion-status';
     deletionStatus.setAttribute('role', 'status');
     right.append(renderChangeNav(), renderDiffModeToggle(), renderWrapButton(), renderIgnoreButton(), renderDeleteButton(), deletionStatus, renderHelpButton());
-    toolbar.append(left, toggle, right);
-    return toolbar;
+    return [left, toggle, right];
   }
 
   // Keep the controls and open menu mounted across file and commit updates.
@@ -508,48 +544,48 @@ export function createWorkspaceUI({
     if (toolbarPath !== activePath) {
       toolbarPath = activePath;
       toolbarCommits = null;
-      toolbarEl.replaceChildren(createToolbar());
+      toolbarEl.replaceChildren(...createToolbar());
     }
-    const pathLabel = toolbarEl.querySelector('.viewer__path');
+    const pathLabel = requiredElement(toolbarEl, '.viewer__path');
     // Always mounted (never hidden) so selecting a file moves nothing.
     const path = activeFile ?? '';
     const separator = path.lastIndexOf('/');
-    pathLabel.querySelector('.viewer__directory').textContent = path.slice(0, separator + 1);
-    pathLabel.querySelector('.viewer__filename').textContent = path.slice(separator + 1);
+    requiredElement(pathLabel, '.viewer__directory').textContent = path.slice(0, separator + 1);
+    requiredElement(pathLabel, '.viewer__filename').textContent = path.slice(separator + 1);
     pathLabel.title = activeFile ?? '';
 
     updateCommitPicker(activePath, commits, commitsError);
-    toolbarEl.querySelectorAll('.view-toggle__btn').forEach((button) => {
-      const selected = button.parentElement.classList.contains('view-toggle--mode')
+    Array.from(toolbarEl.querySelectorAll('.view-toggle__btn')).forEach((button) => {
+      const selected = button.parentElement?.classList.contains('view-toggle--mode')
         ? viewModeStore.getMode() : getDiffRenderMode();
-      button.classList.toggle('is-active', button.dataset.mode === selected);
+      button.classList.toggle('is-active', button.getAttribute('data-mode') === selected);
     });
     const diffMode = viewModeStore.getMode() === 'diff';
     // Concealed, not removed, in File mode: the space stays reserved.
-    toolbarEl.querySelector('.view-toggle--diff').classList.toggle('is-concealed', !diffMode);
-    toolbarEl.querySelectorAll('.change-nav__step').forEach((button) => {
+    requiredElement(toolbarEl, '.view-toggle--diff').classList.toggle('is-concealed', !diffMode);
+    Array.from(toolbarEl.querySelectorAll('.change-nav__step')).forEach((button) => {
       button.disabled = !activeFile || !diffMode;
     });
-    const auto = toolbarEl.querySelector('.change-nav__auto');
+    const auto = requiredElement(toolbarEl, '.change-nav__auto');
     auto.classList.toggle('is-on', autoScrollStore.isEnabled());
     auto.setAttribute('aria-pressed', String(autoScrollStore.isEnabled()));
-    const wrapButton = toolbarEl.querySelector('.viewer__wrap');
+    const wrapButton = requiredElement(toolbarEl, '.viewer__wrap');
     wrapButton.classList.toggle('is-active', getWrap());
     wrapButton.setAttribute('aria-pressed', String(getWrap()));
-    const deleteButton = toolbarEl.querySelector('.viewer__delete-worktree');
+    const deleteButton = requiredElement(toolbarEl, '.viewer__delete-worktree');
     const reason = worktrees.find((worktree) => worktree.path === activePath)?.deletionReason;
     deleteButton.disabled = deletionBusy || Boolean(reason);
     deleteButton.title = reason || 'Delete this worktree and its local branch';
     deleteButton.textContent = deletionBusy ? 'Deleting…' : 'Delete worktree';
-    const deletionStatus = toolbarEl.querySelector('.viewer__deletion-status');
+    const deletionStatus = requiredElement(toolbarEl, '.viewer__deletion-status');
     deletionStatus.textContent = deletionMessage;
     deletionStatus.hidden = !deletionMessage;
-    const ignoreButton = toolbarEl.querySelector('.watch-ignore');
+    const ignoreButton = requiredElement(toolbarEl, '.watch-ignore');
     ignoreButton.classList.toggle('is-active', getIgnoreGitignore());
     ignoreButton.setAttribute('aria-pressed', String(getIgnoreGitignore()));
   }
 
-  function renderError(_err) {
+  function renderError(_err: unknown) {
     tabsEl.replaceChildren();
     railEl.replaceChildren();
     toolbarEl.hidden = true;
@@ -564,7 +600,7 @@ export function createWorkspaceUI({
     toolbarEl.querySelector('.commit-picker__menu')?.classList.remove('is-open');
   }
 
-  function setDeletionState(busy, message = '') {
+  function setDeletionState(busy: boolean, message = '') {
     deletionBusy = busy;
     deletionMessage = message;
     renderToolbar();
