@@ -63,6 +63,7 @@ function commentHandler(store: ReturnType<typeof createCommentStore>, loader?: R
   const unused = (): never => { throw new Error('Unexpected non-comment capability'); };
   return createRequestHandler({
     getWorktrees: async () => [{ path: '/repo' }], createComment: store.create,
+    statWorktree: () => ({ isDirectory: () => true }),
     getTree: unused, getContent: unused, getCommits: unused, getComments: loader ?? unused,
     watchWorktree: unused, subscribeToWorktreeChanges: unused, subscribeToActivity: unused,
     readStatic: unused, publicDir: '/unused', worktreeDeletion: { preview: unused, remove: unused },

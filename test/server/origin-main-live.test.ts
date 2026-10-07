@@ -43,7 +43,7 @@ function fixture() {
     if (args[0] === 'log') return log;
     throw new Error(`Unexpected Git command: ${args}`);
   });
-  const getWorktrees = createListWorktrees('/linked', git);
+  const getWorktrees = createListWorktrees('/linked', git, { stat: () => ({ isDirectory: () => true }) });
   const subscribeToWorktreeChanges = createFanOut((onChange: (worktrees: Readonly<Awaited<ReturnType<typeof getWorktrees>>>) => void, options: WatchOptions) =>
     pollWorktrees(getWorktrees, onChange, {
       onError(error) {
@@ -55,6 +55,7 @@ function fixture() {
     }));
   const handle = createRequestHandler({
     getWorktrees, subscribeToWorktreeChanges,
+    statWorktree: () => ({ isDirectory: () => true }),
     getCommits: (path: string, file: string | null) => listCommits(path, file, git),
     getTree: async () => { throw new Error('Unexpected tree read'); },
     getContent: async () => { throw new Error('Unexpected content read'); },

@@ -1,9 +1,13 @@
 import path from 'node:path';
+import { hasWorktreeDirectory, type WorktreeStat } from './default-deps.js';
 import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from './route-logic.js';
 
 // These are HTTP IO ports, not complete models of the legacy Git/comment data.
 // Payloads that HTTP only serializes stay unknown; consumed fields are explicit.
 export type Cleanup = () => void;
+export class WorktreeUnavailableError extends Error {
+  constructor() { super('Worktree directory is missing'); }
+}
 export type WorktreeSnapshot = readonly { readonly path: string | null }[];
 export type WorktreeChanges = (worktrees: WorktreeSnapshot) => void;
 export type PollError = (error: { readonly message: string }) => void;
@@ -15,6 +19,8 @@ export type WorktreeDeletion = {
 };
 export type RequestDependencies = {
   getWorktrees: () => Promise<WorktreeSnapshot>;
+  getDeletionWorktrees?: () => Promise<WorktreeSnapshot>;
+  statWorktree?: WorktreeStat;
   getTree: (worktreePath: string, ref: string) => Promise<unknown>;
   getContent: (worktreePath: string, file: string, ref: string, options?: { oldPath: string }) => Promise<{ head: string | null; working: string | null }>;
   getCommits: (worktreePath: string, file: string | null) => Promise<unknown>;
@@ -90,6 +96,8 @@ const crossOrigin = (headers: NonNullable<RequestDescription['headers']>, protoc
 // `readStatic(filePath)` and `publicDir`.
 export function createRequestHandler({
   getWorktrees,
+  getDeletionWorktrees = getWorktrees,
+  statWorktree,
   getTree,
   getContent,
   getCommits,
@@ -112,23 +120,38 @@ export function createRequestHandler({
       response.headers['Cache-Control'] = 'no-store';
       return response;
     };
+    const readWorktree = async (worktreePath: string, read: () => Promise<ResponseDescription>) => {
+      try { return await read(); }
+      catch (error) {
+        // Validation cannot lock the directory against an external removal.
+        // Translate that race, but leave failures in existing directories alone.
+        if (!hasWorktreeDirectory(worktreePath, statWorktree)) {
+          return json(404, { error: 'Worktree directory is missing' });
+        }
+        throw error;
+      }
+    };
 
     // Reject missing and unknown worktrees before any route operates on a
     // path. Returns `{ worktreePath }` or `{ error }` (a ready response).
     // file-content uses a different missing-param message to preserve its API.
-    const resolveWorktree = async (missingError = 'Missing "worktree" query param'): Promise<{ worktreePath: string; error?: never } | { error: ResponseDescription; worktreePath?: never }> => {
+    // Deletion needs registration membership, not a browseable directory.
+    const resolveWorktree = async (missingError = 'Missing "worktree" query param', forDeletion = false): Promise<{ worktreePath: string; error?: never } | { error: ResponseDescription; worktreePath?: never }> => {
       const worktreePath = searchParams.get('worktree');
       if (!worktreePath) return { error: json(400, { error: missingError }) };
 
-      const worktrees = await getWorktrees();
+      const worktrees = await (forDeletion ? getDeletionWorktrees() : getWorktrees());
       if (!worktrees.some((worktree) => worktree.path === worktreePath)) {
         return { error: json(404, { error: 'Unknown worktree' }) };
+      }
+      if (!forDeletion && !hasWorktreeDirectory(worktreePath, statWorktree)) {
+        return { error: json(404, { error: 'Worktree directory is missing' }) };
       }
       return { worktreePath };
     };
 
     async function handleWorktreeDeletion() {
-      const { worktreePath, error } = await resolveWorktree();
+      const { worktreePath, error } = await resolveWorktree(undefined, true);
       if (error) return error;
       const confirmation = headers['x-canopy-confirmation'];
       try {
@@ -182,14 +205,14 @@ export function createRequestHandler({
     if (pathname === '/api/comments') {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
-      return noStoreJson(200, await getComments(worktreePath));
+      return readWorktree(worktreePath, async () => noStoreJson(200, await getComments(worktreePath)));
     }
 
     if (pathname === '/api/files') {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
 
-      return json(200, await getTree(worktreePath, searchParams.get('ref') || 'HEAD'));
+      return readWorktree(worktreePath, async () => json(200, await getTree(worktreePath, searchParams.get('ref') || 'HEAD')));
     }
 
     if (pathname === '/api/watch') {
@@ -206,6 +229,10 @@ export function createRequestHandler({
       // switches worktrees, so tearing down is all the re-scoping this MVP
       // needs (see server/watcher.js's header comment).
       return sseResponse(includeBody, (write) => {
+        // The HTTP adapter subscribes after awaiting this response. Recheck
+        // before starting either observer; external removal is still possible
+        // after this final check, as with any filesystem operation.
+        if (!hasWorktreeDirectory(worktreePath, statWorktree)) throw new WorktreeUnavailableError();
         const watcher = watchWorktree(worktreePath, (paths) => write(formatChangeEvent(paths)), {
           ignoreGitignore,
           onStatusChange: () => write('event: status-invalidated\ndata: {}\n\n'),
@@ -250,19 +277,21 @@ export function createRequestHandler({
         return json(403, { error: 'Forbidden' });
       }
 
-      const { head, working } = await getContent(
-        worktreePath, filePath, searchParams.get('ref') || 'HEAD', oldPath ? { oldPath } : undefined,
-      );
-      if (head === null && working === null) return json(404, { error: 'Not found' });
+      return readWorktree(worktreePath, async () => {
+        const { head, working } = await getContent(
+          worktreePath, filePath, searchParams.get('ref') || 'HEAD', oldPath ? { oldPath } : undefined,
+        );
+        if (head === null && working === null) return json(404, { error: 'Not found' });
 
-      return json(200, { path: filePath, head, working });
+        return json(200, { path: filePath, head, working });
+      });
     }
 
     if (pathname === '/api/commits') {
       const { worktreePath, error } = await resolveWorktree();
       if (error) return error;
 
-      return json(200, await getCommits(worktreePath, searchParams.get('file') || null));
+      return readWorktree(worktreePath, async () => json(200, await getCommits(worktreePath, searchParams.get('file') || null)));
     }
 
     return serveStatic(pathname, { includeBody, readStatic, publicDir });

@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import http, { type IncomingMessage, type ClientRequest, type Server, type IncomingHttpHeaders } from 'node:http';
 import type { WorktreeChanges, PollError, ActivityChanges } from '../../server/handle-request.js';
-import { createApp } from '../../server/app.js';
+import { createApp as createServerApp, type AppOptions } from '../../server/app.js';
+
+const createApp = (options: AppOptions = {}) => createServerApp({
+  statWorktree: () => ({ isDirectory: () => true }), ...options,
+});
 
 async function startServer() {
   const server = createApp({ listWorktrees: async () => [{ path: '/main' }] });
@@ -612,6 +616,13 @@ test('GET /api/watch-worktrees streams worktree-list changes as SSE', async (t) 
   const chunk = await chunkPromise;
 
   assert.equal(chunk, `data: ${JSON.stringify(fixture)}\n\n`);
+
+  // The fan-out replays its cached snapshot synchronously during subscribe.
+  // The adapter must preserve that first frame while committing SSE headers.
+  const replay = await openStream(port, '/api/watch-worktrees');
+  t.after(() => replay.req.destroy());
+  assert.equal(replay.res.statusCode, 200);
+  assert.equal(await nextChunk(replay.res), `data: ${JSON.stringify(fixture)}\n\n`);
 });
 
 test('closing the client connection stops the worktree-list poll', async (t) => {

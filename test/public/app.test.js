@@ -189,6 +189,7 @@ test('index startup reconciliation and later operations update both rails withou
   };
   const handler = createRequestHandler({
     getWorktrees: async () => [{ path: '/linked', head: 'unchanged', branch: 'linked' }],
+    statWorktree: () => ({ isDirectory: () => true }),
     getTree: (path, ref) => getFileTree(path, ref, runGit, async () => ({ mtimeMs: 1000 })),
     getContent: async () => ({ head: 'same HEAD content', working: 'same disk content' }),
     getCommits: async () => [{ sha: 'unchanged', message: 'same commit', date: '2026-01-01' }],

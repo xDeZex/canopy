@@ -163,7 +163,7 @@ test('a shared Git-backed poll retains success through failure and recovers at t
     }
     throw new Error(`Unexpected Git command: ${args}`);
   });
-  const getWorktrees = createListWorktrees('/main', runGit);
+  const getWorktrees = createListWorktrees('/main', runGit, { stat: () => ({ isDirectory: () => true }) });
   type List = Awaited<ReturnType<typeof getWorktrees>>;
   const subscribe = createFanOut<Readonly<List>>((onChange, options) => pollWorktrees(getWorktrees, onChange, { ...options, ...scheduler }));
   const changes: Readonly<List>[] = [];

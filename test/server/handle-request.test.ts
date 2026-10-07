@@ -10,6 +10,7 @@ type Overrides = Omit<Partial<RequestDependencies>, 'worktreeDeletion'> & { work
 function makeHandler(overrides: Overrides = {}) {
   return createRequestHandler({
     getWorktrees: async () => worktrees,
+    statWorktree: () => ({ isDirectory: () => true }),
     getTree: async (worktreePath, ref) => ({ worktreePath, ref }),
     getContent: async () => ({ head: 'h', working: 'w' }),
     getCommits: async (worktreePath, file) => ({ worktreePath, file }),
