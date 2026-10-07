@@ -19,9 +19,9 @@ function portOf(server: Server): number {
 }
 
 type HttpResponse = { statusCode: number | undefined; headers: IncomingHttpHeaders; body: string };
-function request(port: number, method: string, requestPath: string, options: { headers?: http.OutgoingHttpHeaders; body?: string } = {}): Promise<HttpResponse> {
+function request(port: number, method: string, requestPath: string, options: { headers?: http.OutgoingHttpHeaders; body?: string | readonly Buffer[] } = {}): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
-    http
+    const req = http
       .request({ host: '127.0.0.1', port, method, path: requestPath, headers: options.headers }, (res) => {
         let body = '';
         res.setEncoding('utf8');
@@ -30,8 +30,12 @@ function request(port: number, method: string, requestPath: string, options: { h
         });
         res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body }));
       })
-      .on('error', reject)
-      .end(options.body);
+      .on('error', reject);
+    if (typeof options.body === 'string' || options.body === undefined) req.end(options.body);
+    else {
+      for (const chunk of options.body) req.write(chunk);
+      req.end();
+    }
   });
 }
 
@@ -107,6 +111,54 @@ test('HTTP comment mutations preserve JSON parsing, origin rejection and structu
   assert.deepEqual(JSON.parse(conflict.body), { error: 'Comments changed', conflict: true, revision: 'r2' });
   assert.equal(conflict.headers['content-length'], String(Buffer.byteLength(conflict.body)));
   assert.deepEqual(calls, [{ text: 'é', revision: 'absent' }, { revision: 'stale' }]);
+});
+
+test('HTTP comment bodies accept exactly 256 KiB of UTF-8 bytes and reject one byte more before mutation', async (t) => {
+  const inputs: Record<string, unknown>[] = [];
+  const server = createApp({
+    listWorktrees: async () => [{ path: '/linked' }],
+    createComment: async (_path, input) => { inputs.push(input); return { revision: 'r1' }; },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const port = portOf(server);
+  const headers = { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}` };
+  const text = 'é'.repeat(131066) + 'x';
+  const body = Buffer.from(JSON.stringify({ text }));
+  assert.equal(body.length, 262144);
+  // Split the first multibyte character between writes; decoding must happen
+  // after collecting bytes, not separately on each incoming chunk.
+  const accepted = await request(port, 'POST', '/api/comments?worktree=/linked', {
+    headers, body: [body.subarray(0, 10), body.subarray(10, 65536), body.subarray(65536)],
+  });
+  assert.equal(accepted.statusCode, 201);
+  assert.deepEqual(inputs, [{ text }]);
+  assert.equal(accepted.headers['content-type'], 'application/json; charset=utf-8');
+  assert.equal(accepted.headers['content-length'], String(Buffer.byteLength(accepted.body)));
+  const rejected = await request(port, 'POST', '/api/comments?worktree=/linked', {
+    headers, body: [body, Buffer.from(' ')],
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.deepEqual(JSON.parse(rejected.body), { error: 'Invalid JSON body' });
+  assert.equal(rejected.headers['cache-control'], 'no-store');
+  assert.equal(inputs.length, 1, 'oversized input must not reach the store');
+});
+
+test('HTTP adapter reports unexpected dependency failures without disclosing their details', async (t) => {
+  const failure = new Error('private Git failure details');
+  const logged: unknown[][] = [];
+  t.mock.method(console, 'error', (...values: unknown[]) => { logged.push(values); });
+  const server = createApp({ listWorktrees: async () => { throw failure; } });
+  server.listen(0);
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const response = await get(portOf(server), '/api/worktrees');
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.headers['content-type'], 'application/json; charset=utf-8');
+  assert.equal(response.headers['content-length'], '33');
+  assert.deepEqual(JSON.parse(response.body), { error: 'Internal server error' });
+  assert.deepEqual(logged, [[failure]]);
 });
 
 test('HTTP activity SSE flushes headers, forwards the observation mode and unsubscribes on disconnect; HEAD is idle', { timeout: 2000 }, async (t) => {

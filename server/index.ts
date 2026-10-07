@@ -15,7 +15,7 @@ if (!target || extra.length > 0) {
   process.exit(1);
 }
 
-let repoRoot;
+let repoRoot: string;
 try {
   repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: path.resolve(target),

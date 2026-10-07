@@ -46,11 +46,15 @@ It does not replace any JS input: #77 already migrated the scoped editor owners
 and tests. The remaining app/workspace orchestration and server JS are outside
 this consumed-contract refinement; the upstream 9-JS ceiling remains unchanged.
 The original #78 branch had 85 TS / 19 JS; its evidence below is historical.
+Issue #74 completes the server migration with the real Git adapter and CLI:
+**99 strict TS / 7 remaining JS inputs** (106 total). HTTP/default capability
+composition and its associated tests were already strict upstream; they are not
+counted as newly migrated inputs. All server inputs are now TypeScript.
 `allowJs: true` / `checkJs: false` only lets these
 listed legacy modules pass through compilation; it does **not** make their
 contracts type-safe. Build/typecheck/test gates compare the manifest against
 all code in the three source trees, reject unlisted imported code, and enforce
-a 9-JS ceiling. New code should be TypeScript and listed explicitly.
+a 7-JS ceiling. New code should be TypeScript and listed explicitly.
 
 For each migration, replace the `.js` entry with `.ts` (retain `.js` imports),
 and lower the JavaScript ceiling in `scripts/build-inputs.js`. Do not add
@@ -74,7 +78,7 @@ npm and installed executable shebangs use the same Node version.
 
 | Level | Command | What it proves |
 | --- | --- | --- |
-| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, Monaco/AMD, minimal path ports and structural watchers accepted; sixty-seven invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
+| Static, automated | `npm run typecheck` | Manifest coverage; strict migrated source/tests; native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers accepted; seventy-one invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities, a range-less file anchor and unchecked YAML/JSON access rejected |
 | Unit/integration, automated | `npm test` | All explicitly selected compiled tests; existing fake IO boundaries are unchanged |
 | Focused unit, automated | `node --test dist/test/server/route-logic.test.js` after `npm run build` | Existing containment and framing behavior plus newline escaping, snapshot passthrough and structural error regressions |
 | Focused integration, automated | Run `node --test dist/test/server/handle-request.test.js`, `node --test dist/test/server/app.test.js` and `node --test dist/test/server/app.integration.test.js` separately after `npm run build` | HTTP routing/mutations, fake Git/filesystem/comments/deletion capabilities, MIME/byte length and SSE subscription/disconnect behavior |
@@ -987,3 +991,96 @@ minimum-Node, browser/manual, real watcher or destructive Git evaluation was
 rerun during this rebase. Earlier user-reported browser results remain separate;
 simulated IO does not prove native layout/focus/IME, CDN/network reliability,
 filesystem-event delivery, races or live Git safety.
+
+## Implementation evidence and limitations for #74
+
+Starting commit: `ac9e65d`. `app.ts`, `default-deps.ts` and their HTTP/discovery/
+origin-main tests were already strict TypeScript. This slice migrates only the
+two remaining server JavaScript inputs, `git` and `index`, retaining their `.js`
+import specifiers and compiled executable path. The explicit manifest now has
+**99 strict TS / 7 temporary JS inputs** (106 total), with a 7-JS ceiling.
+No dependencies, engine minimum, loader, bundler, package layout or non-code
+browser assets changed. The real Git adapter implements the existing narrow
+arguments/working-directory/optional numeric `maxBuffer` port and returns text;
+it does not expose arbitrary child-process encoding or execution options.
+Existing unknown JSON/YAML validation and invalid-input cases remain unchanged.
+
+### Agreed test plan and implementation checks (Node 22.22.1)
+
+The pre-agreed seams remain static negative probes, real-module integration at
+the public HTTP and origin/main boundaries over fake Git/watcher/filesystem/
+timer capabilities, the retained thin pure-unit layer, and existing CLI/build/
+package/Git-install smoke tooling. No private-function seam was added. Real
+loopback HTTP is the explicit transport exception; some retained static-serving
+cases also read compiled assets. This balance favors integration confidence over
+new isolated implementation tests or live destructive Git operations.
+
+- **Static, automated:** regular `npm run typecheck` passed, accepting the native
+  Git adapter as `Git` and rejecting all **71 negative probes**. Four added probes
+  reject non-string arguments, non-string working directory, non-numeric buffer
+  limit and unsupported encoding on the real adapter. All four were accepted
+  by the legacy JavaScript adapter (gate red), then rejected after migration
+  (gate green). The CLI's strict build needed only a string annotation for its
+  resolved repository root; no CLI behavioral/type-negative red is claimed.
+- **Fixture red/green:** the byte-limit test first failed typecheck with TS2322
+  because the existing request helper accepted only string bodies. Its honest
+  `string | readonly Buffer[]` input then enabled typed byte writes without
+  asserting fake objects into native HTTP classes.
+- **Approved behavioral fix, integration red/green:** exactly **262144 UTF-8
+  bytes** reached the mutation, but **262145 bytes** initially returned 500:
+  early exit from body iteration detached `req.socket`, and subsequent protocol
+  inspection threw. Work stopped for approval. The user explicitly approved
+  fixing this within #74. Capturing protocol before awaiting the body preserves
+  the existing limit and body rejection path, producing **400**, the existing
+  `Invalid JSON body` envelope and `no-store`, without calling the mutation.
+  The regression writes multibyte text in byte chunks (including a character
+  split between client writes); it does not claim arbitrary TCP segmentation
+  or request-abort/keep-alive coverage. No body draining or iterator behavior
+  was otherwise changed.
+- **Unit/integration, automated:** `npm run build` passed. Individual commands
+  `node --test dist/test/server/app.test.js`,
+  `node --test dist/test/server/handle-request.test.js`,
+  `node --test dist/test/server/app.integration.test.js`,
+  `node --test dist/test/server/origin-main.test.js` and
+  `node --test dist/test/server/origin-main-live.test.js` passed **27 + 33 + 4 +
+  2 + 4 = 70 tests**, zero failures/skips/cancellations. These retain HTTP headers,
+  malformed JSON/origin/conflict checks, static-root/MIME/HEAD handling, all
+  three SSE channels' disconnect cleanup, discovery selection/deletion labels
+  and local origin/main cadence/ref-only/tag-shadow/missing-ref behavior. An
+  additional HTTP characterization checks that unexpected dependency errors
+  are logged but return only the existing generic 500 envelope and byte length.
+- `git diff --check` passed. Separate new-file whitespace checks reported no
+  whitespace diagnostics for `server/git.ts` or `server/index.ts` (`git diff
+  --no-index --check /dev/null <file>` exits 1 because the new file differs).
+
+### Final independent validation (Node 22.22.1 / npm 9.2.0)
+
+- `npm run typecheck` passed with **99 TS / 7 JS inputs** and all **71 negative
+  probes** rejected. One full `npm test` built and executed compiled output:
+  **602 passed, zero failures**.
+- `npm run smoke:build` passed, checking the compiled executable, mirrored
+  static root, native `.js` imports and non-code browser assets over HTTP.
+- `npm run smoke:package` passed with **57 tarball entries**, exercising the
+  installed production CLI and static HTML/CSS/native ESM over loopback HTTP.
+- `npm run smoke:git-install --
+  git+file:///home/u130917/projects/issue-74-typed-server-composition#b4a67e0`
+  passed against the committed implementation snapshot on the same Node/npm.
+  Git-source prepare/pack and isolated production installation succeeded;
+  the installed CLI, runtime and HTML/CSS/native ESM over HTTP were verified.
+  The only subsequent change records this result in this document.
+- Separate Standards and Spec reviews inspected the exact staged diff against
+  `ac9e65d`; neither found an actionable finding. `git diff --cached --check`
+  passed.
+
+### Unperformed validation and remaining limits
+
+Exact Node **20.19.0** was unavailable. The user explicitly chose validation on
+installed Node **22.22.1** rather than downloading the minimum runtime. The
+declared Node >=20.19.0 engine is unchanged, but minimum-runtime compatibility
+remains **unverified**; passing on Node 22 is not evidence of passing on Node 20.
+
+No manual/browser evaluation, real watcher evaluation or destructive Git action
+was performed. Fake capabilities establish orchestration and simulated failure/
+timing behavior, not actual filesystem event delivery, native Monaco layout/
+focus/IME, network reliability, filesystem races or live Git safety. Aside from
+the explicitly approved oversized-POST correction, runtime behavior is unchanged.

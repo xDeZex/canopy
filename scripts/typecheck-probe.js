@@ -91,6 +91,12 @@ import { pairRenames } from '../server/pair-renames.js';
 import type { Git } from '../server/git-port.js';
 declare const git: Git;
 git(['show', 'HEAD:a.txt'], '/repo', { maxBuffer: 'large' });
+import { runGit } from '../server/git.js';
+const nativeGit: Git = runGit;
+runGit([42], '/repo');
+runGit(['status'], 42);
+runGit(['show', 'HEAD:a.txt'], '/repo', { maxBuffer: 'large' });
+runGit(['status'], '/repo', { encoding: 'buffer' });
 readFileContent('/repo', 'a.txt', 'HEAD', { readWorkingFile: async () => 42 });
 pairRenames([{ path: 'old.txt', content: 42 }], []);
 declare const workspace: ReturnType<typeof createWorkspaceStore>;
@@ -168,9 +174,9 @@ const invalidNativeNode: HTMLElement = opaqueZone.domNode;
   const projectDiagnostics = diagnostics.filter((diagnostic) => diagnostic.file?.fileName !== filename);
   assert.equal(projectDiagnostics.length, 0, `Project typecheck failed.\n${ts.formatDiagnostics(projectDiagnostics, formatHost)}`);
   const rejected = diagnostics.filter((diagnostic) => diagnostic.file?.fileName === filename);
-  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2741, 2739, 2739, 2531, 2531, 2739, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322],
-    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, Monaco/AMD, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
-  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer IO, Monaco/AMD, minimal path ports and structural watchers accepted; all sixty-seven invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
+  assert.deepEqual(rejected.map((diagnostic) => diagnostic.code), [2345, 2322, 2322, 2322, 2322, 2322, 2322, 18046, 2322, 2322, 2322, 2345, 2322, 2345, 2345, 2345, 2740, 2339, 2345, 2345, 2322, 2345, 2322, 2322, 2322, 18046, 2345, 2345, 2322, 2322, 2322, 2345, 2322, 2353, 2322, 2322, 2345, 2322, 2322, 2322, 2322, 18046, 2322, 2769, 2551, 2345, 2345, 2345, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2741, 2739, 2739, 2531, 2531, 2739, 2322, 2322, 2322, 2322, 2322, 2322, 2322, 2322],
+    `Static gate must accept native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers and reject all invalid routing/HTTP/discovery/Git/commit/confirmation/tree/comparison/comment/workspace/viewer/editor/observation/Monaco/AMD calls, response shapes, fake capabilities and unchecked YAML/JSON access.\n${ts.formatDiagnostics(rejected, formatHost)}`);
+  console.log('Static probes: native browser/fetch/EventSource/viewer/editor/comment/watch/filesystem/timer/Git IO, Monaco/AMD, minimal path ports and structural watchers accepted; all seventy-one invalid calls, response shapes, fake capabilities, range-less anchors and unchecked YAML/JSON accesses rejected');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

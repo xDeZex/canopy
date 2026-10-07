@@ -105,9 +105,11 @@ export function createApp({
   return createServer(async (req, res) => {
     try {
       const { pathname, searchParams } = new URL(req.url ?? '/', 'http://localhost');
+      // Rejecting an oversized body can detach req.socket during iteration.
+      const protocol = 'encrypted' in req.socket && req.socket.encrypted ? 'https:' : 'http:';
       const body = req.method === 'POST' ? await readBody(req) : undefined;
       const response = await handleRequest({ method: req.method ?? 'GET', pathname, searchParams, headers: req.headers,
-        protocol: 'encrypted' in req.socket && req.socket.encrypted ? 'https:' : 'http:', body });
+        protocol, body });
 
       res.writeHead(response.status, response.headers);
 
