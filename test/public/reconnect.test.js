@@ -1,19 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp } from '../../public/app.js';
+import { createWorkspaceFixture } from './workspace-fixture.js';
 import { Element } from './fake-dom.js';
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 const file = (name, status) => ({ type: 'file', name, path: name, status });
 
 async function fixture() {
-  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'body', 'rail', 'rail-divider',
-    'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
-  elements.body.clientWidth = 1006;
-  elements['rail-divider'].offsetWidth = 6;
-  elements.toolbar.isRoot = true;
+  const workspace = createWorkspaceFixture();
+  const { elements } = workspace;
   const document = {
-    getElementById: (id) => elements[id],
+    getElementById: workspace.getElementById,
     createElement: (tag) => new Element(tag),
     createDocumentFragment: () => new Element('fragment'),
     addEventListener() {}, removeEventListener() {},
@@ -70,7 +68,7 @@ async function fixture() {
   const rows = (selector) => elements.rail.querySelector(selector).querySelectorAll('.rail__file');
   const statuses = (selector) => rows(selector).map((row) => [row.title,
     row.className.match(/status-(\w+)/)[1]]);
-  return { app, elements, sources, source, requests, timers, snapshots, mounts, disposed, rows, statuses };
+  return { app, elements, nodes: workspace.nodes, sources, source, requests, timers, snapshots, mounts, disposed, rows, statuses };
 }
 
 test('reconnect recovers missed edits, additions and removals while preserving locked selection and menus', async (t) => {

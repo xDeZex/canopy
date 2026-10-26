@@ -5,6 +5,29 @@ import type { ShortcutEvent } from '../../public/keyboard-shortcuts.js';
 
 const press = (key: string, extra: Partial<ShortcutEvent> = {}) => shortcutAction({ key, target: { tagName: 'DIV' }, ...extra });
 
+test('i toggles Issues with typing and modifier guards; Issues blocks Code-only shortcuts', () => {
+  assert.deepEqual(press('i'), { type: 'toggle-issues' });
+  for (const extra of [{ ctrlKey: true }, { metaKey: true }, { altKey: true },
+    { target: { tagName: 'INPUT' } }, { target: { tagName: 'TEXTAREA' } },
+    { target: { tagName: 'SELECT' } }, { target: { isContentEditable: true } }]) assert.equal(press('i', extra), null);
+  assert.deepEqual(shortcutAction({ key: 's' }, 'issues'), { type: 'prev-issue' });
+  assert.deepEqual(shortcutAction({ key: 'f' }, 'issues'), { type: 'next-issue' });
+  assert.deepEqual(shortcutAction({ key: '2' }, 'issues'), { type: 'select-worktree', index: 1 });
+  for (const key of ['j', 'l', 'w', 'r', 'c']) assert.equal(shortcutAction({ key }, 'issues'), null);
+});
+
+test('Issues e/d scroll the conversation and all Issues keys retain typing and modifier guards', () => {
+  assert.deepEqual(shortcutAction({ key: 'e' }, 'issues'), { type: 'scroll-issues-up' });
+  assert.deepEqual(shortcutAction({ key: 'd' }, 'issues'), { type: 'scroll-issues-down' });
+  for (const key of ['i', 's', 'f', 'e', 'd', '2']) {
+    for (const extra of [{ ctrlKey: true }, { metaKey: true }, { altKey: true },
+      { target: { tagName: 'INPUT' } }, { target: { tagName: 'TEXTAREA' } },
+      { target: { tagName: 'SELECT' } }, { target: { isContentEditable: true } }]) {
+      assert.equal(shortcutAction({ key, ...extra }, 'issues'), null);
+    }
+  }
+});
+
 test('j and l step back and forward through changes', () => {
   assert.deepEqual(press('j'), { type: 'prev-change' });
   assert.deepEqual(press('l'), { type: 'next-change' });

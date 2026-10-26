@@ -8,8 +8,10 @@ export interface WorkspaceElement<E> extends CommentNode<E> {
   style?: { paddingLeft: string };
   offsetWidth?: number;
   scrollLeft?: number;
+  scrollTop?: number;
   scrollWidth?: number;
   clientWidth?: number;
+  clientHeight?: number;
   parentElement: E | null;
   children: ArrayLike<E> | Iterable<E>;
   isConnected: boolean;

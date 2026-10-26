@@ -531,10 +531,10 @@ export function createWorkspaceUI<E extends WorkspaceElement<E>>({
   }
 
   // Keep the controls and open menu mounted across file and commit updates.
-  // Only a worktree change replaces them.
+  // Only a worktree change replaces them. Pane visibility belongs to the app;
+  // asynchronous operations may update these controls while Issues is showing.
   function renderToolbar() {
     const { activePath, activeFile, commits, commitsError, worktrees } = workspace.getState();
-    toolbarEl.hidden = false;
     if (!activePath) {
       toolbarEl.replaceChildren(renderIgnoreButton());
       toolbarPath = null;

@@ -10,6 +10,9 @@ import { createActivityFeed } from './worktree-activity.js';
 import { createWorktreeDeletion } from './worktree-delete.js';
 import { createCommentLoader } from './comment-loader.js';
 import { createCommentStore } from './comment-store.js';
+import { createGitHubIssues } from './github-issues.js';
+import { runGit } from './git.js';
+import { runGh } from './gh.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -36,6 +39,7 @@ async function readBody(req: IncomingMessage): Promise<string | undefined> {
 // open file (or null) and should set `touchesFile` on each commit only when
 // a file is given (see `markTouching`).
 export type AppOptions = {
+  githubIssues?: RequestDependencies['githubIssues'];
   repoRoot?: string;
   listWorktrees?: RequestDependencies['getWorktrees'];
   listDeletionWorktrees?: RequestDependencies['getDeletionWorktrees'];
@@ -66,6 +70,7 @@ export function createApp({
   watchWorktreeList,
   activityFeed,
   worktreeDeletion,
+  githubIssues,
   readStatic = readFile,
 }: AppOptions = {}) {
   const getWorktrees: RequestDependencies['getWorktrees'] = listWorktrees ?? createListWorktrees(repoRoot);
@@ -107,6 +112,7 @@ export function createApp({
     readStatic,
     publicDir: PUBLIC_DIR,
     worktreeDeletion: worktreeDeletion ?? createWorktreeDeletion(repoRoot),
+    githubIssues: githubIssues ?? createGitHubIssues(repoRoot, runGit, runGh),
   });
 
   // Translates between Node's `req`/`res` and the pure request handler.

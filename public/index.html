@@ -18,16 +18,22 @@
     </div>
     <div class="body" id="body">
       <nav class="rail" id="rail" aria-label="Files">
-        <p class="empty rail__message">Loading files…</p>
+        <div class="code-rail" id="code-rail"><p class="empty rail__message">Loading files…</p></div>
+        <div class="issues-rail" id="issues-rail" hidden></div>
       </nav>
       <div class="rail-divider" id="rail-divider" role="separator" tabindex="0"
            aria-orientation="vertical" aria-label="File panel width" aria-controls="rail"
            aria-valuemin="160" aria-valuemax="560" aria-valuenow="220"
            title="Drag or use Left / Right arrow keys to resize the file panel"></div>
       <div class="workspace-content">
-        <div class="viewer__toolbar" id="toolbar" hidden></div>
-        <main class="main" id="main">
-          <p class="empty">Loading worktrees…</p>
+        <div class="viewer__toolbar" id="toolbar">
+          <div class="view-toggle workspace-toggle" id="workspace-toggle" aria-label="Workspace view"></div>
+          <div class="code-toolbar" id="code-toolbar"></div>
+          <div class="issues-toolbar" id="issues-toolbar" hidden></div>
+        </div>
+        <main class="main-pane" id="main">
+          <div class="main" id="code-main"><p class="empty">Loading worktrees…</p></div>
+          <div class="main issues-main" id="issues-main" hidden></div>
         </main>
       </div>
     </div>
@@ -36,11 +42,12 @@
     <div class="shortcut-help__panel">
       <h2 class="shortcut-help__title">Keyboard shortcuts</h2>
       <dl class="shortcut-help__list">
-        <dt><kbd>j</kbd> <kbd>l</kbd></dt><dd>Previous / next change</dd>
-        <dt><kbd>s</kbd> <kbd>f</kbd></dt><dd>Previous / next changed file</dd>
-        <dt><kbd>w</kbd> <kbd>r</kbd></dt><dd>Newer / older comparison commit (Auto is newest; no wrap)</dd>
-        <dt><kbd>e</kbd> <kbd>d</kbd></dt><dd>Scroll up / down 10 lines</dd>
-        <dt><kbd>c</kbd></dt><dd>Comment on the selected lines (or the cursor line)</dd>
+        <dt><kbd>j</kbd> <kbd>l</kbd></dt><dd>Previous / next change (Code)</dd>
+        <dt><kbd>i</kbd></dt><dd>Switch Code / Issues</dd>
+        <dt><kbd>s</kbd> <kbd>f</kbd></dt><dd>Previous / next changed file or issue (wraps)</dd>
+        <dt><kbd>w</kbd> <kbd>r</kbd></dt><dd>Newer / older comparison commit (Code; Auto is newest; no wrap)</dd>
+        <dt><kbd>e</kbd> <kbd>d</kbd></dt><dd>Scroll the main pane up / down</dd>
+        <dt><kbd>c</kbd></dt><dd>Comment on selected lines or the cursor line (Code)</dd>
         <dt><kbd>1</kbd>–<kbd>9</kbd></dt><dd>Switch to worktree tab</dd>
         <dt><kbd>?</kbd></dt><dd>Show / hide this help</dd>
         <dt><kbd>Esc</kbd></dt><dd>Close help and menus</dd>

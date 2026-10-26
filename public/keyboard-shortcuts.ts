@@ -14,6 +14,7 @@ export function isTypingTarget(target: unknown) {
 
 // Key to action type, so a binding is one named entry rather than a branch.
 const KEY_ACTIONS: Readonly<Record<string, string>> = {
+  i: 'toggle-issues',
   j: 'prev-change',
   l: 'next-change',
   s: 'prev-file',
@@ -29,8 +30,15 @@ const KEY_ACTIONS: Readonly<Record<string, string>> = {
 
 export interface ShortcutEvent { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; target?: unknown }
 
-export function shortcutAction({ key, ctrlKey, metaKey, altKey, target }: ShortcutEvent) {
+export function shortcutAction({ key, ctrlKey, metaKey, altKey, target }: ShortcutEvent, mode: 'code' | 'issues' = 'code') {
   if (ctrlKey || metaKey || altKey || isTypingTarget(target)) return null;
+  if (mode === 'issues') {
+    if (key === 's') return { type: 'prev-issue' };
+    if (key === 'f') return { type: 'next-issue' };
+    if (key === 'e') return { type: 'scroll-issues-up' };
+    if (key === 'd') return { type: 'scroll-issues-down' };
+    if (!['i', '?', 'Escape'].includes(key) && !/^[1-9]$/.test(key)) return null;
+  }
   if (Object.hasOwn(KEY_ACTIONS, key)) return { type: KEY_ACTIONS[key] };
   if (/^[1-9]$/.test(key)) return { type: 'select-worktree', index: Number(key) - 1 };
   return null;

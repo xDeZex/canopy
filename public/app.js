@@ -20,6 +20,8 @@ import { parseWorktrees } from './workspace-contracts.js';
 import { shortcutAction } from './keyboard-shortcuts.js';
 import { changedFiles } from './changed-files.js';
 import { createRailResizer } from './rail-resize.js';
+import { createIssuesStore } from './issues-state.js';
+import { createIssuesView } from './issues-view.js';
 
 export async function startApp({
   document: doc = globalThis.document,
@@ -35,10 +37,48 @@ export async function startApp({
 } = {}) {
   const tabsWrapperEl = doc.getElementById('tabs-wrapper');
   const tabsEl = doc.getElementById('tabs');
-  const railEl = doc.getElementById('rail');
-  const toolbarEl = doc.getElementById('toolbar');
-  const mainEl = doc.getElementById('main');
+  const railEl = doc.getElementById('code-rail');
+  const toolbarEl = doc.getElementById('code-toolbar');
+  const mainEl = doc.getElementById('code-main');
   const helpEl = doc.getElementById('shortcut-help');
+  const issuesRailEl = doc.getElementById('issues-rail');
+  const issuesMainEl = doc.getElementById('issues-main');
+  const issuesToolbarEl = doc.getElementById('issues-toolbar');
+  const workspaceToggleEl = doc.getElementById('workspace-toggle');
+  let workspaceMode = 'code';
+  const issues = createIssuesStore({ fetch: request, onChange: () => issuesView.render() });
+  const issuesView = createIssuesView({ document: doc, railEl: issuesRailEl, mainEl: issuesMainEl,
+    toolbarEl: issuesToolbarEl, store: issues });
+  const modeButtons = ['code', 'issues'].map((mode) => {
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.className = `view-toggle__btn${mode === 'code' ? ' is-active' : ''}`;
+    button.textContent = mode === 'code' ? 'Code' : 'Issues';
+    button.setAttribute('aria-pressed', String(mode === 'code'));
+    button.addEventListener('click', () => setWorkspaceMode(mode));
+    return button;
+  });
+  workspaceToggleEl.replaceChildren(...modeButtons);
+  issuesView.setVisible(false);
+  issuesRailEl.hidden = issuesMainEl.hidden = issuesToolbarEl.hidden = true;
+
+  function setWorkspaceMode(mode) {
+    if (mode === workspaceMode) return;
+    workspaceMode = mode;
+    ui.closeMenus();
+    const showingIssues = mode === 'issues';
+    if (!showingIssues) issuesView.setVisible(false);
+    railEl.hidden = mainEl.hidden = toolbarEl.hidden = showingIssues;
+    issuesRailEl.hidden = issuesMainEl.hidden = issuesToolbarEl.hidden = !showingIssues;
+    if (showingIssues) issuesView.setVisible(true);
+    doc.getElementById('rail').setAttribute('aria-label', showingIssues ? 'Issues' : 'Files');
+    modeButtons.forEach((button, index) => {
+      const selected = (index === 1) === showingIssues;
+      button.classList.toggle('is-active', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+    if (showingIssues) void issues.load();
+  }
 
   let diffRenderMode = 'inline';
   let wrap = null;
@@ -49,7 +89,7 @@ export async function startApp({
     setItem: (key, value) => browserWindow.localStorage.setItem(key, value),
   };
   const railResizer = createRailResizer({
-    bodyEl: doc.getElementById('body'), railEl,
+    bodyEl: doc.getElementById('body'), railEl: doc.getElementById('rail'),
     dividerEl: doc.getElementById('rail-divider'), window: browserWindow, storage,
   });
   const viewModeStore = createViewModeStore(storage);
@@ -220,6 +260,11 @@ export async function startApp({
 
   function onShortcut(action) {
     switch (action.type) {
+      case 'toggle-issues': return setWorkspaceMode(workspaceMode === 'code' ? 'issues' : 'code');
+      case 'next-issue': return issues.step(1);
+      case 'prev-issue': return issues.step(-1);
+      case 'scroll-issues-up': return issuesView.scroll(-1);
+      case 'scroll-issues-down': return issuesView.scroll(1);
       case 'next-change': return viewer.nextChange();
       case 'prev-change': return viewer.prevChange();
       case 'add-comment': return viewer.addComment();
@@ -238,7 +283,7 @@ export async function startApp({
     }
   }
   function onKeyDown(event) {
-    const action = shortcutAction(event);
+    const action = shortcutAction(event, workspaceMode);
     if (!action) return;
     event.preventDefault();
     onShortcut(action);
@@ -250,6 +295,7 @@ export async function startApp({
     doc.removeEventListener('keydown', onKeyDown);
     liveUpdates.dispose();
     viewer.dispose();
+    issues.dispose();
     cancel(editTimer);
   };
 

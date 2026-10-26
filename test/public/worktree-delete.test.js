@@ -1,21 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { startApp } from '../../public/app.js';
+import { createWorkspaceFixture } from './workspace-fixture.js';
 import { Element } from './fake-dom.js';
 
 function browserStub() {
-  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'body', 'rail', 'rail-divider', 'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
-  elements.body.clientWidth = 1006;
-  elements['rail-divider'].offsetWidth = 6;
-  elements.toolbar.isRoot = true;
+  const fixture = createWorkspaceFixture();
+  const { nodes, elements } = fixture;
   const document = {
-    getElementById: (id) => elements[id],
+    getElementById: fixture.getElementById,
     addEventListener() {}, removeEventListener() {},
     createElement: (tag) => new Element(tag),
     createDocumentFragment: () => new Element('fragment'),
   };
   const window = { localStorage: { getItem: () => null }, addEventListener() {}, removeEventListener() {} };
-  return { document, window, elements };
+  return { document, window, elements, nodes };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));

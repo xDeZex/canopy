@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { hasWorktreeDirectory, type WorktreeStat } from './default-deps.js';
 import { isInsideWorktree, formatChangeEvent, formatWorktreeListEvent, formatPollErrorEvent } from './route-logic.js';
+import { GitHubIssuesError, type GitHubIssues } from './github-issues.js';
 
 // These are HTTP IO ports, not complete models of the legacy Git/comment data.
 // Payloads that HTTP only serializes stay unknown; consumed fields are explicit.
@@ -18,6 +19,7 @@ export type WorktreeDeletion = {
   remove: (worktreePath: string, confirmation: string) => Promise<unknown>;
 };
 export type RequestDependencies = {
+  githubIssues?: GitHubIssues;
   getWorktrees: () => Promise<WorktreeSnapshot>;
   getDeletionWorktrees?: () => Promise<WorktreeSnapshot>;
   statWorktree?: WorktreeStat;
@@ -109,6 +111,7 @@ export function createRequestHandler({
   readStatic,
   publicDir,
   worktreeDeletion,
+  githubIssues,
 }: RequestDependencies) {
   return async function handleRequest({ method, pathname, searchParams, headers = {}, protocol = 'http:', body }: RequestDescription): Promise<ResponseDescription> {
     const isReadable = method === 'GET' || method === 'HEAD';
@@ -197,6 +200,26 @@ export function createRequestHandler({
     }
 
     if (!isReadable) return jsonResponse(404, { error: 'Not found' });
+
+    if (pathname === '/api/github/issues' || pathname.startsWith('/api/github/issues/')) {
+      const isDetails = pathname !== '/api/github/issues';
+      const segment = pathname.slice('/api/github/issues/'.length);
+      const number = Number(segment);
+      if (isDetails && (!/^[1-9]\d*$/.test(segment) || !Number.isSafeInteger(number))) {
+        return noStoreJson(400, { error: 'Choose an issue with a positive integer number and retry.', code: 'invalid-issue-number' });
+      }
+      if (!githubIssues || (isDetails && !githubIssues.details)) return noStoreJson(503, { error: 'GitHub issues are unavailable in this server.', code: 'unavailable' });
+      try {
+        const repository = searchParams.get('repository') ?? undefined;
+        return noStoreJson(200, isDetails
+          ? await githubIssues.details!(number, repository)
+          : await githubIssues.list(repository));
+      } catch (error) {
+        return error instanceof GitHubIssuesError
+          ? noStoreJson(error.status, { error: error.message, code: error.code })
+          : noStoreJson(500, { error: 'Could not load GitHub issues. Try refreshing.', code: 'internal' });
+      }
+    }
 
     if (pathname === '/api/worktrees') {
       return json(200, await getWorktrees());

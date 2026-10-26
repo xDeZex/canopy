@@ -45,7 +45,21 @@ npm run dev -- .
 starting it. After editing source, restart `npm run dev`; there is no added
 development watcher. Native browser modules retain their `.js` imports.
 
-For development checks:
+## Read GitHub issues
+
+Use the toolbar's **Code / Issues** toggle, or press `i`, to read the repository's
+open issues alongside your work. Issues uses the GitHub CLI (`gh`) and its existing
+login; Code view does not require it. The source host and repository are displayed,
+and multiple repository remotes require an explicit choice.
+
+In Issues, `s` / `f` select the previous / next issue (wrapping at either end),
+and `e` / `d` scroll the conversation. Shortcuts are suppressed while typing.
+The list and conversation refresh when entering Issues or pressing **Refresh**;
+there is no background polling. Selection is shared across worktrees, and switching
+views keeps your reading place. Failed refreshes retain previously loaded content.
+Use **Open in GitHub** to act on an issue: Canopy's Issues view is read-only.
+
+## Development checks
 
 ```sh
 npm run typecheck
@@ -55,7 +69,9 @@ npm run smoke:package
 ```
 
 Tests compile first and select only explicit `dist/test/**/*.test.js` files,
-never simultaneous source/output discovery. The smoke checks are separate IO
+never simultaneous source/output discovery. GitHub Issues tests use deterministic
+injected CLI/API responses: they do not require `gh`, authentication, GitHub access,
+or a real repository with issues. The smoke checks are separate IO
 checks requiring Git and, for packaging, npm registry access. See
 [TypeScript migration and confidence boundaries](docs/typescript-migration.md)
 for the temporary JavaScript manifest and Git-source installation check.

@@ -203,6 +203,42 @@ body {
 
 /* ---------- Body: file rail + main content ---------- */
 
+/* Retained child panes keep Code's editor and navigation mounted. */
+[hidden] { display: none !important; }
+.code-toolbar { display: contents; }
+.workspace-toggle { flex-shrink: 0; min-width: max-content; }
+.main-pane { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.main-pane > .main { width: 100%; }
+.code-rail { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.issues-rail { overflow: auto; flex: 1; min-height: 0; }
+.issues-toolbar { grid-column: 2 / -1; display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; white-space: nowrap; color: var(--fg-dim); }
+.issues-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.issues-refresh-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--deleted); }
+.issues-refresh { flex-shrink: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-1); color: var(--fg); font: inherit; padding: 5px 10px; cursor: pointer; }
+.issues-list__item, .issues-repository, .issues-retry, .issues-resolve-repositories {
+  display: block; width: 100%; border: 0; background: transparent;
+  color: var(--fg); font: inherit; text-align: left; cursor: pointer; padding: 8px 10px;
+}
+.issues-list__item:hover, .issues-repository:hover, .issues-retry:hover, .issues-resolve-repositories:hover, .issues-refresh:hover { background: var(--bg-3); }
+.issues-list__item.is-active { background: var(--bg-3); box-shadow: inset 2px 0 var(--accent); }
+.issues-main { display: block; padding: 20px; }
+.issues-title { font-size: 20px; margin: 0 0 20px; overflow-wrap: anywhere; }
+.issues-metadata, .issues-comment__metadata { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--fg-dim); }
+.issues-metadata { margin-bottom: 20px; }
+.issues-state, .issues-label { border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+.issues-open-link { margin-left: auto; }
+.issues-comments { margin-top: 28px; }
+.issues-comments__heading { font-size: 16px; }
+.issues-comment { border-top: 1px solid var(--border); padding: 16px 0; }
+.issues-comment__metadata { margin-bottom: 12px; }
+.issues-detail-status { color: var(--fg-dim); }
+.issue-markdown { overflow-wrap: anywhere; line-height: 1.6; }
+.issue-markdown p { white-space: pre-wrap; }
+.issue-markdown pre { overflow: auto; padding: 12px; background: var(--bg-1); }
+.issue-markdown code { font-family: monospace; background: var(--bg-1); }
+.issue-markdown blockquote { margin-left: 0; padding-left: 16px; border-left: 3px solid var(--border); color: var(--fg-dim); }
+.issue-markdown a, .issues-open-link { color: var(--accent); }
+
 .body {
   flex: 1;
   display: flex;
@@ -385,7 +421,11 @@ body {
 .viewer__toolbar {
   display: grid;
   /* The right cluster never shrinks or wraps; the path label absorbs the squeeze. */
-  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(max-content, 1fr);
+  /* Reserve Code's two-line commit-picker row in both workspace views.
+     A shorter Issues source label must not move or resize the main pane. */
+  height: 53px;
+  grid-template-rows: minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   padding: 8px 16px;

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { startApp } from '../../public/app.js';
+import { createWorkspaceFixture } from './workspace-fixture.js';
 import { Element } from './fake-dom.js';
 import { EventEmitter } from 'node:events';
 import { createRequestHandler } from '../../server/handle-request.js';
@@ -8,14 +9,11 @@ import { watchWorktree } from '../../server/watcher.js';
 import { getFileTree } from '../../server/status.js';
 
 function browserStub() {
-  const elements = Object.fromEntries(['tabs-wrapper', 'tabs', 'body', 'rail', 'rail-divider', 'toolbar', 'main', 'shortcut-help'].map((id) => [id, new Element('div')]));
-  elements.body.clientWidth = 1006;
-  elements['rail-divider'].offsetWidth = 6;
-  elements.toolbar.isRoot = true;
-  elements['shortcut-help'].hidden = true;
+  const fixture = createWorkspaceFixture();
+  const { nodes, elements } = fixture;
   const listeners = { keydown: new Set(), click: new Set() };
   const document = {
-    getElementById: (id) => elements[id],
+    getElementById: fixture.getElementById,
     addEventListener: (event, listener) => listeners[event].add(listener),
     removeEventListener: (event, listener) => listeners[event].delete(listener),
     createElement: (tag) => new Element(tag),
@@ -35,14 +33,322 @@ function browserStub() {
   const pressKey = (key, extra = {}) => [...keydownListeners].forEach((listener) => listener({
     key, target: { tagName: 'BODY' }, preventDefault() {}, ...extra,
   }));
-  return { document, window, elements, keydownListeners, pressKey };
+  return { document, window, elements, nodes, codePane: fixture.codePane, containers: fixture.containers, keydownListeners, pressKey };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+const text = (node) => node.textContent + node.children.map(text).join('');
+
+test('Code and Issues retain the mounted editor, rail width and repository-wide selection', async () => {
+  const browser = browserStub();
+  assert.equal(browser.document.getElementById('rail'), browser.nodes.rail);
+  assert.notEqual(browser.document.getElementById('rail'), browser.codePane.rail, 'ID lookup returns the canonical rail, not its Code-pane alias');
+  assert.deepEqual(browser.containers.documentBody.children, [browser.containers.app, browser.nodes['shortcut-help']]);
+  assert.deepEqual(browser.containers.app.children, [browser.nodes['tabs-wrapper'], browser.nodes.body]);
+  assert.equal(browser.nodes.tabs.parentElement, browser.nodes['tabs-wrapper']);
+  assert.equal(browser.nodes.rail.parentElement, browser.nodes.body);
+  assert.deepEqual(browser.nodes.rail.children, [browser.nodes['code-rail'], browser.nodes['issues-rail']]);
+  assert.deepEqual(browser.nodes.main.children, [browser.nodes['code-main'], browser.nodes['issues-main']]);
+  assert.deepEqual(browser.nodes.toolbar.children, [browser.nodes['workspace-toggle'], browser.nodes['code-toolbar'], browser.nodes['issues-toolbar']]);
+  assert.deepEqual(browser.nodes.body.children, [browser.nodes.rail, browser.nodes['rail-divider'], browser.containers.workspaceContent]);
+  assert.deepEqual(browser.containers.workspaceContent.children, [browser.nodes.toolbar, browser.nodes.main]);
+  const urls = [];
+  const request = fakeFetch(urls);
+  let mounts = 0;
+  let disposals = 0;
+  let changes = 0;
+  const repository = { id: 'github.com/team/project', host: 'github.com', owner: 'team', name: 'project' };
+  const app = await startApp({ ...browser, EventSource: EventSourceStub,
+    setInterval: () => 1, clearInterval() {},
+    mountDiffEditor: () => { mounts++; return { dispose() { disposals++; }, nextChange() { changes++; } }; },
+    fetch: async (url) => {
+      if (!url.startsWith('/api/github/issues')) return request(url);
+      urls.push(url);
+      if (url.startsWith('/api/github/issues/')) {
+        const number = Number(url.split('/').at(-1).split('?')[0]);
+        return { ok: true, json: async () => ({ issue: { number, title: `Title ${number}`, body: `**Body ${number}**`, createdAt: '',
+          url: `https://github.com/team/project/issues/${number}`, author: 'octocat', state: 'open', labels: ['feature'], comments: [] } }) };
+      }
+      return { ok: true, json: async () => ({ repositories: [repository], repository,
+        issues: [8, 2].map((number) => ({ number, title: `Title ${number}`, body: `Body ${number}`, createdAt: '', url: '' })) }) };
+    },
+  });
+  try {
+    await settle();
+    browser.elements.rail.querySelector('.rail__file').click();
+    await settle();
+    const editor = browser.elements.main.children[0];
+    const railWidth = browser.elements.outerRail.style.width;
+    const toolbar = browser.elements.toolbar.children[0];
+    browser.pressKey('i', { target: { tagName: 'INPUT' } });
+    assert.equal(browser.elements.main.hidden, false);
+    assert.equal(urls.some((url) => url.startsWith('/api/github/issues')), false, 'Issues loads only on entry');
+    browser.elements['workspace-toggle'].children[1].click();
+    await settle();
+    assert.equal(browser.elements.main.hidden, true);
+    assert.equal(browser.elements['issues-main'].hidden, false);
+    assert.equal(browser.elements['issues-main'].querySelector('.issues-title').textContent, '#8 Title 8');
+    assert.equal(browser.elements['issues-main'].querySelector('.issues-author').textContent, 'octocat');
+    assert.equal(browser.elements['issues-main'].querySelector('.issues-open-link').getAttribute('href'), 'https://github.com/team/project/issues/8');
+    browser.pressKey('s');
+    assert.equal(browser.elements['issues-main'].querySelector('.issues-title').textContent, '#2 Title 2');
+    browser.pressKey('f');
+    assert.equal(browser.elements['issues-main'].querySelector('.issues-title').textContent, '#8 Title 8');
+    const before = urls.length;
+    for (const key of ['l', 'j', 'w', 'r', 'c', 'e', 'd']) browser.pressKey(key);
+    assert.equal(urls.length, before);
+    assert.equal(changes, 0);
+    browser.pressKey('i');
+    assert.equal(browser.elements.main.children[0], editor);
+    assert.equal(browser.elements.toolbar.children[0], toolbar);
+    assert.equal(mounts, 1);
+    assert.equal(disposals, 0);
+    assert.equal(browser.elements.outerRail.style.width, railWidth);
+    browser.pressKey('l');
+    assert.equal(changes, 1);
+    browser.pressKey('i');
+    browser.pressKey('s');
+    browser.pressKey('2');
+    await settle();
+    assert.equal(browser.elements.tabs.children[1]['aria-selected'], 'true');
+    assert.equal(browser.elements['issues-main'].querySelector('.issues-title').textContent, '#2 Title 2');
+    assert.equal(browser.elements.toolbar.hidden, true, 'workspace updates cannot expose Code controls in Issues');
+    assert.equal(urls.filter((url) => url === '/api/github/issues').length, 1, 'worktree switching never resets or reloads repository Issues');
+  } finally { app.dispose(); }
+});
 
 class EventSourceStub {
   addEventListener() {}
   close() {}
+}
+
+test('every Issues entry refreshes list and selected conversation, while idle ticks and worktree changes do not', async () => {
+  const browser = browserStub();
+  const request = fakeFetch();
+  const repository = { id: 'github.com/team/project', host: 'github.com', owner: 'team', name: 'project' };
+  let revision = 1;
+  const urls = [];
+  const ticks = [];
+  const app = await startApp({ ...browser, EventSource: EventSourceStub,
+    setInterval: (fn) => { ticks.push(fn); return 1; }, clearInterval() {},
+    fetch: async (url) => {
+      if (!url.startsWith('/api/github/issues')) return request(url);
+      urls.push(url);
+      return { ok: true, json: async () => url.startsWith('/api/github/issues/')
+        ? { issue: { number: 9, title: 'Nine', body: `Description ${revision}`, createdAt: '', url: '', author: 'reader',
+          state: 'open', labels: [], comments: [{ id: 1, author: 'reader', createdAt: '', body: `Comment ${revision}` }] } }
+        : { repositories: [repository], repository, issues: [{ number: 9, title: 'Nine', body: '', createdAt: '', url: '' }] } };
+    },
+  });
+  try {
+    browser.pressKey('i');
+    await settle();
+    assert.equal(text(browser.elements['issues-main'].require('.issues-description')), 'Description 1');
+    browser.pressKey('i');
+    revision = 2;
+    browser.pressKey('i');
+    await settle();
+    assert.equal(text(browser.elements['issues-main'].require('.issues-description')), 'Description 2');
+    assert.match(text(browser.elements['issues-main'].require('.issues-comment')), /Comment 2/);
+    assert.equal(urls.length, 4);
+    assert.equal(ticks.length, 1, 'Issues never adds a polling timer');
+    ticks[0]();
+    browser.pressKey('2');
+    await settle();
+    assert.equal(urls.length, 4, 'only entry/manual refresh triggers requests');
+  } finally { app.dispose(); }
+});
+
+test('Issues keeps its visible reading place through refresh and hidden completion, but a new selection starts at top', async () => {
+  const browser = browserStub();
+  const main = browser.elements['issues-main'];
+  const rail = browser.elements['issues-rail'];
+  // Native hidden elements can report zero, and replacing content can collapse scroll.
+  for (const node of [main, rail]) {
+    let position = 0;
+    Object.defineProperty(node, 'scrollTop', { get: () => node.hidden ? 0 : position, set: (value) => { position = value; } });
+    const replace = node.replaceChildren.bind(node);
+    node.replaceChildren = (...children) => { position = 0; replace(...children); };
+  }
+  const request = fakeFetch();
+  const repository = { id: 'github.com/team/project', host: 'github.com', owner: 'team', name: 'project' };
+  let defer = false;
+  const pending = [];
+  const app = await startApp({ ...browser, EventSource: EventSourceStub,
+    setInterval: () => 1, clearInterval() {},
+    fetch: async (url) => {
+      if (!url.startsWith('/api/github/issues')) return request(url);
+      if (defer) return new Promise((resolve) => pending.push({ url, resolve }));
+      const number = Number(url.split('/').at(-1).split('?')[0]);
+      return { ok: true, json: async () => url.startsWith('/api/github/issues/')
+        ? { issue: { number, title: `Title ${number}`, body: 'Long description', createdAt: '', url: '', author: 'reader', state: 'open', labels: [], comments: [] } }
+        : { repositories: [repository], repository, issues: [9, 4].map((number) => ({ number, title: `Title ${number}`, body: '', createdAt: '', url: '' })) } };
+    },
+  });
+  try {
+    browser.pressKey('i');
+    await settle();
+    main.scrollTop = 420;
+    rail.scrollTop = 37;
+    browser.elements['issues-toolbar'].require('.issues-refresh').click();
+    assert.equal(main.scrollTop, 420, 'loading preserves same issue place');
+    await settle();
+    assert.equal(main.scrollTop, 420, 'success preserves same issue place');
+    assert.equal(rail.scrollTop, 37);
+    defer = true;
+    browser.elements['issues-toolbar'].require('.issues-refresh').click();
+    pending.shift().resolve({ ok: false, json: async () => ({ error: 'List offline' }) });
+    await settle();
+    pending.shift().resolve({ ok: false, json: async () => ({ error: 'Conversation offline' }) });
+    await settle();
+    assert.equal(main.scrollTop, 420, 'list and detail failures retain the reading place');
+    assert.equal(text(main.require('.issues-description')), 'Long description');
+    assert.match(text(browser.elements['issues-toolbar']), /List offline/);
+    browser.elements['issues-toolbar'].require('.issues-refresh').click();
+    browser.pressKey('i');
+    assert.equal(main.scrollTop, 0, 'hidden DOM does not expose its previous reading place');
+    pending.shift().resolve({ ok: false, json: async () => ({ error: 'Offline' }) });
+    await settle();
+    pending.shift().resolve({ ok: false, json: async () => ({ error: 'Also offline' }) });
+    await settle();
+    defer = false;
+    browser.pressKey('i');
+    assert.equal(main.scrollTop, 420, 'restore happens before entry refresh');
+    await settle();
+    assert.equal(main.scrollTop, 420, 'hidden async updates cannot overwrite the saved place');
+    assert.equal(rail.scrollTop, 37);
+    // A successful detail response arriving while hidden must also keep the place.
+    defer = true;
+    browser.elements['issues-toolbar'].require('.issues-refresh').click();
+    pending.shift().resolve({ ok: true, json: async () => ({ repositories: [repository], repository,
+      issues: [9, 4].map((number) => ({ number, title: `Title ${number}`, body: '', createdAt: '', url: '' })) }) });
+    await settle();
+    browser.pressKey('i');
+    pending.shift().resolve({ ok: true, json: async () => ({ issue: { number: 9, title: 'Title 9', body: 'Completed while hidden',
+      createdAt: '', url: '', author: 'reader', state: 'open', labels: [], comments: [] } }) });
+    await settle();
+    defer = false;
+    browser.pressKey('i');
+    assert.equal(text(main.require('.issues-description')), 'Completed while hidden');
+    assert.equal(main.scrollTop, 420);
+    await settle();
+    assert.equal(main.scrollTop, 420);
+    browser.pressKey('f');
+    assert.equal(main.scrollTop, 0, 'different issue starts at top');
+    await settle();
+    assert.equal(main.scrollTop, 0);
+    main.scrollTop = 222;
+    browser.pressKey('s');
+    assert.equal(main.scrollTop, 0, 'returning to a cached issue is a new selection');
+  } finally { app.dispose(); }
+});
+
+test('e/d scroll Issues main only, and typing or modifiers leave its reading place untouched', async () => {
+  const browser = browserStub();
+  const request = fakeFetch();
+  let codeScrolls = 0;
+  const app = await startApp({ ...browser, EventSource: EventSourceStub,
+    setInterval: () => 1, clearInterval() {},
+    mountDiffEditor: () => ({ dispose() {}, scrollUp() { codeScrolls++; }, scrollDown() { codeScrolls++; } }),
+    fetch: async (url) => url.startsWith('/api/github/issues')
+      ? { ok: true, json: async () => ({ repositories: [], repository: null, issues: [] }) } : request(url),
+  });
+  try {
+    await settle();
+    browser.elements.rail.require('.rail__file').click();
+    await settle();
+    browser.pressKey('i');
+    await settle();
+    const main = browser.elements['issues-main'];
+    main.clientHeight = 600;
+    main.scrollTop = 700;
+    browser.pressKey('d');
+    assert.ok(main.scrollTop > 700);
+    browser.pressKey('e');
+    assert.equal(main.scrollTop, 700);
+    for (const key of ['e', 'd']) {
+      for (const extra of [{ ctrlKey: true }, { altKey: true }, { metaKey: true },
+        { target: { tagName: 'INPUT' } }, { target: { tagName: 'TEXTAREA' } },
+        { target: { tagName: 'SELECT' } }, { target: { tagName: 'DIV', isContentEditable: true } }]) browser.pressKey(key, extra);
+    }
+    assert.equal(main.scrollTop, 700);
+    assert.equal(codeScrolls, 0);
+    browser.pressKey('i');
+    browser.pressKey('d');
+    assert.equal(codeScrolls, 1, 'Code retains its existing editor routing');
+  } finally { app.dispose(); }
+});
+
+for (const outcome of ['rejected', 'cancelled']) {
+  test(`a deferred ${outcome} deletion preview cannot expose Code controls after switching to Issues`, async () => {
+    const browser = browserStub();
+    const requests = [];
+    const request = fakeFetch();
+    let resolvePreview;
+    const preview = new Promise((resolve) => { resolvePreview = resolve; });
+    let confirmations = 0;
+    browser.window.confirm = () => { confirmations++; return false; };
+    const app = await startApp({ ...browser, EventSource: EventSourceStub,
+      setInterval: () => 1, clearInterval() {},
+      fetch: async (url, options) => {
+        requests.push([url, options?.method ?? 'GET']);
+        if (url.startsWith('/api/worktree-deletion')) return preview;
+        if (url.startsWith('/api/github/issues')) return { ok: true,
+          json: async () => ({ repositories: [], repository: null, issues: [] }) };
+        return request(url);
+      },
+    });
+    try {
+      await settle();
+      const deletion = browser.elements.toolbar.querySelector('.viewer__delete-worktree').click();
+      assert.equal(browser.elements.toolbar.querySelector('.viewer__delete-worktree').disabled, true);
+      browser.pressKey('i');
+      resolvePreview(outcome === 'rejected'
+        ? { ok: false, json: async () => ({ error: 'Preview unavailable' }) }
+        : { ok: true, json: async () => ({ path: '/a', confirmation: 'fresh-preview' }) });
+      await deletion;
+      assert.equal(browser.elements.toolbar.hidden, true);
+      assert.equal(browser.elements.main.hidden, true);
+      assert.equal(browser.elements['issues-toolbar'].hidden, false);
+      assert.equal(browser.elements['issues-main'].hidden, false);
+      assert.equal(confirmations, outcome === 'cancelled' ? 1 : 0);
+      assert.equal(requests.some(([, method]) => method === 'DELETE'), false);
+      browser.pressKey('i');
+      assert.equal(browser.elements.toolbar.hidden, false);
+      assert.equal(browser.elements.toolbar.querySelector('.viewer__delete-worktree').disabled, false);
+      assert.equal(browser.elements.toolbar.querySelector('.viewer__deletion-status').textContent,
+        outcome === 'rejected' ? 'Preview unavailable' : '');
+    } finally { app.dispose(); }
+  });
+}
+
+for (const outcome of ['worktrees', 'empty', 'error']) {
+  test(`a deferred ${outcome} startup response preserves Issues pane visibility`, async () => {
+    const browser = browserStub();
+    let resolveWorktrees;
+    const worktrees = new Promise((resolve) => { resolveWorktrees = resolve; });
+    const starting = startApp({ ...browser, EventSource: EventSourceStub,
+      setInterval: () => 1, clearInterval() {},
+      fetch: async (url) => {
+        if (url === '/api/worktrees') return worktrees;
+        if (url.startsWith('/api/github/issues')) return { ok: true,
+          json: async () => ({ repositories: [], repository: null, issues: [] }) };
+        return { ok: true, json: async () => [] };
+      },
+    });
+    browser.pressKey('i');
+    resolveWorktrees(outcome === 'error' ? { ok: false, status: 503 }
+      : { ok: true, json: async () => outcome === 'worktrees' ? [{ path: '/a' }] : [] });
+    const app = await starting;
+    try {
+      await settle();
+      assert.equal(browser.elements.toolbar.hidden, true);
+      assert.equal(browser.elements.main.hidden, true);
+      assert.equal(browser.elements.rail.hidden, true);
+      assert.equal(browser.elements['issues-toolbar'].hidden, false);
+      assert.equal(browser.elements['issues-main'].hidden, false);
+    } finally { app.dispose(); }
+  });
 }
 
 test('malformed startup worktrees use the existing error UI without opening live streams', async () => {
@@ -1185,20 +1491,20 @@ test('rail divider keyboard and viewport resizing leave the editor mounted and d
   elements.rail.querySelector('.rail__file').click();
   await settle();
   assert.equal(mounts, 1);
-  assert.equal(elements.rail.style.width, '220px');
+  assert.equal(elements.outerRail.style.width, '220px');
   const divider = elements['rail-divider'];
   divider.listeners.get('keydown')({ key: 'ArrowRight', preventDefault() {} });
-  assert.equal(elements.rail.style.width, '230px');
+  assert.equal(elements.outerRail.style.width, '230px');
   elements.body.clientWidth = 306;
   window.emit('resize');
-  assert.equal(elements.rail.style.width, '150px');
+  assert.equal(elements.outerRail.style.width, '150px');
   assert.equal(mounts, 1);
   assert.equal(disposals, 0);
   app.dispose();
   assert.equal(divider.listeners.size, 0);
   elements.body.clientWidth = 1006;
   window.emit('resize');
-  assert.equal(elements.rail.style.width, '150px');
+  assert.equal(elements.outerRail.style.width, '150px');
 });
 
 test('f opens changed files in path order and wraps to the first', async () => {
