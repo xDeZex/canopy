@@ -10,7 +10,7 @@ Requires Node.js 20.19+ and Git:
 
 ```sh
 npm pack github:xDeZex/canopy
-npm install -g --omit=dev ./canopy-0.1.0.tgz
+npm install -g --allow-scripts=canopy ./canopy-0.1.0.tgz
 canopy .
 ```
 
